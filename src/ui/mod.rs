@@ -1,0 +1,9 @@
+pub mod chat_view;
+pub mod components;
+pub mod context_panel;
+pub mod memory_view;
+pub mod models_view;
+pub mod nav;
+pub mod prompt_inspector;
+pub mod settings_view;
+pub mod theme;
