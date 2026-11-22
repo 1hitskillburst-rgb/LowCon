@@ -1,0 +1,6 @@
+target/
+LOWCON_BUILD_PROMPT.md
+lowcon-redesign.html
+*.db
+*.db-wal
+*.db-shm
