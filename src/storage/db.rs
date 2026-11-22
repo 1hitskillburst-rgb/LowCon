@@ -48,6 +48,11 @@ impl Database {
         Ok(())
     }
 
+    /// Provides access to the underlying thread-safe SQLite connection handle.
+    pub fn raw_connection(&self) -> Arc<Mutex<Connection>> {
+        Arc::clone(&self.conn)
+    }
+
     // --- SESSIONS ---
 
     pub fn create_session(&self, s: &SessionRecord) -> Result<(), StorageError> {
@@ -212,16 +217,19 @@ impl Database {
     pub fn create_memory_note(&self, n: &MemoryNoteRecord) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO memory_notes (id, session_id, title, content, source_message_id, is_pinned, is_summary, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
+            "INSERT INTO memory_notes (id, session_id, title, content, source_message_id, source_message_ids, is_pinned, is_summary, is_disabled, user_approved, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12);",
             params![
                 n.id,
                 n.session_id,
                 n.title,
                 n.content,
                 n.source_message_id,
+                n.source_message_ids,
                 n.is_pinned as i32,
                 n.is_summary as i32,
+                n.is_disabled as i32,
+                n.user_approved as i32,
                 n.created_at,
                 n.updated_at
             ],
@@ -232,22 +240,27 @@ impl Database {
     pub fn get_memory_note(&self, id: &str) -> Result<Option<MemoryNoteRecord>, StorageError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, session_id, title, content, source_message_id, is_pinned, is_summary, created_at, updated_at
+            "SELECT id, session_id, title, content, source_message_id, source_message_ids, is_pinned, is_summary, is_disabled, user_approved, created_at, updated_at
              FROM memory_notes WHERE id = ?1;"
         )?;
         let row = stmt.query_row(params![id], |r| {
-            let pinned_int: i32 = r.get(5)?;
-            let summary_int: i32 = r.get(6)?;
+            let pinned_int: i32 = r.get(6)?;
+            let summary_int: i32 = r.get(7)?;
+            let disabled_int: i32 = r.get(8)?;
+            let approved_int: i32 = r.get(9)?;
             Ok(MemoryNoteRecord {
                 id: r.get(0)?,
                 session_id: r.get(1)?,
                 title: r.get(2)?,
                 content: r.get(3)?,
                 source_message_id: r.get(4)?,
+                source_message_ids: r.get(5)?,
                 is_pinned: pinned_int != 0,
                 is_summary: summary_int != 0,
-                created_at: r.get(7)?,
-                updated_at: r.get(8)?,
+                is_disabled: disabled_int != 0,
+                user_approved: approved_int != 0,
+                created_at: r.get(10)?,
+                updated_at: r.get(11)?,
             })
         }).optional()?;
         Ok(row)
@@ -259,23 +272,28 @@ impl Database {
 
         if let Some(sid) = session_id {
             let mut stmt = conn.prepare(
-                "SELECT id, session_id, title, content, source_message_id, is_pinned, is_summary, created_at, updated_at
+                "SELECT id, session_id, title, content, source_message_id, source_message_ids, is_pinned, is_summary, is_disabled, user_approved, created_at, updated_at
                  FROM memory_notes WHERE session_id = ?1 OR session_id IS NULL
                  ORDER BY is_pinned DESC, updated_at DESC;"
             )?;
             let rows = stmt.query_map(params![sid], |r| {
-                let pinned_int: i32 = r.get(5)?;
-                let summary_int: i32 = r.get(6)?;
+                let pinned_int: i32 = r.get(6)?;
+                let summary_int: i32 = r.get(7)?;
+                let disabled_int: i32 = r.get(8)?;
+                let approved_int: i32 = r.get(9)?;
                 Ok(MemoryNoteRecord {
                     id: r.get(0)?,
                     session_id: r.get(1)?,
                     title: r.get(2)?,
                     content: r.get(3)?,
                     source_message_id: r.get(4)?,
+                    source_message_ids: r.get(5)?,
                     is_pinned: pinned_int != 0,
                     is_summary: summary_int != 0,
-                    created_at: r.get(7)?,
-                    updated_at: r.get(8)?,
+                    is_disabled: disabled_int != 0,
+                    user_approved: approved_int != 0,
+                    created_at: r.get(10)?,
+                    updated_at: r.get(11)?,
                 })
             })?;
             for item in rows {
@@ -283,23 +301,28 @@ impl Database {
             }
         } else {
             let mut stmt = conn.prepare(
-                "SELECT id, session_id, title, content, source_message_id, is_pinned, is_summary, created_at, updated_at
+                "SELECT id, session_id, title, content, source_message_id, source_message_ids, is_pinned, is_summary, is_disabled, user_approved, created_at, updated_at
                  FROM memory_notes
                  ORDER BY is_pinned DESC, updated_at DESC;"
             )?;
             let rows = stmt.query_map([], |r| {
-                let pinned_int: i32 = r.get(5)?;
-                let summary_int: i32 = r.get(6)?;
+                let pinned_int: i32 = r.get(6)?;
+                let summary_int: i32 = r.get(7)?;
+                let disabled_int: i32 = r.get(8)?;
+                let approved_int: i32 = r.get(9)?;
                 Ok(MemoryNoteRecord {
                     id: r.get(0)?,
                     session_id: r.get(1)?,
                     title: r.get(2)?,
                     content: r.get(3)?,
                     source_message_id: r.get(4)?,
+                    source_message_ids: r.get(5)?,
                     is_pinned: pinned_int != 0,
                     is_summary: summary_int != 0,
-                    created_at: r.get(7)?,
-                    updated_at: r.get(8)?,
+                    is_disabled: disabled_int != 0,
+                    user_approved: approved_int != 0,
+                    created_at: r.get(10)?,
+                    updated_at: r.get(11)?,
                 })
             })?;
             for item in rows {
@@ -334,8 +357,8 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let sql = match session_id {
             Some(_) => "
-                SELECT m.id, m.session_id, m.title, m.content, m.source_message_id,
-                       m.is_pinned, m.is_summary, m.created_at, m.updated_at
+                SELECT m.id, m.session_id, m.title, m.content, m.source_message_id, m.source_message_ids,
+                       m.is_pinned, m.is_summary, m.is_disabled, m.user_approved, m.created_at, m.updated_at
                 FROM memory_notes m
                 JOIN memory_notes_fts fts ON m.id = fts.id
                 WHERE memory_notes_fts MATCH ?1
@@ -343,8 +366,8 @@ impl Database {
                 ORDER BY m.is_pinned DESC, bm25(memory_notes_fts) ASC, m.updated_at DESC
                 LIMIT ?3;",
             None => "
-                SELECT m.id, m.session_id, m.title, m.content, m.source_message_id,
-                       m.is_pinned, m.is_summary, m.created_at, m.updated_at
+                SELECT m.id, m.session_id, m.title, m.content, m.source_message_id, m.source_message_ids,
+                       m.is_pinned, m.is_summary, m.is_disabled, m.user_approved, m.created_at, m.updated_at
                 FROM memory_notes m
                 JOIN memory_notes_fts fts ON m.id = fts.id
                 WHERE memory_notes_fts MATCH ?1
@@ -358,18 +381,23 @@ impl Database {
 
         if let Some(sid) = session_id {
             let rows = stmt.query_map(params![sanitized_query, sid, limit_i64], |r| {
-                let pinned_int: i32 = r.get(5)?;
-                let summary_int: i32 = r.get(6)?;
+                let pinned_int: i32 = r.get(6)?;
+                let summary_int: i32 = r.get(7)?;
+                let disabled_int: i32 = r.get(8)?;
+                let approved_int: i32 = r.get(9)?;
                 Ok(MemoryNoteRecord {
                     id: r.get(0)?,
                     session_id: r.get(1)?,
                     title: r.get(2)?,
                     content: r.get(3)?,
                     source_message_id: r.get(4)?,
+                    source_message_ids: r.get(5)?,
                     is_pinned: pinned_int != 0,
                     is_summary: summary_int != 0,
-                    created_at: r.get(7)?,
-                    updated_at: r.get(8)?,
+                    is_disabled: disabled_int != 0,
+                    user_approved: approved_int != 0,
+                    created_at: r.get(10)?,
+                    updated_at: r.get(11)?,
                 })
             })?;
             for item in rows {
@@ -377,18 +405,23 @@ impl Database {
             }
         } else {
             let rows = stmt.query_map(params![sanitized_query, limit_i64], |r| {
-                let pinned_int: i32 = r.get(5)?;
-                let summary_int: i32 = r.get(6)?;
+                let pinned_int: i32 = r.get(6)?;
+                let summary_int: i32 = r.get(7)?;
+                let disabled_int: i32 = r.get(8)?;
+                let approved_int: i32 = r.get(9)?;
                 Ok(MemoryNoteRecord {
                     id: r.get(0)?,
                     session_id: r.get(1)?,
                     title: r.get(2)?,
                     content: r.get(3)?,
                     source_message_id: r.get(4)?,
+                    source_message_ids: r.get(5)?,
                     is_pinned: pinned_int != 0,
                     is_summary: summary_int != 0,
-                    created_at: r.get(7)?,
-                    updated_at: r.get(8)?,
+                    is_disabled: disabled_int != 0,
+                    user_approved: approved_int != 0,
+                    created_at: r.get(10)?,
+                    updated_at: r.get(11)?,
                 })
             })?;
             for item in rows {
@@ -403,14 +436,19 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE memory_notes
-             SET title = ?2, content = ?3, is_pinned = ?4, is_summary = ?5, updated_at = ?6
+             SET title = ?2, content = ?3, source_message_id = ?4, source_message_ids = ?5,
+                 is_pinned = ?6, is_summary = ?7, is_disabled = ?8, user_approved = ?9, updated_at = ?10
              WHERE id = ?1;",
             params![
                 n.id,
                 n.title,
                 n.content,
+                n.source_message_id,
+                n.source_message_ids,
                 n.is_pinned as i32,
                 n.is_summary as i32,
+                n.is_disabled as i32,
+                n.user_approved as i32,
                 n.updated_at
             ],
         )?;
@@ -426,10 +464,100 @@ impl Database {
         Ok(())
     }
 
+    pub fn set_memory_note_disabled(&self, id: &str, is_disabled: bool) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE memory_notes SET is_disabled = ?2 WHERE id = ?1;",
+            params![id, is_disabled as i32],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_memory_note(&self, id: &str) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM memory_notes WHERE id = ?1;", params![id])?;
         Ok(())
+    }
+
+    /// Full-text search with ranking across stored messages using SQLite FTS5.
+    pub fn search_messages_fts(
+        &self,
+        query: &str,
+        session_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<MessageRecord>, StorageError> {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let sanitized_query = sanitize_fts5_query(trimmed);
+        if sanitized_query.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let conn = self.conn.lock().unwrap();
+        let sql = match session_id {
+            Some(_) => "
+                SELECT m.id, m.session_id, m.role, m.content, m.token_count, m.created_at, m.is_pinned, m.metadata
+                FROM messages m
+                JOIN messages_fts fts ON m.id = fts.id
+                WHERE messages_fts MATCH ?1
+                  AND m.session_id = ?2
+                ORDER BY bm25(messages_fts) ASC, m.created_at DESC
+                LIMIT ?3;",
+            None => "
+                SELECT m.id, m.session_id, m.role, m.content, m.token_count, m.created_at, m.is_pinned, m.metadata
+                FROM messages m
+                JOIN messages_fts fts ON m.id = fts.id
+                WHERE messages_fts MATCH ?1
+                ORDER BY bm25(messages_fts) ASC, m.created_at DESC
+                LIMIT ?2;",
+        };
+
+        let mut stmt = conn.prepare(sql)?;
+        let limit_i64 = limit as i64;
+        let mut messages = Vec::new();
+
+        if let Some(sid) = session_id {
+            let rows = stmt.query_map(params![sanitized_query, sid, limit_i64], |r| {
+                let tc: Option<i64> = r.get(4)?;
+                let pinned_int: i32 = r.get(6)?;
+                Ok(MessageRecord {
+                    id: r.get(0)?,
+                    session_id: r.get(1)?,
+                    role: r.get(2)?,
+                    content: r.get(3)?,
+                    token_count: tc.map(|c| c as usize),
+                    created_at: r.get(5)?,
+                    is_pinned: pinned_int != 0,
+                    metadata: r.get(7)?,
+                })
+            })?;
+            for item in rows {
+                messages.push(item?);
+            }
+        } else {
+            let rows = stmt.query_map(params![sanitized_query, limit_i64], |r| {
+                let tc: Option<i64> = r.get(4)?;
+                let pinned_int: i32 = r.get(6)?;
+                Ok(MessageRecord {
+                    id: r.get(0)?,
+                    session_id: r.get(1)?,
+                    role: r.get(2)?,
+                    content: r.get(3)?,
+                    token_count: tc.map(|c| c as usize),
+                    created_at: r.get(5)?,
+                    is_pinned: pinned_int != 0,
+                    metadata: r.get(7)?,
+                })
+            })?;
+            for item in rows {
+                messages.push(item?);
+            }
+        }
+
+        Ok(messages)
     }
 
     // --- MODEL PROFILES ---
@@ -608,8 +736,11 @@ mod tests {
             title: Some("Rust Memory Safety".to_string()),
             content: "Ownership and borrow checker guarantee memory safety without garbage collection.".to_string(),
             source_message_id: None,
+            source_message_ids: None,
             is_pinned: true,
             is_summary: false,
+            is_disabled: false,
+            user_approved: true,
             created_at: 2000,
             updated_at: 2000,
         };
@@ -620,8 +751,11 @@ mod tests {
             title: Some("SQLite FTS5".to_string()),
             content: "FTS5 allows full-text search directly inside local SQLite without a separate vector database.".to_string(),
             source_message_id: None,
+            source_message_ids: None,
             is_pinned: false,
             is_summary: true,
+            is_disabled: false,
+            user_approved: true,
             created_at: 2001,
             updated_at: 2001,
         };
@@ -643,6 +777,60 @@ mod tests {
         db.delete_memory_note("note-1").unwrap();
         let results_after = db.search_memory_notes_fts("safety", None, 10).unwrap();
         assert!(results_after.is_empty());
+    }
+
+    #[test]
+    fn test_messages_fts5_search() {
+        let db = Database::open_in_memory().unwrap();
+
+        let session = SessionRecord {
+            id: "sess-msg-test".to_string(),
+            title: "FTS Message Test".to_string(),
+            created_at: 100,
+            updated_at: 100,
+            pinned_facts: None,
+            task_state: None,
+        };
+        db.create_session(&session).unwrap();
+
+        let msg1 = MessageRecord {
+            id: "msg-101".to_string(),
+            session_id: "sess-msg-test".to_string(),
+            role: "user".to_string(),
+            content: "Can you explain Rust zero cost abstractions?".to_string(),
+            token_count: Some(8),
+            created_at: 101,
+            is_pinned: false,
+            metadata: None,
+        };
+
+        let msg2 = MessageRecord {
+            id: "msg-102".to_string(),
+            session_id: "sess-msg-test".to_string(),
+            role: "assistant".to_string(),
+            content: "Zero cost abstractions mean what you don't use, you don't pay for.".to_string(),
+            token_count: Some(15),
+            created_at: 102,
+            is_pinned: false,
+            metadata: None,
+        };
+
+        db.create_message(&msg1).unwrap();
+        db.create_message(&msg2).unwrap();
+
+        // Search messages for "abstractions"
+        let res = db.search_messages_fts("abstractions", Some("sess-msg-test"), 10).unwrap();
+        assert_eq!(res.len(), 2);
+
+        // Search messages for "abstractions" without session filter
+        let res_global = db.search_messages_fts("abstractions", None, 10).unwrap();
+        assert_eq!(res_global.len(), 2);
+
+        // Delete message and ensure FTS trigger removes it
+        db.delete_message("msg-101").unwrap();
+        let res_after = db.search_messages_fts("abstractions", Some("sess-msg-test"), 10).unwrap();
+        assert_eq!(res_after.len(), 1);
+        assert_eq!(res_after[0].id, "msg-102");
     }
 
     #[test]

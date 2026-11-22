@@ -1,5 +1,4 @@
-mod app;
-mod ui;
+use lowcon::app;
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {

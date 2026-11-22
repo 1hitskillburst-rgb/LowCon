@@ -29,8 +29,11 @@ pub struct MemoryNoteRecord {
     pub title: Option<String>,
     pub content: String,
     pub source_message_id: Option<String>,
+    pub source_message_ids: Option<String>,
     pub is_pinned: bool,
     pub is_summary: bool,
+    pub is_disabled: bool,
+    pub user_approved: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
