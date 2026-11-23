@@ -17,7 +17,8 @@ pub use context::{
 };
 pub use inference::{
     GenerationConfig, GenerationEvent, InferenceBackend, InferenceError, InferenceWorkerHandle,
-    MockInferenceBackend, ModelMetadata, NativeInferenceBackend, StopReason, WorkerStatus,
+    LmStudioBackend, MockInferenceBackend, ModelMetadata, NativeInferenceBackend, StopReason,
+    WorkerStatus,
 };
 pub use memory::{
     calculate_recency_score, calculate_score, rank_and_sort_notes, sanitize_fts5_and_query,

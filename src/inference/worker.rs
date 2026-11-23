@@ -29,6 +29,10 @@ pub enum WorkerCommand {
         token_tx: Sender<GenerationEvent>,
         cancel_token: Arc<AtomicBool>,
     },
+    SwitchBackend {
+        backend: Box<dyn InferenceBackend>,
+        respond_to: Sender<Result<(), InferenceError>>,
+    },
     Shutdown,
 }
 
@@ -125,6 +129,19 @@ impl InferenceWorkerHandle {
                                     *st = WorkerStatus::Unloaded;
                                 }
                             }
+                        }
+
+                        WorkerCommand::SwitchBackend {
+                            backend: new_backend,
+                            respond_to,
+                        } => {
+                            let _ = backend.unload_model();
+                            backend = new_backend;
+                            {
+                                let mut st = status_worker.write().unwrap();
+                                *st = WorkerStatus::Unloaded;
+                            }
+                            let _ = respond_to.send(Ok(()));
                         }
 
                         WorkerCommand::Shutdown => {
@@ -277,6 +294,31 @@ impl InferenceWorkerHandle {
         self.status().is_generating()
     }
 
+    /// Switch the active backend dynamically (e.g. to LM Studio or native GGUF).
+    pub fn switch_backend(&self, backend: Box<dyn InferenceBackend>) -> Result<(), InferenceError> {
+        self.cancel_generation();
+        let (tx, rx) = channel();
+        self.cmd_tx
+            .send(WorkerCommand::SwitchBackend {
+                backend,
+                respond_to: tx,
+            })
+            .map_err(|_| InferenceError::WorkerChannelClosed)?;
+        rx.recv()
+            .map_err(|_| InferenceError::WorkerChannelClosed)?
+    }
+
+    /// Switch to LM Studio / local server backend with the given endpoint.
+    pub fn switch_to_lm_studio(&self, endpoint: impl Into<String>) -> Result<(), InferenceError> {
+        let lm_backend = crate::inference::lm_studio::LmStudioBackend::with_endpoint(endpoint)?;
+        self.switch_backend(Box::new(lm_backend))
+    }
+
+    /// Switch to the deterministic mock backend.
+    pub fn switch_to_mock(&self) -> Result<(), InferenceError> {
+        self.switch_backend(Box::new(MockInferenceBackend::new()))
+    }
+
     /// Cleanly shutdown the worker thread.
     pub fn shutdown(&mut self) {
         self.cancel_generation();
@@ -382,6 +424,28 @@ mod tests {
 
         // Model remains loaded and ready for next turn
         assert!(worker.is_loaded());
+
+        worker.shutdown();
+    }
+
+    #[test]
+    fn test_worker_backend_switching() {
+        let mut worker = InferenceWorkerHandle::spawn_mock().unwrap();
+        assert!(!worker.is_loaded());
+
+        // Switch to LM Studio backend
+        worker.switch_to_lm_studio("http://127.0.0.1:1234/v1").unwrap();
+        assert!(!worker.is_loaded());
+
+        // Load model on switched backend
+        let profile = ModelProfile::new("LM Studio Qwen", PathBuf::from("local"), 8192);
+        let meta = worker.load_model_sync(profile, Duration::from_secs(2)).unwrap();
+        assert_eq!(meta.name, "LM Studio Qwen");
+        assert!(worker.is_loaded());
+
+        // Switch back to mock backend
+        worker.switch_to_mock().unwrap();
+        assert!(!worker.is_loaded()); // Unloaded automatically on switch
 
         worker.shutdown();
     }
