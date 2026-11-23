@@ -1,4 +1,6 @@
 target/
+*.exe
+LowCon.exe
 LOWCON_BUILD_PROMPT.md
 lowcon-redesign.html
 *.db

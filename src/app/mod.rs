@@ -666,13 +666,18 @@ fn handle_memory_action(app: &mut LowConApp, action: MemoryAction) {
 
 fn handle_settings_action(app: &mut LowConApp, action: crate::ui::settings_view::SettingsActionResponse) {
     if action.test_connection {
+        app.settings.lm_studio_endpoint = crate::inference::lm_studio::normalize_api_endpoint(&app.settings.lm_studio_endpoint);
         let endpoint = app.settings.lm_studio_endpoint.clone();
         match LmStudioBackend::fetch_models(&endpoint) {
             Ok(models) => {
                 app.settings.connected_lm_models = models.clone();
-                app.settings.connection_status = format!("✓ Connected: {} models available", models.len());
-                if !models.is_empty() && app.settings.selected_lm_model.is_empty() {
-                    app.settings.selected_lm_model = models[0].clone();
+                if models.is_empty() {
+                    app.settings.connection_status = "✓ Server connected, but no model is currently loaded. Please load a model in LM Studio.".into();
+                } else {
+                    app.settings.connection_status = format!("✓ Connected: {} model(s) available ({})", models.len(), models.join(", "));
+                    if app.settings.selected_lm_model.is_empty() || !models.contains(&app.settings.selected_lm_model) {
+                        app.settings.selected_lm_model = models[0].clone();
+                    }
                 }
             }
             Err(e) => {

@@ -153,6 +153,15 @@ pub fn render_settings_view(
                                 .color(status_color),
                         );
 
+                        if settings.connection_status.starts_with("✕") {
+                            ui.add_space(2.0);
+                            ui.label(
+                                egui::RichText::new("💡 Tip: In LM Studio, open the Developer / Local Server tab on the left, click 'Start Server', and check the port shown (e.g. 1234).")
+                                    .size(11.5)
+                                    .color(COLOR_MUTE),
+                            );
+                        }
+
                         // Model selection dropdown
                         if !settings.connected_lm_models.is_empty() {
                             ui.add_space(8.0);
@@ -183,61 +192,73 @@ pub fn render_settings_view(
                                 .color(COLOR_INK2),
                         );
 
-                        ui.add_space(12.0);
+                        ui.add_space(14.0);
 
-                        // Output Reserve Slider
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new("Output Reserve:")
-                                    .strong()
-                                    .size(13.0)
-                                    .color(COLOR_INK),
-                            );
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                let label = format!("{:.0}% of context", settings.output_reserve_pct);
-                                ui.label(egui::RichText::new(label).color(COLOR_MUTE).size(12.5));
+                        ui.scope(|ui| {
+                            ui.spacing_mut().slider_width = 240.0;
+
+                            // Output Reserve Slider Row
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("Output Reserve:")
+                                        .strong()
+                                        .size(13.0)
+                                        .color(COLOR_INK),
+                                );
+                                ui.add_space(8.0);
+                                ui.add(
+                                    egui::Slider::new(&mut settings.output_reserve_pct, 5.0..=40.0)
+                                        .suffix("%")
+                                        .step_by(1.0)
+                                        .show_value(true),
+                                );
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new(format!("({:.0}% reserved for reply tokens)", settings.output_reserve_pct))
+                                        .size(12.0)
+                                        .color(COLOR_MUTE),
+                                );
                             });
-                        });
-                        ui.add(
-                            egui::Slider::new(&mut settings.output_reserve_pct, 5.0..=40.0)
-                                .suffix("%")
-                                .step_by(1.0),
-                        );
 
-                        ui.add_space(12.0);
+                            ui.add_space(12.0);
 
-                        // Safety Margin Slider
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new("Context Safety Margin:")
-                                    .strong()
-                                    .size(13.0)
-                                    .color(COLOR_INK),
-                            );
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                let label = format!("{:.0}% buffer", settings.safety_margin_pct);
-                                ui.label(egui::RichText::new(label).color(COLOR_MUTE).size(12.5));
+                            // Safety Margin Slider Row
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("Context Safety Margin:")
+                                        .strong()
+                                        .size(13.0)
+                                        .color(COLOR_INK),
+                                );
+                                ui.add_space(8.0);
+                                ui.add(
+                                    egui::Slider::new(&mut settings.safety_margin_pct, 1.0..=15.0)
+                                        .suffix("%")
+                                        .step_by(0.5)
+                                        .show_value(true),
+                                );
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new(format!("({:.1}% buffer against overflow)", settings.safety_margin_pct))
+                                        .size(12.0)
+                                        .color(COLOR_MUTE),
+                                );
                             });
-                        });
-                        ui.add(
-                            egui::Slider::new(&mut settings.safety_margin_pct, 1.0..=15.0)
-                                .suffix("%")
-                                .step_by(0.5),
-                        );
 
-                        ui.add_space(12.0);
+                            ui.add_space(12.0);
 
-                        // Default Context Limit Override
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new("Default Working Context Limit:")
-                                    .strong()
-                                    .size(13.0)
-                                    .color(COLOR_INK),
-                            );
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            // Default Working Context Limit Row
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("Default Working Context Limit:")
+                                        .strong()
+                                        .size(13.0)
+                                        .color(COLOR_INK),
+                                );
+                                ui.add_space(8.0);
                                 egui::ComboBox::from_id_salt("context_preset_combo")
                                     .selected_text(format!("{} tokens", settings.context_limit_override))
+                                    .width(200.0)
                                     .show_ui(ui, |ui| {
                                         ui.selectable_value(&mut settings.context_limit_override, 2048, "2,048 tokens (2K)");
                                         ui.selectable_value(&mut settings.context_limit_override, 4096, "4,096 tokens (4K)");

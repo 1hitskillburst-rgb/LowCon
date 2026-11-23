@@ -5,7 +5,7 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::config::ModelProfile;
@@ -14,6 +14,24 @@ use super::error::InferenceError;
 use super::types::{GenerationConfig, GenerationEvent, ModelMetadata, StopReason};
 
 pub const DEFAULT_LM_STUDIO_ENDPOINT: &str = "http://127.0.0.1:1234/v1";
+
+/// Normalizes an OpenAI-compatible endpoint URL so it points to the `/v1` API root.
+/// Examples:
+/// - "http://127.0.0.1:1234" -> "http://127.0.0.1:1234/v1"
+/// - "http://127.0.0.1:1234/" -> "http://127.0.0.1:1234/v1"
+/// - "http://127.0.0.1:1234/v1" -> "http://127.0.0.1:1234/v1"
+/// - "127.0.0.1:1234" -> "http://127.0.0.1:1234/v1"
+pub fn normalize_api_endpoint(endpoint: &str) -> String {
+    let mut trimmed = endpoint.trim().trim_end_matches('/').to_string();
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        trimmed = format!("http://{}", trimmed);
+    }
+    if !trimmed.ends_with("/v1") {
+        format!("{}/v1", trimmed)
+    } else {
+        trimmed
+    }
+}
 
 /// Checks if an HTTP/HTTPS endpoint points strictly to a local loopback interface.
 /// Enforces LowCon's offline / local-only security invariant.
@@ -33,7 +51,7 @@ pub fn is_local_endpoint(endpoint: &str) -> bool {
         host_port.split(':').next().unwrap_or("")
     };
 
-    matches!(host, "127.0.0.1" | "localhost" | "::1" | "0.0.0.0")
+    matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]" | "0.0.0.0")
 }
 
 /// Backend for local OpenAI-compatible inference servers (LM Studio, Ollama, LocalAI).
@@ -61,18 +79,18 @@ impl LmStudioBackend {
         }
     }
 
-    /// Create with a custom local endpoint (e.g. http://localhost:11434/v1 for Ollama).
+    /// Create with a custom local endpoint (e.g. http://127.0.0.1:1234 or http://localhost:11434).
     pub fn with_endpoint(endpoint: impl Into<String>) -> Result<Self, InferenceError> {
         let ep = endpoint.into();
-        let trimmed = ep.trim_end_matches('/').to_string();
-        if !is_local_endpoint(&trimmed) {
+        let normalized = normalize_api_endpoint(&ep);
+        if !is_local_endpoint(&normalized) {
             return Err(InferenceError::BackendError(format!(
                 "LowCon privacy boundary: Remote endpoint '{}' rejected. Only local loopback addresses (127.0.0.1 / localhost) are permitted.",
-                trimmed
+                normalized
             )));
         }
         Ok(Self {
-            endpoint: trimmed,
+            endpoint: normalized,
             active_model: None,
             metadata: None,
             timeout: Duration::from_secs(30),
@@ -97,41 +115,116 @@ impl LmStudioBackend {
     }
 
     /// Fetch all models currently loaded or available on the local server.
+    /// Handles both `/v1/models` (standard OpenAI/LM Studio) and `/models` fallback,
+    /// with resilient JSON parsing across LM Studio, Ollama, and local servers.
     pub fn fetch_models(endpoint: &str) -> Result<Vec<String>, InferenceError> {
-        let clean_ep = endpoint.trim_end_matches('/');
-        if !is_local_endpoint(clean_ep) {
+        let normalized = normalize_api_endpoint(endpoint);
+        if !is_local_endpoint(&normalized) {
             return Err(InferenceError::BackendError(format!(
-                "LowCon privacy boundary: Remote endpoint '{}' rejected.",
-                clean_ep
+                "LowCon privacy boundary: Remote endpoint '{}' rejected. Only local loopback connections are allowed.",
+                normalized
             )));
         }
 
-        let url = format!("{}/models", clean_ep);
-        let resp = ureq::get(&url)
+        // Primary URL is /v1/models (standard OpenAI/LM Studio)
+        let primary_url = format!("{}/models", normalized.trim_end_matches('/'));
+        
+        // Also prepare fallback without /v1 if needed
+        let fallback_url = if normalized.ends_with("/v1") {
+            format!("{}/models", normalized.trim_end_matches("/v1"))
+        } else {
+            primary_url.clone()
+        };
+
+        // Attempt primary request first
+        let resp_result = ureq::get(&primary_url)
             .timeout(Duration::from_secs(5))
-            .call()
-            .map_err(|e| {
-                InferenceError::BackendError(format!(
-                    "Failed to connect to local inference server at {}: {}. Is LM Studio / Ollama running?",
-                    url, e
-                ))
-            })?;
+            .call();
 
-        #[derive(Deserialize)]
-        struct ModelEntry {
-            id: String,
-        }
+        let resp = match resp_result {
+            Ok(r) => r,
+            Err(e) => {
+                // If primary failed with 404, attempt fallback
+                if primary_url != fallback_url {
+                    match ureq::get(&fallback_url).timeout(Duration::from_secs(5)).call() {
+                        Ok(r) => r,
+                        Err(_) => {
+                            return Err(InferenceError::BackendError(format!(
+                                "Failed to connect to local server at {} (or {}): {}. Is LM Studio's Local Server running?",
+                                primary_url, fallback_url, e
+                            )));
+                        }
+                    }
+                } else {
+                    return Err(InferenceError::BackendError(format!(
+                        "Failed to connect to local server at {}: {}. Is LM Studio's Local Server running?",
+                        primary_url, e
+                    )));
+                }
+            }
+        };
 
-        #[derive(Deserialize)]
-        struct ModelsResponse {
-            data: Vec<ModelEntry>,
-        }
-
-        let body: ModelsResponse = resp.into_json().map_err(|e| {
-            InferenceError::BackendError(format!("Failed to parse models response from {}: {}", url, e))
+        let body_str = resp.into_string().map_err(|e| {
+            InferenceError::BackendError(format!("Failed to read response body: {}", e))
         })?;
 
-        Ok(body.data.into_iter().map(|m| m.id).collect())
+        // Flexible JSON parsing:
+        let val: Value = serde_json::from_str(&body_str).map_err(|e| {
+            InferenceError::BackendError(format!(
+                "Server responded with non-JSON content: {}. (Preview: '{}')",
+                e,
+                if body_str.len() > 100 { &body_str[..97] } else { &body_str }
+            ))
+        })?;
+
+        let mut models = Vec::new();
+
+        // 1. Check standard OpenAI format: { "data": [ { "id": "model_id" }, ... ] }
+        if let Some(data_arr) = val.get("data").and_then(|d| d.as_array()) {
+            for item in data_arr {
+                if let Some(id) = item.get("id").and_then(|id| id.as_str()) {
+                    models.push(id.to_string());
+                } else if let Some(id) = item.as_str() {
+                    models.push(id.to_string());
+                }
+            }
+        }
+        // 2. Check Ollama format: { "models": [ { "name": "model_id" }, ... ] }
+        else if let Some(models_arr) = val.get("models").and_then(|m| m.as_array()) {
+            for item in models_arr {
+                if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
+                    models.push(name.to_string());
+                } else if let Some(id) = item.get("id").and_then(|i| i.as_str()) {
+                    models.push(id.to_string());
+                }
+            }
+        }
+        // 3. Check direct array: [ { "id": "..." }, ... ] or [ "...", ... ]
+        else if let Some(arr) = val.as_array() {
+            for item in arr {
+                if let Some(id) = item.get("id").and_then(|id| id.as_str()) {
+                    models.push(id.to_string());
+                } else if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
+                    models.push(name.to_string());
+                } else if let Some(s) = item.as_str() {
+                    models.push(s.to_string());
+                }
+            }
+        }
+        // 4. Check for server error message: { "error": ... }
+        else if let Some(err_val) = val.get("error") {
+            let msg = if let Some(m) = err_val.get("message").and_then(|m| m.as_str()) {
+                m.to_string()
+            } else {
+                err_val.to_string()
+            };
+            return Err(InferenceError::BackendError(format!(
+                "Server returned error from {}: {}",
+                primary_url, msg
+            )));
+        }
+
+        Ok(models)
     }
 }
 
@@ -258,7 +351,8 @@ impl InferenceBackend for LmStudioBackend {
             return Err(InferenceError::Cancelled);
         }
 
-        let url = format!("{}/chat/completions", self.endpoint);
+        let base = normalize_api_endpoint(&self.endpoint);
+        let url = format!("{}/chat/completions", base);
 
         #[derive(Serialize)]
         struct ChatMessagePayload<'a> {
