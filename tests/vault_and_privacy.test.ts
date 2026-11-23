@@ -6,10 +6,10 @@ import {
   normalizeApiEndpoint,
   safeTruncateChars,
   sanitizeDiagnosticMessage,
-} from './privacy';
-import { decryptVaultString, encryptVaultString, VaultError } from './vault';
-import { createMockGgufBytes, parseGgufHeader } from './gguf';
-import { parseSseLine } from './inference';
+} from '../src/core/privacy';
+import { decryptVaultString, encryptVaultString, VaultError } from '../src/core/vault';
+import { createMockGgufBytes, parseGgufHeader } from '../src/core/gguf';
+import { parseSseLine } from '../src/core/inference';
 
 test('loopback privacy boundary allows local addresses and blocks remote hosts', () => {
   assert.equal(isLocalEndpoint('http://127.0.0.1:1234/v1'), true);

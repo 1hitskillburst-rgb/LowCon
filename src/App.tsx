@@ -1,14 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
-import { ChatView } from './components/ChatView';
-import { ContextPanel } from './components/ContextPanel';
-import { MemoryView } from './components/MemoryView';
-import { ModelsView } from './components/ModelsView';
-import { PromptInspectorModal } from './components/PromptInspectorModal';
-import { SettingsView } from './components/SettingsView';
-import { SidebarNav } from './components/SidebarNav';
-import { SourcesModal } from './components/SourcesModal';
-import { VaultLockOverlay } from './components/VaultLockOverlay';
+import { ChatView } from './components/chat/ChatView';
+import { ContextPanel } from './components/chat/ContextPanel';
+import { SidebarNav } from './components/layout/SidebarNav';
+import { PromptInspectorModal } from './components/modals/PromptInspectorModal';
+import { SourcesModal } from './components/modals/SourcesModal';
+import { VaultLockOverlay } from './components/modals/VaultLockOverlay';
+import { MemoryView } from './components/views/MemoryView';
+import { ModelsView } from './components/views/ModelsView';
+import { SettingsView } from './components/views/SettingsView';
 import {
   assembleContext,
   buildTurnContextBudget,

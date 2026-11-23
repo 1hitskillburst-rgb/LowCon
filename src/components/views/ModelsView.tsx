@@ -1,9 +1,9 @@
 import React, { useRef, useState } from 'react';
 import { CheckCircle2, Cpu, FileUp, Plus, Power, Trash2, X } from 'lucide-react';
-import { parseGgufHeader } from '../core/gguf';
-import { formatNumber } from '../core/privacy';
-import { createUuid } from '../core/storage';
-import type { ChatTemplateType, ModelProfile, WorkerStatus } from '../core/types';
+import { parseGgufHeader } from '../../core/gguf';
+import { formatNumber } from '../../core/privacy';
+import { createUuid } from '../../core/storage';
+import type { ChatTemplateType, ModelProfile, WorkerStatus } from '../../core/types';
 
 interface ModelsViewProps {
   models: ModelProfile[];

@@ -1,6 +1,6 @@
 import React from 'react';
-import { formatNumber } from '../core/privacy';
-import type { ContextSegment, ContextSegmentKey, TurnContextBudget } from '../core/types';
+import { formatNumber } from '../../core/privacy';
+import type { ContextSegment, ContextSegmentKey, TurnContextBudget } from '../../core/types';
 
 interface StripProps {
   budget: TurnContextBudget;

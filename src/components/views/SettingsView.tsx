@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { Lock, RefreshCw, ShieldCheck, Terminal, Trash2 } from 'lucide-react';
-import { calculateBudgetPartition } from '../core/context';
-import { formatNumber } from '../core/privacy';
-import type { AppSettings, BackendType, DiagnosticEntry, DiagnosticLevel } from '../core/types';
+import { calculateBudgetPartition } from '../../core/context';
+import { formatNumber } from '../../core/privacy';
+import type { AppSettings, BackendType, DiagnosticEntry, DiagnosticLevel } from '../../core/types';
 
 interface SettingsViewProps {
   settings: AppSettings;

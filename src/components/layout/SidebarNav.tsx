@@ -1,7 +1,7 @@
 import React from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { safeTruncateChars } from '../core/privacy';
-import type { NavigationTab, Session } from '../core/types';
+import { safeTruncateChars } from '../../core/privacy';
+import type { NavigationTab, Session } from '../../core/types';
 
 interface SidebarNavProps {
   currentTab: NavigationTab;

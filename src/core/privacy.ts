@@ -17,13 +17,14 @@ export function isLocalEndpoint(endpoint: string): boolean {
     if (!trimmed) return false;
     const withProto = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
     const parsed = new URL(withProto);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    if (parsed.username || parsed.password) return false;
     const host = parsed.hostname.toLowerCase();
     return (
       host === '127.0.0.1' ||
       host === 'localhost' ||
       host === '::1' ||
-      host === '[::1]' ||
-      host === '0.0.0.0'
+      host === '[::1]'
     );
   } catch {
     return false;

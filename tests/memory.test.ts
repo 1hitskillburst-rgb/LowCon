@@ -4,8 +4,8 @@ import {
   calculateRecencyScore,
   getPinnedNotesForPrompt,
   retrieveMemoryNotes,
-} from './memory';
-import type { MemoryNote } from './types';
+} from '../src/core/memory';
+import type { MemoryNote } from '../src/core/types';
 
 function makeNote(overrides: Partial<MemoryNote>): MemoryNote {
   const now = 1_700_000_000_000;

@@ -1,8 +1,18 @@
-target/
-*.exe
-LowCon.exe
-LOWCON_BUILD_PROMPT.md
-lowcon-redesign.html
-*.db
-*.db-wal
-*.db-shm
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+release/
+
+# Local environment & logs
+.env
+.env.local
+*.log
+
+# Temporary browser verification artifacts
+.playwright-cli/
+
+# OS metadata
+.DS_Store
+Thumbs.db

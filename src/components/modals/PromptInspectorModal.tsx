@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Check, Copy, X } from 'lucide-react';
-import { formatNumber } from '../core/privacy';
-import type { PromptInspection } from '../core/types';
+import { formatNumber } from '../../core/privacy';
+import type { PromptInspection } from '../../core/types';
 
 interface PromptInspectorModalProps {
   isOpen: boolean;

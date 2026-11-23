@@ -6,7 +6,7 @@ import {
   calculateBudgetPartition,
   estimateTokensConservative,
   getPackedTokens,
-} from './context';
+} from '../src/core/context';
 
 test('budget partition enforces prompt + output + safety <= limit across 2K..32K', () => {
   for (const limit of [2048, 4096, 8192, 16384, 32768]) {

@@ -1,13 +1,13 @@
 import React, { useRef, useState } from 'react';
 import { Brain, Check, Copy, Paperclip, Square, X } from 'lucide-react';
-import { getPackedTokens } from '../core/context';
-import { formatNumber, formatRelativeTime } from '../core/privacy';
+import { getPackedTokens } from '../../core/context';
+import { formatNumber, formatRelativeTime } from '../../core/privacy';
 import type {
   ContextSegmentKey,
   ModelProfile,
   Session,
   WorkerStatus,
-} from '../core/types';
+} from '../../core/types';
 import { ContextStrip } from './ContextBudgetViz';
 
 interface ChatViewProps {

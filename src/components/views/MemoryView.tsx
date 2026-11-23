@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { CheckCircle2, Edit3, Eye, EyeOff, Pin, Plus, Search, Trash2, X } from 'lucide-react';
-import { retrieveMemoryNotes } from '../core/memory';
-import { formatRelativeTime } from '../core/privacy';
-import type { MemoryNote } from '../core/types';
+import { retrieveMemoryNotes } from '../../core/memory';
+import { formatRelativeTime } from '../../core/privacy';
+import type { MemoryNote } from '../../core/types';
 
 type MemoryFilter = 'all' | 'pinned' | 'in_prompt' | 'summaries';
 

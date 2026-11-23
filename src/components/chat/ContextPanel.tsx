@@ -1,7 +1,7 @@
 import React from 'react';
-import { getFreeTokens, getPackedPercentage, getPackedTokens } from '../core/context';
-import { formatNumber } from '../core/privacy';
-import type { ContextSegmentKey, MemoryNote, TurnContextBudget } from '../core/types';
+import { getFreeTokens, getPackedPercentage, getPackedTokens } from '../../core/context';
+import { formatNumber } from '../../core/privacy';
+import type { ContextSegmentKey, MemoryNote, TurnContextBudget } from '../../core/types';
 import { ContextSegmentRow, VerticalContextStack } from './ContextBudgetViz';
 
 interface ContextPanelProps {
