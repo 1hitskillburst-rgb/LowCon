@@ -15,15 +15,16 @@ Modern small language models (such as Qwen 2.5 0.5B–3B, Llama 3.2 1B–3B, Phi
 
 ## Quick Start for Casual Users (Windows)
 
-You do **not** need Rust or developer tools installed to run LowCon once compiled:
+You do **not** need Rust, Python, or terminal tools installed to run LowCon:
 
-1. Locate the standalone executable:
+1. **Launch Directly from the Main Folder**:
+   Double-click `LowCon.exe` located right in the root folder:
+   ```text
+   LowCon.exe
    ```
-   target\release\lowcon.exe
-   ```
-2. Double-click `lowcon.exe` (or run it from PowerShell/CMD).
-3. The calm editorial desktop workbench will launch immediately at `1280x840` resolution.
-4. All chat sessions, messages, and memory notes are stored locally in an embedded SQLite database.
+   *(Compiled natively with no terminal popup or console window).*
+2. The calm editorial desktop workbench will launch immediately at `1280x840` resolution.
+3. All chat sessions, messages, and memory notes are stored locally in an embedded SQLite database (`lowcon.db`).
 
 ---
 
