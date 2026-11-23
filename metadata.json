@@ -1,0 +1,5 @@
+{
+  "name": "LowCon — Local Model Workbench",
+  "description": "A private, budget-first low-context local LLM workbench with deterministic context assembly, local FTS5-style memory retrieval, GGUF header inspection, encrypted vault storage, and redacted diagnostics.",
+  "requestFramePermissions": []
+}
