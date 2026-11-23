@@ -13,6 +13,14 @@ pub enum MemoryFilter {
     AutoExtracted,
 }
 
+#[derive(Debug, Clone)]
+pub enum MemoryAction {
+    Create { title: String, content: String, is_pinned: bool },
+    Update(MemoryNote),
+    Delete(String),
+    TogglePin(String),
+}
+
 pub struct MemoryViewState {
     pub search_query: String,
     pub filter: MemoryFilter,
@@ -42,7 +50,9 @@ pub fn render_memory_view(
     ui: &mut Ui,
     notes: &mut Vec<MemoryNote>,
     view_state: &mut MemoryViewState,
-) {
+) -> Option<MemoryAction> {
+    let mut triggered_action: Option<MemoryAction> = None;
+
     ui.vertical(|ui| {
         // Top Header
         egui::Frame::none()
@@ -151,9 +161,10 @@ pub fn render_memory_view(
 
                     // Notes List
                     let query = view_state.search_query.trim().to_lowercase();
-                    let mut note_to_delete: Option<usize> = None;
+                    let mut note_id_to_delete: Option<String> = None;
+                    let mut note_id_to_toggle: Option<String> = None;
 
-                    for (idx, note) in notes.iter_mut().enumerate() {
+                    for note in notes.iter_mut() {
                         // Apply filters
                         match view_state.filter {
                             MemoryFilter::All => {}
@@ -247,7 +258,7 @@ pub fn render_memory_view(
                                             .on_hover_text("Permanently remove from local database & FTS5 search index")
                                             .clicked()
                                         {
-                                            note_to_delete = Some(idx);
+                                            note_id_to_delete = Some(note.id.clone());
                                         }
 
                                         // Edit Button
@@ -264,7 +275,7 @@ pub fn render_memory_view(
                                             .button(egui::RichText::new(pin_label).size(12.0).color(COLOR_BLUE))
                                             .clicked()
                                         {
-                                            note.is_pinned = !note.is_pinned;
+                                            note_id_to_toggle = Some(note.id.clone());
                                         }
                                     });
                                 });
@@ -273,8 +284,11 @@ pub fn render_memory_view(
                         ui.add_space(10.0);
                     }
 
-                    if let Some(to_del) = note_to_delete {
-                        notes.remove(to_del);
+                    if let Some(id) = note_id_to_delete {
+                        triggered_action = Some(MemoryAction::Delete(id));
+                    }
+                    if let Some(id) = note_id_to_toggle {
+                        triggered_action = Some(MemoryAction::TogglePin(id));
                     }
                 });
             });
@@ -301,9 +315,7 @@ pub fn render_memory_view(
 
                     ui.horizontal(|ui| {
                         if ui.button("Save Changes").clicked() {
-                            if let Some(existing) = notes.iter_mut().find(|n| n.id == edit_note.id) {
-                                *existing = edit_note;
-                            }
+                            triggered_action = Some(MemoryAction::Update(edit_note.clone()));
                             view_state.editing_note = None;
                         }
                         if ui.button("Cancel").clicked() {
@@ -349,15 +361,10 @@ pub fn render_memory_view(
                             let title = view_state.new_note_title.trim().to_string();
                             let content = view_state.new_note_content.trim().to_string();
                             if !content.is_empty() {
-                                notes.push(MemoryNote {
-                                    id: format!("note_{}", notes.len() + 1),
+                                triggered_action = Some(MemoryAction::Create {
                                     title: if title.is_empty() { "Custom Note".into() } else { title },
-                                    excerpt: content,
-                                    source_reference: "User created".into(),
+                                    content,
                                     is_pinned: view_state.new_note_is_pinned,
-                                    is_auto_extracted: false,
-                                    is_in_active_prompt: view_state.new_note_is_pinned,
-                                    created_at: "Just now".into(),
                                 });
                                 view_state.new_note_title.clear();
                                 view_state.new_note_content.clear();
@@ -375,6 +382,8 @@ pub fn render_memory_view(
             }
         }
     });
+
+    triggered_action
 }
 
 fn render_filter_chip(

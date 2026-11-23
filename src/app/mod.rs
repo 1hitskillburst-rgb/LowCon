@@ -1,14 +1,27 @@
 pub mod state;
 
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use eframe::App;
 use egui::{vec2, Align2, CentralPanel, Context, SidePanel};
+
 use state::{
-    AppSettings, ChatMessage, ContextSegmentKey, MemoryNote, MessageRole, ModelProfile,
-    NavigationTab, PromptInspectorState, Session, TurnContextBudget,
+    AppSettings, BackendType, ChatMessage, ContextSegmentKey, MemoryNote, MessageRole,
+    ModelProfile, NavigationTab, PromptInspectorState, Session, TurnContextBudget,
 };
+use crate::context::{
+    AssemblyCandidates, ConservativeEstimator, ContextAssemblyEngine, ConversationTurn,
+    CoreInstruction, CurrentUserMessage, MemoryExcerpt,
+};
+use crate::inference::{
+    GenerationConfig, GenerationEvent, InferenceBackend, InferenceWorkerHandle, LmStudioBackend,
+    MockInferenceBackend,
+};
+use crate::memory::{MemoryEngine, RetrievalOptions};
+use crate::storage::{Database, MessageRecord, SessionRecord};
 use crate::ui::chat_view::{render_chat_view, ChatActionResponse};
 use crate::ui::context_panel::render_context_panel;
-use crate::ui::memory_view::{render_memory_view, MemoryViewState};
+use crate::ui::memory_view::{render_memory_view, MemoryAction, MemoryViewState};
 use crate::ui::models_view::render_models_view;
 use crate::ui::nav::render_nav;
 use crate::ui::prompt_inspector::render_prompt_inspector;
@@ -16,6 +29,10 @@ use crate::ui::settings_view::{render_settings_view, SettingsViewState};
 use crate::ui::theme::{configure_theme, COLOR_BG, COLOR_PANEL, COLOR_SIDE};
 
 pub struct LowConApp {
+    pub db: Database,
+    pub memory_engine: MemoryEngine,
+    pub worker_handle: InferenceWorkerHandle,
+
     pub current_tab: NavigationTab,
     pub sessions: Vec<Session>,
     pub active_session_id: String,
@@ -36,64 +53,106 @@ pub struct LowConApp {
 
 impl Default for LowConApp {
     fn default() -> Self {
-        let default_budget = TurnContextBudget::new_default_8k();
-
-        let ref_session = Session {
-            id: "sess_01".into(),
-            title: "Context strategy / 8K model".into(),
-            subtitle: "A focused session. All history is saved locally.".into(),
-            messages: vec![
-                ChatMessage {
-                    id: "msg_01".into(),
-                    role: MessageRole::User,
-                    author_name: "You".into(),
-                    time_str: "4:18 PM".into(),
-                    model_info: None,
-                    content: "Why does my smaller model keep losing earlier constraints when a conversation gets long? I don't want to increase the context window just to brute-force it.".into(),
-                    aside: None,
-                    sources: vec![],
-                    turn_budget: None,
-                },
-                ChatMessage {
-                    id: "msg_02".into(),
-                    role: MessageRole::Assistant,
-                    author_name: "LowCon".into(),
-                    time_str: "4:18 PM".into(),
-                    model_info: Some("Qwen 3 4B, on this device".into()),
-                    content: "The model isn't really remembering the whole conversation. It only sees the tokens included in its current prompt. As the chat grows, older details either get pushed out or compete with the current request.\n\nThe better fix is to separate history from active context. Keep the full transcript on disk, then build a small, relevant prompt for every turn.\n\nFor this request, the harness selected your active constraint, two source-linked memory notes, and the newest turns. Older messages remain saved locally but aren't spending tokens right now.".into(),
-                    aside: Some("Context selection happens in the harness, before inference. The model doesn't decide what gets remembered or silently rewrite the transcript.".into()),
-                    sources: vec![
-                        "Session 04, message 18 (Keep original conversation history intact)".into(),
-                        "Note 07, approved by you (Prefer deterministic prompt packing over model-managed recall)".into(),
-                    ],
-                    turn_budget: Some(default_budget.clone()),
-                },
-            ],
+        // 1. Initialize SQLite Database (persistent local vault file or in-memory fallback)
+        let local_data_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let policy = crate::privacy::StorageLocationPolicy::new(local_data_dir.clone());
+        let db_path = local_data_dir.join("lowcon_vault.db");
+        let db = match Database::open(&db_path, &policy) {
+            Ok(database) => database,
+            Err(_) => Database::open_in_memory().expect("In-memory SQLite DB open"),
         };
 
-        let initial_sessions = vec![
-            ref_session,
-            Session {
-                id: "sess_02".into(),
-                title: "Rust application architecture".into(),
-                subtitle: "Safe FFI wrappers and zero-copy token buffers".into(),
-                messages: vec![],
-            },
-            Session {
-                id: "sess_03".into(),
-                title: "Benchmark notes, Q4".into(),
-                subtitle: "Prompt assembly latency vs SQLite retrieval overhead".into(),
-                messages: vec![],
-            },
-            Session {
-                id: "sess_04".into(),
-                title: "Prompt packing experiments".into(),
-                subtitle: "4K limit test with priority-based turn trimming".into(),
-                messages: vec![],
-            },
-        ];
+        // 2. Initialize MemoryEngine wrapping SQLite
+        let memory_engine = MemoryEngine::new(db.clone());
 
+        // 3. Initialize background inference worker (defaults to LM Studio / local server, fallback to mock)
+        let lm_endpoint = "http://127.0.0.1:1234/v1";
+        let backend: Box<dyn InferenceBackend> = match LmStudioBackend::with_endpoint(lm_endpoint) {
+            Ok(lm) => Box::new(lm),
+            Err(_) => Box::new(MockInferenceBackend::new()),
+        };
+        let worker_handle = InferenceWorkerHandle::spawn(backend)
+            .unwrap_or_else(|_| InferenceWorkerHandle::spawn_mock().expect("Mock worker spawn"));
+
+        // 4. Load real sessions and messages from SQLite DB
+        let db_sessions = db.list_sessions().unwrap_or_default();
+        let mut sessions = Vec::new();
+
+        if db_sessions.is_empty() {
+            let now = current_unix_timestamp();
+            let initial_session = SessionRecord {
+                id: "sess_01".into(),
+                title: "Context strategy / 8K model".into(),
+                created_at: now,
+                updated_at: now,
+                pinned_facts: None,
+                task_state: None,
+            };
+            let _ = db.create_session(&initial_session);
+
+            sessions.push(Session {
+                id: "sess_01".into(),
+                title: "Context strategy / 8K model".into(),
+                subtitle: "A focused session. All history is saved locally.".into(),
+                messages: vec![],
+            });
+        } else {
+            for s_rec in db_sessions {
+                let msgs = db.list_messages_by_session(&s_rec.id).unwrap_or_default();
+                let chat_msgs: Vec<ChatMessage> = msgs
+                    .into_iter()
+                    .map(|m| {
+                        let role = match m.role.as_str() {
+                            "user" => MessageRole::User,
+                            "assistant" => MessageRole::Assistant,
+                            _ => MessageRole::System,
+                        };
+                        ChatMessage {
+                            id: m.id,
+                            role,
+                            author_name: if role == MessageRole::User {
+                                "You".into()
+                            } else {
+                                "LowCon".into()
+                            },
+                            time_str: format_unix_timestamp(m.created_at),
+                            model_info: None,
+                            content: m.content,
+                            aside: None,
+                            sources: vec![],
+                            turn_budget: None,
+                        }
+                    })
+                    .collect();
+
+                sessions.push(Session {
+                    id: s_rec.id,
+                    title: s_rec.title,
+                    subtitle: "Local session. History stays on this device.".into(),
+                    messages: chat_msgs,
+                });
+            }
+        }
+
+        let active_session_id = sessions[0].id.clone();
+
+        // 5. Load memory notes from SQLite FTS5 database
+        let memory_notes = load_ui_memory_notes(&memory_engine, None);
+
+        // 6. Models list
         let initial_models = vec![
+            ModelProfile {
+                id: "model_lmstudio".into(),
+                name: "LM Studio · Local Server (127.0.0.1:1234)".into(),
+                file_path: "http://127.0.0.1:1234/v1".into(),
+                architecture: "openai-compatible".into(),
+                quantization: "server-managed".into(),
+                context_limit: 8192,
+                context_override: None,
+                file_size_bytes: 0,
+                is_loaded: true,
+                ram_footprint_mb: None,
+            },
             ModelProfile {
                 id: "model_qwen3_4b".into(),
                 name: "Qwen 3 · 4B Instruct".into(),
@@ -103,86 +162,36 @@ impl Default for LowConApp {
                 context_limit: 8192,
                 context_override: None,
                 file_size_bytes: 2_600_000_000,
-                is_loaded: true,
-                ram_footprint_mb: Some(2420),
-            },
-            ModelProfile {
-                id: "model_llama32_3b".into(),
-                name: "Llama 3.2 · 3B Instruct".into(),
-                file_path: "C:\\models\\llama-3.2-3b-instruct.gguf".into(),
-                architecture: "llama".into(),
-                quantization: "Q4_K_M".into(),
-                context_limit: 8192,
-                context_override: Some(4096),
-                file_size_bytes: 2_200_000_000,
                 is_loaded: false,
                 ram_footprint_mb: None,
             },
             ModelProfile {
-                id: "model_smollm_1b".into(),
-                name: "SmolLM2 · 1.7B".into(),
-                file_path: "C:\\models\\smollm2-1.7b-instruct.gguf".into(),
-                architecture: "llama".into(),
-                quantization: "Q4_K_M".into(),
-                context_limit: 2048,
+                id: "model_mock".into(),
+                name: "Offline Mock Model".into(),
+                file_path: "in-process-mock".into(),
+                architecture: "mock".into(),
+                quantization: "None".into(),
+                context_limit: 8192,
                 context_override: None,
-                file_size_bytes: 1_100_000_000,
+                file_size_bytes: 0,
                 is_loaded: false,
                 ram_footprint_mb: None,
             },
         ];
 
-        let initial_notes = vec![
-            MemoryNote {
-                id: "note_01".into(),
-                title: "Original History Preservation".into(),
-                excerpt: "Keep original conversation history intact".into(),
-                source_reference: "Session 04, message 18".into(),
-                is_pinned: true,
-                is_auto_extracted: false,
-                is_in_active_prompt: true,
-                created_at: "2 hours ago".into(),
-            },
-            MemoryNote {
-                id: "note_02".into(),
-                title: "Deterministic Packing Over Recall".into(),
-                excerpt: "Prefer deterministic prompt packing over model-managed recall".into(),
-                source_reference: "Note 07, approved by you".into(),
-                is_pinned: false,
-                is_auto_extracted: false,
-                is_in_active_prompt: true,
-                created_at: "1 day ago".into(),
-            },
-            MemoryNote {
-                id: "note_03".into(),
-                title: "Zero Network Boundary".into(),
-                excerpt: "Never allow external network or localhost HTTP communication".into(),
-                source_reference: "System policy".into(),
-                is_pinned: true,
-                is_auto_extracted: false,
-                is_in_active_prompt: false,
-                created_at: "3 days ago".into(),
-            },
-            MemoryNote {
-                id: "note_04".into(),
-                title: "Output Reserve Ratio".into(),
-                excerpt: "Maintain minimum 20% output reserve for structured code blocks".into(),
-                source_reference: "Session 02, message 09".into(),
-                is_pinned: false,
-                is_auto_extracted: true,
-                is_in_active_prompt: false,
-                created_at: "4 days ago".into(),
-            },
-        ];
+        let default_budget = TurnContextBudget::new_default_8k();
 
         Self {
+            db,
+            memory_engine,
+            worker_handle,
             current_tab: NavigationTab::Chat,
-            sessions: initial_sessions,
-            active_session_id: "sess_01".into(),
+            sessions,
+            active_session_id,
             models: initial_models,
-            active_model_id: "model_qwen3_4b".into(),
+            active_model_id: "model_lmstudio".into(),
             new_model_path: String::new(),
-            memory_notes: initial_notes,
+            memory_notes,
             settings: AppSettings::default(),
             composer_text: String::new(),
             is_generating: false,
@@ -200,13 +209,71 @@ impl App for LowConApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         configure_theme(ctx);
 
+        // 1. Process streaming generation events from background inference worker
+        if self.is_generating {
+            while let Some(event) = self.worker_handle.try_recv_event() {
+                match event {
+                    GenerationEvent::Token(token) => {
+                        if let Some(session) = self.sessions.iter_mut().find(|s| s.id == self.active_session_id) {
+                            if let Some(last_msg) = session.messages.last_mut() {
+                                if last_msg.role == MessageRole::Assistant {
+                                    last_msg.content.push_str(&token);
+                                }
+                            }
+                        }
+                        ctx.request_repaint();
+                    }
+                    GenerationEvent::Complete { total_tokens, stop_reason: _ } => {
+                        self.is_generating = false;
+                        // Persist completed assistant message to SQLite
+                        if let Some(session) = self.sessions.iter().find(|s| s.id == self.active_session_id) {
+                            if let Some(last_msg) = session.messages.last() {
+                                let now = current_unix_timestamp();
+                                let msg_rec = MessageRecord {
+                                    id: last_msg.id.clone(),
+                                    session_id: self.active_session_id.clone(),
+                                    role: "assistant".into(),
+                                    content: last_msg.content.clone(),
+                                    token_count: Some(total_tokens),
+                                    created_at: now,
+                                    is_pinned: false,
+                                    metadata: None,
+                                };
+                                let _ = self.db.create_message(&msg_rec);
+                            }
+                        }
+                        ctx.request_repaint();
+                        break;
+                    }
+                    GenerationEvent::Cancelled => {
+                        self.is_generating = false;
+                        if let Some(session) = self.sessions.iter_mut().find(|s| s.id == self.active_session_id) {
+                            if let Some(last_msg) = session.messages.last_mut() {
+                                last_msg.aside = Some("Generation cancelled by user.".into());
+                            }
+                        }
+                        ctx.request_repaint();
+                        break;
+                    }
+                    GenerationEvent::Error(err) => {
+                        self.is_generating = false;
+                        if let Some(session) = self.sessions.iter_mut().find(|s| s.id == self.active_session_id) {
+                            if let Some(last_msg) = session.messages.last_mut() {
+                                last_msg.content.push_str(&format!("\n\n[Inference Error: {}]", err));
+                            }
+                        }
+                        ctx.request_repaint();
+                        break;
+                    }
+                }
+            }
+        }
+
         let mut on_new_session = false;
         let mut on_inspect_prompt = false;
-
-        // Reset hovered segment if cursor is elsewhere
         let prev_hover = self.hovered_segment;
 
-        // 1. Left Navigation Sidebar
+        // 2. Left Navigation Sidebar (216px)
         SidePanel::left("left_nav_bar")
             .exact_width(216.0)
             .resizable(false)
@@ -221,7 +288,7 @@ impl App for LowConApp {
                 );
             });
 
-        // 2. Right Context & Memory Panel (shown in Chat view)
+        // 3. Right Context & Memory Panel (344px, shown in Chat tab)
         if self.current_tab == NavigationTab::Chat {
             SidePanel::right("right_context_panel")
                 .exact_width(344.0)
@@ -239,7 +306,7 @@ impl App for LowConApp {
                 });
         }
 
-        // 3. Central Content Workspace
+        // 4. Central Content Workspace
         CentralPanel::default()
             .frame(egui::Frame::none().fill(COLOR_BG))
             .show(ctx, |ui| {
@@ -247,6 +314,11 @@ impl App for LowConApp {
                     NavigationTab::Chat => {
                         let active_id = self.active_session_id.clone();
                         let active_model = self.active_model_id.clone();
+                        let backend_label = match self.settings.active_backend_type {
+                            BackendType::LMStudio => format!("LM Studio · {}", self.settings.lm_studio_endpoint),
+                            BackendType::NativeGGUF => "Native GGUF".into(),
+                            BackendType::Mock => "Offline Mock".into(),
+                        };
 
                         if let Some(session) = self.sessions.iter_mut().find(|s| s.id == active_id) {
                             let action_resp = render_chat_view(
@@ -254,6 +326,7 @@ impl App for LowConApp {
                                 session,
                                 &self.models,
                                 &mut self.active_model_id,
+                                &backend_label,
                                 &mut self.composer_text,
                                 &mut self.settings.memory_retrieval_enabled,
                                 self.is_generating,
@@ -277,18 +350,24 @@ impl App for LowConApp {
                         );
                     }
                     NavigationTab::Memory => {
-                        render_memory_view(
+                        let memory_action = render_memory_view(
                             ui,
                             &mut self.memory_notes,
                             &mut self.memory_view_state,
                         );
+
+                        if let Some(action) = memory_action {
+                            handle_memory_action(self, action);
+                        }
                     }
                     NavigationTab::Settings => {
-                        render_settings_view(
+                        let settings_action = render_settings_view(
                             ui,
                             &mut self.settings,
                             &mut self.settings_view_state,
                         );
+
+                        handle_settings_action(self, settings_action);
                     }
                 }
             });
@@ -332,14 +411,24 @@ impl App for LowConApp {
 
         // Handle New Session creation
         if on_new_session {
+            let now = current_unix_timestamp();
             let new_id = format!("sess_{:02}", self.sessions.len() + 1);
-            let new_session = Session {
+            let new_session_record = SessionRecord {
+                id: new_id.clone(),
+                title: "New chat session".into(),
+                created_at: now,
+                updated_at: now,
+                pinned_facts: None,
+                task_state: None,
+            };
+            let _ = self.db.create_session(&new_session_record);
+
+            self.sessions.push(Session {
                 id: new_id.clone(),
                 title: "New chat session".into(),
                 subtitle: "Fresh local session. History stays on disk.".into(),
                 messages: vec![],
-            };
-            self.sessions.push(new_session);
+            });
             self.active_session_id = new_id;
             self.current_tab = NavigationTab::Chat;
         }
@@ -365,10 +454,25 @@ fn handle_chat_actions(
             .map(|m| m.name.clone())
             .unwrap_or_else(|| "Local Model".into());
 
+        // 1. Save user message to SQLite DB
+        let now = current_unix_timestamp();
+        let user_msg_id = format!("msg_{}", uuid::Uuid::new_v4());
+        let user_rec = MessageRecord {
+            id: user_msg_id.clone(),
+            session_id: active_session_id.clone(),
+            role: "user".into(),
+            content: user_text.clone(),
+            token_count: None,
+            created_at: now,
+            is_pinned: false,
+            metadata: None,
+        };
+        let _ = app.db.create_message(&user_rec);
+
         if let Some(session) = app.sessions.iter_mut().find(|s| s.id == active_session_id) {
-            // Add user message
+            // Append user message to state
             session.messages.push(ChatMessage {
-                id: format!("msg_{}", session.messages.len() + 1),
+                id: user_msg_id,
                 role: MessageRole::User,
                 author_name: "You".into(),
                 time_str: "Just now".into(),
@@ -379,30 +483,135 @@ fn handle_chat_actions(
                 turn_budget: None,
             });
 
-            // Add simulated assistant reply
+            // 2. Query real relevant memory notes using MemoryEngine
+            let mut memory_excerpts = Vec::new();
+            if app.settings.memory_retrieval_enabled {
+                let options = RetrievalOptions {
+                    query: Some(user_text.clone()),
+                    session_id: Some(active_session_id.clone()),
+                    limit: 3,
+                    include_disabled: false,
+                    require_approved: true,
+                    pinned_only: false,
+                    summaries_only: false,
+                    weights: crate::memory::ScoringWeights::default(),
+                };
+                if let Ok(scored_notes) = app.memory_engine.retrieve(&options) {
+                    for scored in scored_notes {
+                        memory_excerpts.push(MemoryExcerpt {
+                            id: scored.note.id.clone(),
+                            title: scored.note.title.clone(),
+                            excerpt: scored.note.content.clone(),
+                            source_message_id: scored.note.source_message_ids.first().cloned(),
+                            relevance_score: scored.final_score as f32,
+                            is_pinned: scored.note.is_pinned,
+                        });
+                    }
+                }
+            }
+
+            // 3. Convert previous conversation turns for context assembly
+            let mut conversation_turns = Vec::new();
+            let msg_len = session.messages.len();
+            if msg_len > 1 {
+                for m in &session.messages[..msg_len - 1] {
+                    if m.role == MessageRole::User {
+                        conversation_turns.push(ConversationTurn::user(m.id.clone(), m.content.clone()));
+                    } else if m.role == MessageRole::Assistant {
+                        conversation_turns.push(ConversationTurn::assistant(m.id.clone(), m.content.clone()));
+                    }
+                }
+            }
+
+            // 4. Assemble context using ContextAssemblyEngine
+            let candidates = AssemblyCandidates {
+                core_instruction: Some(CoreInstruction {
+                    text: "You are LowCon, a private, deterministic assistant running on this device.".to_string(),
+                }),
+                current_user_message: Some(CurrentUserMessage::new(user_text.clone())),
+                pinned_facts: vec![],
+                task_state: None,
+                retrieved_memories: memory_excerpts,
+                conversation_turns,
+                summaries: vec![],
+            };
+
+            let assembly_engine = ContextAssemblyEngine::with_defaults(
+                Arc::new(ConservativeEstimator::new()),
+                crate::config::ChatTemplateType::ChatML,
+            );
+
+            let inspection_result = assembly_engine.assemble(candidates, app.settings.context_limit_override);
+            let (prompt_to_send, budget, sources) = match inspection_result {
+                Ok(insp) => {
+                    let b = TurnContextBudget::from_inspection(&insp);
+                    let sources = insp.ui_included_items();
+                    app.active_budget = b.clone();
+                    app.prompt_inspector = PromptInspectorState::from_inspection(&insp);
+                    (insp.exact_rendered_prompt, Some(b), sources)
+                }
+                Err(err) => {
+                    let fallback_prompt = format!("<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", user_text);
+                    (fallback_prompt, Some(app.active_budget.clone()), vec![format!("Budget Error: {}", err)])
+                }
+            };
+
+            // 5. Append initial empty assistant message in state
+            let assistant_msg_id = format!("msg_{}", uuid::Uuid::new_v4());
             session.messages.push(ChatMessage {
-                id: format!("msg_{}", session.messages.len() + 1),
+                id: assistant_msg_id,
                 role: MessageRole::Assistant,
                 author_name: "LowCon".into(),
-                time_str: "Just now".into(),
+                time_str: "Now".into(),
                 model_info: Some(format!("{}, on this device", active_model_name)),
-                content: format!(
-                    "Understood. Your request ('{}') has been processed within the local context budget.\n\nAll constraints and active task rules remain preserved.",
-                    user_text
-                ),
+                content: String::new(),
                 aside: Some("Context budget verified before generation. Zero tokens clipped.".into()),
-                sources: vec!["Active task state".into()],
-                turn_budget: Some(app.active_budget.clone()),
+                sources,
+                turn_budget: budget,
             });
+
+            // 6. Start real streaming on inference worker
+            let gen_config = GenerationConfig {
+                max_tokens: 1024,
+                temperature: 0.7,
+                top_p: 0.9,
+                stop_sequences: vec!["<|im_end|>".into(), "<|endoftext|>".into(), "</s>".into()],
+                presence_penalty: 0.0,
+                frequency_penalty: 0.0,
+            };
+
+            match app.worker_handle.start_generation(prompt_to_send, gen_config) {
+                Ok(rx) => {
+                    app.worker_handle.set_active_receiver(rx);
+                    app.is_generating = true;
+                }
+                Err(e) => {
+                    if let Some(last_msg) = session.messages.last_mut() {
+                        last_msg.content = format!("[Inference Error: {}]", e);
+                    }
+                }
+            }
         }
     }
 
     if action_resp.stop_generation {
+        app.worker_handle.cancel_generation();
         app.is_generating = false;
     }
 
     if action_resp.new_session_requested {
+        let now = current_unix_timestamp();
         let new_id = format!("sess_{:02}", app.sessions.len() + 1);
+        let new_session_record = SessionRecord {
+            id: new_id.clone(),
+            title: "New chat session".into(),
+            created_at: now,
+            updated_at: now,
+            pinned_facts: None,
+            task_state: None,
+        };
+        let _ = app.db.create_session(&new_session_record);
+
         app.sessions.push(Session {
             id: new_id.clone(),
             title: "New chat session".into(),
@@ -417,19 +626,125 @@ fn handle_chat_actions(
     }
 
     if let Some(note_content) = action_resp.save_as_note {
-        app.memory_notes.push(MemoryNote {
-            id: format!("note_{}", app.memory_notes.len() + 1),
-            title: "Saved from Chat".into(),
-            excerpt: if note_content.len() > 80 {
-                format!("{}...", &note_content[..77])
-            } else {
-                note_content
-            },
-            source_reference: format!("Session {}", active_session_id),
-            is_pinned: false,
-            is_auto_extracted: false,
-            is_in_active_prompt: false,
-            created_at: "Just now".into(),
-        });
+        let new_note = crate::memory::MemoryNote::new_manual(
+            if note_content.len() > 60 { format!("{}...", &note_content[..57]) } else { "Saved from Chat".into() },
+            note_content,
+            Some(active_session_id),
+            false,
+        );
+        let _ = app.memory_engine.create_note(&new_note);
+        app.memory_notes = load_ui_memory_notes(&app.memory_engine, None);
+    }
+}
+
+fn handle_memory_action(app: &mut LowConApp, action: MemoryAction) {
+    match action {
+        MemoryAction::Create { title, content, is_pinned } => {
+            let note = crate::memory::MemoryNote::new_manual(title, content, None, is_pinned);
+            let _ = app.memory_engine.create_note(&note);
+        }
+        MemoryAction::Update(ui_note) => {
+            if let Ok(Some(mut existing)) = app.memory_engine.get_note(&ui_note.id) {
+                existing.title = ui_note.title;
+                existing.content = ui_note.excerpt;
+                existing.is_pinned = ui_note.is_pinned;
+                let _ = app.memory_engine.update_note(&existing);
+            }
+        }
+        MemoryAction::Delete(id) => {
+            let _ = app.memory_engine.hard_delete_note(&id);
+        }
+        MemoryAction::TogglePin(id) => {
+            if let Ok(Some(existing)) = app.memory_engine.get_note(&id) {
+                let _ = app.memory_engine.set_pinned(&id, !existing.is_pinned);
+            }
+        }
+    }
+
+    app.memory_notes = load_ui_memory_notes(&app.memory_engine, None);
+}
+
+fn handle_settings_action(app: &mut LowConApp, action: crate::ui::settings_view::SettingsActionResponse) {
+    if action.test_connection {
+        let endpoint = app.settings.lm_studio_endpoint.clone();
+        match LmStudioBackend::fetch_models(&endpoint) {
+            Ok(models) => {
+                app.settings.connected_lm_models = models.clone();
+                app.settings.connection_status = format!("✓ Connected: {} models available", models.len());
+                if !models.is_empty() && app.settings.selected_lm_model.is_empty() {
+                    app.settings.selected_lm_model = models[0].clone();
+                }
+            }
+            Err(e) => {
+                app.settings.connection_status = format!("✕ Connection failed: {}", e);
+            }
+        }
+    }
+
+    if let Some(backend_type) = action.switch_backend {
+        app.settings.active_backend_type = backend_type;
+        match backend_type {
+            BackendType::LMStudio => {
+                let _ = app.worker_handle.switch_to_lm_studio(&app.settings.lm_studio_endpoint);
+            }
+            BackendType::NativeGGUF => {
+                // In-process native adapter
+            }
+            BackendType::Mock => {
+                let _ = app.worker_handle.switch_to_mock();
+            }
+        }
+    }
+}
+
+fn load_ui_memory_notes(engine: &MemoryEngine, session_id: Option<&str>) -> Vec<MemoryNote> {
+    let options = RetrievalOptions {
+        query: None,
+        session_id: session_id.map(|s| s.to_string()),
+        limit: 50,
+        include_disabled: true,
+        require_approved: false,
+        pinned_only: false,
+        summaries_only: false,
+        weights: crate::memory::ScoringWeights::default(),
+    };
+
+    let domain_notes = engine.list_notes(&options).unwrap_or_default();
+    domain_notes
+        .into_iter()
+        .map(|n| {
+            let is_summary = n.is_summary();
+            MemoryNote {
+                id: n.id.clone(),
+                title: n.title,
+                excerpt: n.content,
+                source_reference: n.source_reference.unwrap_or_else(|| "Local memory".into()),
+                is_pinned: n.is_pinned,
+                is_auto_extracted: is_summary,
+                is_in_active_prompt: n.is_pinned,
+                created_at: format_unix_timestamp(n.created_at),
+            }
+        })
+        .collect()
+}
+
+fn current_unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+fn format_unix_timestamp(ts: i64) -> String {
+    let now = current_unix_timestamp();
+    let diff = now.saturating_sub(ts);
+    if diff < 60 {
+        "Just now".into()
+    } else if diff < 3600 {
+        format!("{}m ago", diff / 60)
+    } else if diff < 86400 {
+        format!("{}h ago", diff / 3600)
+    } else {
+        format!("{}d ago", diff / 86400)
     }
 }

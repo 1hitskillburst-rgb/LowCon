@@ -2,6 +2,23 @@ use egui::Color32;
 use crate::ui::theme::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendType {
+    LMStudio,
+    NativeGGUF,
+    Mock,
+}
+
+impl BackendType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            BackendType::LMStudio => "LM Studio (127.0.0.1:1234)",
+            BackendType::NativeGGUF => "Native GGUF (In-Process)",
+            BackendType::Mock => "Offline Mock",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavigationTab {
     Chat,
     Models,
@@ -164,6 +181,70 @@ impl TurnContextBudget {
             (self.packed_tokens() as f32 / self.total_limit as f32) * 100.0
         }
     }
+
+    pub fn from_inspection(inspection: &crate::context::PromptInspection) -> Self {
+        let total_limit = inspection.budget_partition.model_limit;
+        let mut segments = Vec::new();
+
+        for s in &inspection.sections {
+            let (key, color) = match s.name.as_str() {
+                "Core System Instructions" => (ContextSegmentKey::Core, COLOR_SEG_CORE),
+                "Active Task State" => (ContextSegmentKey::Task, COLOR_SEG_TASK),
+                "Retrieved Memory Notes" => (ContextSegmentKey::Mem, COLOR_SEG_MEM),
+                "Conversation Turns" => (ContextSegmentKey::Recent, COLOR_SEG_RECENT),
+                "Chat Template Overhead" => (ContextSegmentKey::Tpl, COLOR_SEG_TPL),
+                _ => (ContextSegmentKey::Core, COLOR_SEG_CORE),
+            };
+
+            segments.push(ContextSegment {
+                key,
+                name: s.name.clone(),
+                description: s.description.clone(),
+                tokens: s.tokens,
+                color,
+                is_held: false,
+                is_free: false,
+            });
+        }
+
+        // Free segment
+        segments.push(ContextSegment {
+            key: ContextSegmentKey::Free,
+            name: "Free".into(),
+            description: "Room for more".into(),
+            tokens: inspection.remaining_capacity,
+            color: COLOR_SEG_FREE,
+            is_held: false,
+            is_free: true,
+        });
+
+        // Reply space
+        segments.push(ContextSegment {
+            key: ContextSegmentKey::Out,
+            name: "Reply space".into(),
+            description: "Reserved for the answer".into(),
+            tokens: inspection.budget_partition.output_reserve,
+            color: COLOR_SEG_HOLD,
+            is_held: true,
+            is_free: false,
+        });
+
+        // Safety margin
+        segments.push(ContextSegment {
+            key: ContextSegmentKey::Safe,
+            name: "Safety margin".into(),
+            description: "Buffer against overflow".into(),
+            tokens: inspection.budget_partition.safety_margin,
+            color: COLOR_SEG_HOLD,
+            is_held: true,
+            is_free: false,
+        });
+
+        Self {
+            total_limit,
+            segments,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -241,6 +322,21 @@ impl Default for PromptInspectorState {
     }
 }
 
+impl PromptInspectorState {
+    pub fn from_inspection(inspection: &crate::context::PromptInspection) -> Self {
+        Self {
+            is_open: false,
+            exact_prompt: inspection.exact_rendered_prompt.clone(),
+            sections: inspection.ui_sections(),
+            included_items: inspection.ui_included_items(),
+            excluded_candidates: inspection.ui_excluded_candidates(),
+            output_reserve: inspection.budget_partition.output_reserve,
+            safety_margin: inspection.budget_partition.safety_margin,
+            remaining_capacity: inspection.remaining_capacity,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppSettings {
     pub output_reserve_pct: f32,
@@ -251,6 +347,11 @@ pub struct AppSettings {
     pub is_vault_locked: bool,
     pub vault_passphrase: String,
     pub diagnostic_logs_enabled: bool,
+    pub lm_studio_endpoint: String,
+    pub active_backend_type: BackendType,
+    pub connected_lm_models: Vec<String>,
+    pub selected_lm_model: String,
+    pub connection_status: String,
 }
 
 impl Default for AppSettings {
@@ -264,6 +365,11 @@ impl Default for AppSettings {
             is_vault_locked: false,
             vault_passphrase: String::new(),
             diagnostic_logs_enabled: false,
+            lm_studio_endpoint: "http://127.0.0.1:1234/v1".into(),
+            active_backend_type: BackendType::LMStudio,
+            connected_lm_models: Vec::new(),
+            selected_lm_model: String::new(),
+            connection_status: "Not tested yet".into(),
         }
     }
 }

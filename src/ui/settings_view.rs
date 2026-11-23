@@ -1,9 +1,15 @@
 use egui::{
-    Align, Layout, Rounding, Stroke, Ui,
+    Align, Color32, Layout, Rounding, Stroke, Ui,
 };
-use crate::app::state::AppSettings;
+use crate::app::state::{AppSettings, BackendType};
 use crate::ui::components::{local_dot, toggle_switch};
 use crate::ui::theme::*;
+
+#[derive(Default)]
+pub struct SettingsActionResponse {
+    pub switch_backend: Option<BackendType>,
+    pub test_connection: bool,
+}
 
 pub struct SettingsViewState {
     pub new_passphrase_input: String,
@@ -24,7 +30,9 @@ pub fn render_settings_view(
     ui: &mut Ui,
     settings: &mut AppSettings,
     view_state: &mut SettingsViewState,
-) {
+) -> SettingsActionResponse {
+    let mut action_resp = SettingsActionResponse::default();
+
     ui.vertical(|ui| {
         // Top Header Bar
         egui::Frame::none()
@@ -87,6 +95,85 @@ pub fn render_settings_view(
                     });
 
                     ui.add_space(20.0);
+
+                    // Dedicated LM Studio / Local Inference Server Card
+                    render_section_card(ui, "LOCAL INFERENCE BACKEND & LM STUDIO", |ui| {
+                        ui.label(
+                            egui::RichText::new("Connect LowCon directly to LM Studio, Ollama, or run in-process GGUF. Only local loopback connections are allowed.")
+                                .size(12.5)
+                                .color(COLOR_INK2),
+                        );
+
+                        ui.add_space(10.0);
+
+                        // Backend Type Selection
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Active Backend:").strong().size(12.5).color(COLOR_INK));
+                            if ui.radio_value(&mut settings.active_backend_type, BackendType::LMStudio, "LM Studio / OpenAI API").clicked() {
+                                action_resp.switch_backend = Some(BackendType::LMStudio);
+                            }
+                            if ui.radio_value(&mut settings.active_backend_type, BackendType::NativeGGUF, "Native GGUF").clicked() {
+                                action_resp.switch_backend = Some(BackendType::NativeGGUF);
+                            }
+                            if ui.radio_value(&mut settings.active_backend_type, BackendType::Mock, "Offline Mock").clicked() {
+                                action_resp.switch_backend = Some(BackendType::Mock);
+                            }
+                        });
+
+                        ui.add_space(12.0);
+
+                        // Endpoint configuration
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Local Server Endpoint:").strong().size(12.5).color(COLOR_INK));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut settings.lm_studio_endpoint)
+                                    .hint_text("http://127.0.0.1:1234/v1")
+                                    .desired_width(280.0)
+                            );
+
+                            if ui.button(egui::RichText::new("Test Connection & Fetch Models").strong()).clicked() {
+                                action_resp.test_connection = true;
+                            }
+                        });
+
+                        ui.add_space(8.0);
+
+                        // Connection Status message
+                        let status_color = if settings.connection_status.starts_with("✓") {
+                            COLOR_GREEN
+                        } else if settings.connection_status.starts_with("✕") {
+                            Color32::from_rgb(0xD9, 0x38, 0x3A)
+                        } else {
+                            COLOR_MUTE
+                        };
+
+                        ui.label(
+                            egui::RichText::new(&settings.connection_status)
+                                .size(12.0)
+                                .color(status_color),
+                        );
+
+                        // Model selection dropdown
+                        if !settings.connected_lm_models.is_empty() {
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Selected Model:").strong().size(12.5).color(COLOR_INK));
+                                egui::ComboBox::from_id_salt("lm_studio_model_picker")
+                                    .selected_text(if settings.selected_lm_model.is_empty() {
+                                        "Select Model".to_string()
+                                    } else {
+                                        settings.selected_lm_model.clone()
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        for model in &settings.connected_lm_models {
+                                            ui.selectable_value(&mut settings.selected_lm_model, model.clone(), model);
+                                        }
+                                    });
+                            });
+                        }
+                    });
+
+                    ui.add_space(16.0);
 
                     // Section 1: Context Budget Allocation & Overrides
                     render_section_card(ui, "CONTEXT BUDGET ALLOCATION", |ui| {
@@ -202,7 +289,7 @@ pub fn render_settings_view(
                                     egui::RichText::new("🔒 Locked")
                                         .strong()
                                         .size(12.5)
-                                        .color(egui::Color32::from_rgb(0xD9, 0x38, 0x3A)),
+                                        .color(Color32::from_rgb(0xD9, 0x38, 0x3A)),
                                 );
                             } else {
                                 ui.label(
@@ -310,6 +397,8 @@ pub fn render_settings_view(
                 });
             });
     });
+
+    action_resp
 }
 
 fn render_section_card<R>(

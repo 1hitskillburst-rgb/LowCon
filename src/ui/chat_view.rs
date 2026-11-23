@@ -31,6 +31,7 @@ pub fn render_chat_view(
     session: &mut Session,
     models: &[ModelProfile],
     active_model_id: &mut String,
+    backend_label: &str,
     composer_text: &mut String,
     memory_retrieval_enabled: &mut bool,
     is_generating: bool,
@@ -81,7 +82,27 @@ pub fn render_chat_view(
                                 }
                             });
 
-                        ui.add_space(16.0);
+                        ui.add_space(14.0);
+
+                        // Active backend pill
+                        egui::Frame::none()
+                            .fill(COLOR_PANEL)
+                            .stroke(Stroke::new(1.0_f32, COLOR_LINE))
+                            .rounding(Rounding::same(6.0))
+                            .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    local_dot(ui);
+                                    ui.label(
+                                        egui::RichText::new(backend_label)
+                                            .strong()
+                                            .size(11.5)
+                                            .color(COLOR_INK2),
+                                    );
+                                });
+                            });
+
+                        ui.add_space(14.0);
 
                         // Local only status indicator
                         ui.horizontal(|ui| {
@@ -342,13 +363,22 @@ fn render_chat_message(
                         bottom: 4.0,
                     })
                     .show(ui, |ui| {
-                        for paragraph in msg.content.split("\n\n") {
+                        if msg.content.is_empty() {
                             ui.label(
-                                egui::RichText::new(paragraph)
-                                    .size(15.5)
-                                    .color(Color32::from_rgb(0x1D, 0x23, 0x30)),
+                                egui::RichText::new("Thinking / streaming response...")
+                                    .italics()
+                                    .size(14.0)
+                                    .color(COLOR_MUTE),
                             );
-                            ui.add_space(6.0);
+                        } else {
+                            for paragraph in msg.content.split("\n\n") {
+                                ui.label(
+                                    egui::RichText::new(paragraph)
+                                        .size(15.5)
+                                        .color(Color32::from_rgb(0x1D, 0x23, 0x30)),
+                                );
+                                ui.add_space(6.0);
+                            }
                         }
 
                         // Aside callout note if present
