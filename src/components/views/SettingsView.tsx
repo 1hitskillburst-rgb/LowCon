@@ -1,8 +1,16 @@
-import React, { useState } from 'react';
-import { Lock, Palette, RefreshCw, ShieldCheck, Sparkles, Terminal, Trash2 } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ChevronDown, Lock, Palette, RefreshCw, ShieldCheck, Sparkles, Terminal, Trash2 } from 'lucide-react';
 import { calculateBudgetPartition } from '../../core/context';
-import { formatCleanModelName, resolveModelDisplayName } from '../../core/modelNames';
+import {
+  detectModelOrigin,
+  formatCleanModelName,
+  MODEL_ICON_OPTIONS,
+  resolveModelDisplayName,
+  resolveModelOrigin,
+  type ModelOrigin,
+} from '../../core/modelNames';
 import { formatNumber } from '../../core/privacy';
+import { ModelOriginIcon } from '../chat/ModelOriginIcon';
 import { DEFAULT_PROMPT_EFFORT_PROMPTS } from '../../core/storage';
 import { createDefaultTheme, THEME_PRESETS } from '../../core/theme';
 import {
@@ -63,6 +71,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [vaultConfirm, setVaultConfirm] = useState('');
   const [vaultError, setVaultError] = useState<string | null>(null);
   const [isSealing, setIsSealing] = useState(false);
+  const [showIconMenu, setShowIconMenu] = useState(false);
+  const iconMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!showIconMenu) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (iconMenuRef.current && !iconMenuRef.current.contains(e.target as Node)) {
+        setShowIconMenu(false);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowIconMenu(false);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [showIconMenu]);
 
   const currentTheme: ThemeSettings = settings.theme ?? createDefaultTheme();
   const effectivePreviewLimit = getEffectiveContextLimit(
@@ -386,50 +414,177 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </select>
                   </div>
 
-                  {settings.selectedLmModel && (
-                    <div>
-                      <label
-                        htmlFor="lm-model-alias-input"
-                        className="block text-[12px] font-semibold text-[var(--lc-surf-ink2)]"
-                      >
-                        Display Name in LowCon (optional override for{' '}
-                        <code className="font-mono text-[11px]">{settings.selectedLmModel}</code>)
-                      </label>
-                      <div className="mt-1 flex flex-wrap gap-2">
-                        <input
-                          id="lm-model-alias-input"
-                          data-testid="lm-model-alias-input"
-                          type="text"
-                          value={settings.modelDisplayAliases?.[settings.selectedLmModel] ?? ''}
-                          placeholder={formatCleanModelName(settings.selectedLmModel)}
-                          onChange={(e) => {
-                            const nextAliases = { ...(settings.modelDisplayAliases ?? {}) };
-                            const val = e.target.value;
-                            if (val.trim()) {
-                              nextAliases[settings.selectedLmModel] = val;
-                            } else {
-                              delete nextAliases[settings.selectedLmModel];
-                            }
-                            onUpdateSettings({ modelDisplayAliases: nextAliases });
-                          }}
-                          className="min-w-[220px] flex-1 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[13px] text-[var(--lc-surf-ink)] placeholder:text-[var(--lc-surf-mute)] focus:border-[var(--lc-accent)] focus:outline-none"
-                        />
-                        {settings.modelDisplayAliases?.[settings.selectedLmModel] && (
-                          <button
-                            type="button"
-                            onClick={() => {
+                  {settings.selectedLmModel && (() => {
+                    const selectedId = settings.selectedLmModel;
+                    const autoOrigin = detectModelOrigin({
+                      modelId: selectedId,
+                      backendType: 'lm_studio',
+                    });
+                    const activeOrigin = resolveModelOrigin(
+                      { modelId: selectedId, backendType: 'lm_studio' },
+                      settings.modelIconOverrides,
+                    );
+                    const hasCustomIcon = Boolean(settings.modelIconOverrides?.[selectedId]);
+                    const activeOptionLabel =
+                      MODEL_ICON_OPTIONS.find((o) => o.id === activeOrigin)?.label ?? 'Auto';
+                    const genericOptions = MODEL_ICON_OPTIONS.filter((o) => o.group === 'generic');
+                    const providerOptions = MODEL_ICON_OPTIONS.filter((o) => o.group === 'provider');
+
+                    const setIconOverride = (nextOrigin: ModelOrigin | null) => {
+                      const nextOverrides = { ...(settings.modelIconOverrides ?? {}) };
+                      if (nextOrigin) {
+                        nextOverrides[selectedId] = nextOrigin;
+                      } else {
+                        delete nextOverrides[selectedId];
+                      }
+                      onUpdateSettings({ modelIconOverrides: nextOverrides });
+                      setShowIconMenu(false);
+                    };
+
+                    return (
+                      <div>
+                        <label
+                          htmlFor="lm-model-alias-input"
+                          className="block text-[12px] font-semibold text-[var(--lc-surf-ink2)]"
+                        >
+                          Display Name &amp; Icon in LowCon (optional override for{' '}
+                          <code className="font-mono text-[11px]">{selectedId}</code>)
+                        </label>
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          {/* Compact Icon Selector to the left of Display Name */}
+                          <div ref={iconMenuRef} className="relative">
+                            <button
+                              type="button"
+                              data-testid="lm-model-icon-trigger"
+                              aria-label="Choose model icon"
+                              aria-expanded={showIconMenu}
+                              onClick={() => setShowIconMenu((prev) => !prev)}
+                              title={`Icon: ${hasCustomIcon ? activeOptionLabel : `Auto (${activeOptionLabel})`}`}
+                              className="inline-flex h-[34px] items-center gap-1.5 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 text-[12px] font-medium text-[var(--lc-surf-ink)] hover:bg-[var(--lc-surf-hover)] focus:border-[var(--lc-accent)] focus:outline-none"
+                            >
+                              <ModelOriginIcon origin={activeOrigin} size={15} />
+                              <span className="text-[11.5px] text-[var(--lc-surf-ink2)]">
+                                {hasCustomIcon ? activeOptionLabel : 'Auto'}
+                              </span>
+                              <ChevronDown className="h-3 w-3 text-[var(--lc-surf-mute)]" />
+                            </button>
+
+                            {showIconMenu && (
+                              <div
+                                role="menu"
+                                data-testid="lm-model-icon-menu"
+                                className="absolute top-full left-0 z-40 mt-1.5 w-[276px] rounded-[10px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] p-2 text-[var(--lc-surf-ink)] shadow-xl"
+                              >
+                                <button
+                                  type="button"
+                                  data-testid="lm-model-icon-option-auto"
+                                  onClick={() => setIconOverride(null)}
+                                  className={`flex w-full items-center justify-between rounded-[6px] px-2.5 py-1.5 text-left text-[12px] transition-colors ${
+                                    !hasCustomIcon
+                                      ? 'bg-[var(--lc-accent)]/12 font-semibold text-[var(--lc-accent)]'
+                                      : 'text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]'
+                                  }`}
+                                >
+                                  <span className="flex items-center gap-2">
+                                    <ModelOriginIcon origin={autoOrigin} size={14} />
+                                    <span>Auto (from base model)</span>
+                                  </span>
+                                  {!hasCustomIcon && <span className="text-[10.5px]">Active</span>}
+                                </button>
+
+                                <div className="mt-2 px-1.5 pb-1 text-[10.5px] font-semibold tracking-wide text-[var(--lc-surf-mute)] uppercase">
+                                  Generic AI
+                                </div>
+                                <div className="grid grid-cols-3 gap-1">
+                                  {genericOptions.map((opt) => {
+                                    const selected = hasCustomIcon && activeOrigin === opt.id;
+                                    return (
+                                      <button
+                                        key={opt.id}
+                                        type="button"
+                                        data-testid={`lm-model-icon-option-${opt.id}`}
+                                        onClick={() => setIconOverride(opt.id)}
+                                        className={`flex items-center gap-1.5 rounded-[6px] border px-2 py-1.5 text-[11.5px] transition-colors ${
+                                          selected
+                                            ? 'border-[var(--lc-accent)] bg-[var(--lc-accent)]/12 font-semibold text-[var(--lc-surf-ink)]'
+                                            : 'border-transparent text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]'
+                                        }`}
+                                      >
+                                        <ModelOriginIcon origin={opt.id} size={14} />
+                                        <span className="truncate">{opt.label}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+
+                                <div className="mt-2 px-1.5 pb-1 text-[10.5px] font-semibold tracking-wide text-[var(--lc-surf-mute)] uppercase">
+                                  Models &amp; Providers
+                                </div>
+                                <div className="grid grid-cols-3 gap-1">
+                                  {providerOptions.map((opt) => {
+                                    const selected = hasCustomIcon && activeOrigin === opt.id;
+                                    return (
+                                      <button
+                                        key={opt.id}
+                                        type="button"
+                                        data-testid={`lm-model-icon-option-${opt.id}`}
+                                        onClick={() => setIconOverride(opt.id)}
+                                        className={`flex items-center gap-1.5 rounded-[6px] border px-2 py-1.5 text-[11.5px] transition-colors ${
+                                          selected
+                                            ? 'border-[var(--lc-accent)] bg-[var(--lc-accent)]/12 font-semibold text-[var(--lc-surf-ink)]'
+                                            : 'border-transparent text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]'
+                                        }`}
+                                      >
+                                        <ModelOriginIcon origin={opt.id} size={14} />
+                                        <span className="truncate">{opt.label}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          <input
+                            id="lm-model-alias-input"
+                            data-testid="lm-model-alias-input"
+                            type="text"
+                            value={settings.modelDisplayAliases?.[selectedId] ?? ''}
+                            placeholder={formatCleanModelName(selectedId)}
+                            onChange={(e) => {
                               const nextAliases = { ...(settings.modelDisplayAliases ?? {}) };
-                              delete nextAliases[settings.selectedLmModel];
+                              const val = e.target.value;
+                              if (val.trim()) {
+                                nextAliases[selectedId] = val;
+                              } else {
+                                delete nextAliases[selectedId];
+                              }
                               onUpdateSettings({ modelDisplayAliases: nextAliases });
                             }}
-                            className="rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[12px] font-medium text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]"
-                          >
-                            Reset to Auto
-                          </button>
-                        )}
+                            className="min-w-[200px] flex-1 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[13px] text-[var(--lc-surf-ink)] placeholder:text-[var(--lc-surf-mute)] focus:border-[var(--lc-accent)] focus:outline-none"
+                          />
+                          {(settings.modelDisplayAliases?.[selectedId] || hasCustomIcon) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextAliases = { ...(settings.modelDisplayAliases ?? {}) };
+                                const nextIcons = { ...(settings.modelIconOverrides ?? {}) };
+                                delete nextAliases[selectedId];
+                                delete nextIcons[selectedId];
+                                onUpdateSettings({
+                                  modelDisplayAliases: nextAliases,
+                                  modelIconOverrides: nextIcons,
+                                });
+                              }}
+                              className="rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[12px] font-medium text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]"
+                            >
+                              Reset to Auto
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
               )}
             </div>

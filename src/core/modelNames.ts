@@ -10,7 +10,30 @@ export type ModelOrigin =
   | 'microsoft'
   | 'anthropic'
   | 'inkling'
+  | 'generic_spark'
+  | 'generic_bot'
   | 'default';
+
+export const MODEL_ICON_OPTIONS: Array<{
+  id: ModelOrigin;
+  label: string;
+  group: 'generic' | 'provider';
+}> = [
+  { id: 'default', label: 'Chip', group: 'generic' },
+  { id: 'generic_spark', label: 'Spark', group: 'generic' },
+  { id: 'generic_bot', label: 'Bot', group: 'generic' },
+  { id: 'google', label: 'Google', group: 'provider' },
+  { id: 'qwen', label: 'Qwen', group: 'provider' },
+  { id: 'openai', label: 'ChatGPT', group: 'provider' },
+  { id: 'anthropic', label: 'Claude', group: 'provider' },
+  { id: 'meta', label: 'Meta', group: 'provider' },
+  { id: 'mistral', label: 'Mistral', group: 'provider' },
+  { id: 'deepseek', label: 'DeepSeek', group: 'provider' },
+  { id: 'microsoft', label: 'Phi / MS', group: 'provider' },
+  { id: 'inkling', label: 'Inkling', group: 'provider' },
+];
+
+const VALID_MODEL_ORIGINS = new Set<ModelOrigin>(MODEL_ICON_OPTIONS.map((opt) => opt.id));
 
 const EXACT_TOKEN_CASE: Record<string, string> = {
   gemma: 'Gemma',
@@ -233,4 +256,26 @@ export function detectModelOrigin(params: {
   }
 
   return 'default';
+}
+
+/**
+ * Resolves the active icon origin for a model, preferring any user-selected
+ * icon override and falling back to `detectModelOrigin`.
+ */
+export function resolveModelOrigin(
+  params: {
+    modelId?: string;
+    profileName?: string;
+    architecture?: string;
+    backendType?: BackendType;
+  },
+  iconOverrides?: Record<string, ModelOrigin>,
+): ModelOrigin {
+  if (params.modelId && iconOverrides) {
+    const override = iconOverrides[params.modelId];
+    if (override && VALID_MODEL_ORIGINS.has(override)) {
+      return override;
+    }
+  }
+  return detectModelOrigin(params);
 }

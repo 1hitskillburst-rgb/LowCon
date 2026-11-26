@@ -42,6 +42,7 @@ export function createDefaultSettings(): AppSettings {
     connectedLmModels: [],
     selectedLmModel: '',
     modelDisplayAliases: {},
+    modelIconOverrides: {},
     connectionStatus: 'Not tested yet',
     storageNamespace: 'localStorage://lowcon.workspace.v1 (Encrypted on Vault Lock)',
     theme: createDefaultTheme(),
@@ -204,6 +205,9 @@ export function loadUnsealedWorkspace(logger: DiagnosticLogger): {
           modelDisplayAliases: {
             ...(parsed.settings?.modelDisplayAliases ?? {}),
           },
+          modelIconOverrides: {
+            ...(parsed.settings?.modelIconOverrides ?? {}),
+          },
           theme: {
             ...createDefaultTheme(),
             ...(parsed.settings?.theme ?? {}),
@@ -287,6 +291,9 @@ export async function unsealWorkspaceVault(
         ...(rawWorkspace.settings ?? {}),
         modelDisplayAliases: {
           ...(rawWorkspace.settings?.modelDisplayAliases ?? {}),
+        },
+        modelIconOverrides: {
+          ...(rawWorkspace.settings?.modelIconOverrides ?? {}),
         },
         theme: {
           ...createDefaultTheme(),

@@ -1,3 +1,5 @@
+import type { ModelOrigin } from './modelNames';
+
 export type BackendType = 'mock' | 'lm_studio';
 
 export type NavigationTab = 'chat' | 'models' | 'memory' | 'settings';
@@ -222,6 +224,7 @@ export interface AppSettings {
   connectedLmModels: string[];
   selectedLmModel: string;
   modelDisplayAliases?: Record<string, string>;
+  modelIconOverrides?: Record<string, ModelOrigin>;
   connectionStatus: string;
   storageNamespace: string;
   theme?: ThemeSettings;

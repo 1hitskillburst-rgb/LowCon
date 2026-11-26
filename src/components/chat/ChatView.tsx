@@ -23,7 +23,12 @@ import {
 } from 'lucide-react';
 import { detectArtifactPreviewKind, type ArtifactPreviewKind } from '../../core/artifactPreview';
 import { getPackedTokens } from '../../core/context';
-import { detectModelOrigin, resolveModelDisplayName } from '../../core/modelNames';
+import {
+  detectModelOrigin,
+  resolveModelDisplayName,
+  resolveModelOrigin,
+  type ModelOrigin,
+} from '../../core/modelNames';
 import { formatNumber, formatRelativeTime } from '../../core/privacy';
 import { getTpsColorVar } from '../../core/theme';
 import { shouldIndexAttachedFile } from '../../core/tier1Tools';
@@ -128,6 +133,7 @@ interface ChatViewProps {
   connectedLmModels: string[];
   selectedLmModel: string;
   modelDisplayAliases?: Record<string, string>;
+  modelIconOverrides?: Record<string, ModelOrigin>;
   onSelectLmModel: (modelName: string) => void;
   effortLevel: EffortLevel;
   chatWidth?: ChatWidthPreset;
@@ -163,6 +169,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   connectedLmModels,
   selectedLmModel,
   modelDisplayAliases,
+  modelIconOverrides,
   onSelectLmModel,
   effortLevel,
   chatWidth = 'default',
@@ -261,12 +268,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
     activeModel?.backendType === 'lm_studio' && selectedLmModel
       ? resolveModelDisplayName(selectedLmModel, modelDisplayAliases)
       : activeModel?.name ?? 'Model';
-  const activeModelOrigin = detectModelOrigin({
-    modelId: activeModel?.backendType === 'lm_studio' ? selectedLmModel : undefined,
-    profileName: activeModel?.name,
-    architecture: activeModel?.architecture,
-    backendType: activeModel?.backendType,
-  });
+  const activeModelOrigin = resolveModelOrigin(
+    {
+      modelId: activeModel?.backendType === 'lm_studio' ? selectedLmModel : undefined,
+      profileName: activeModel?.name,
+      architecture: activeModel?.architecture,
+      backendType: activeModel?.backendType,
+    },
+    modelIconOverrides,
+  );
   const activeEffortLabel =
     EFFORT_OPTIONS.find((e) => e.id === effortLevel)?.label ?? 'Medium';
 
@@ -915,10 +925,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                 activeModel?.backendType === 'lm_studio' &&
                                 selectedLmModel === lmName;
                               const cleanLabel = resolveModelDisplayName(lmName, modelDisplayAliases);
-                              const lmOrigin = detectModelOrigin({
-                                modelId: lmName,
-                                backendType: 'lm_studio',
-                              });
+                              const lmOrigin = resolveModelOrigin(
+                                {
+                                  modelId: lmName,
+                                  backendType: 'lm_studio',
+                                },
+                                modelIconOverrides,
+                              );
                               return (
                                 <button
                                   key={lmName}

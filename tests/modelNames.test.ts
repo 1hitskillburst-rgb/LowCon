@@ -6,7 +6,9 @@ import { ModelOriginIcon } from '../src/components/chat/ModelOriginIcon';
 import {
   detectModelOrigin,
   formatCleanModelName,
+  MODEL_ICON_OPTIONS,
   resolveModelDisplayName,
+  resolveModelOrigin,
 } from '../src/core/modelNames';
 
 test('formatCleanModelName cleans publisher prefixes, noisy suffixes, and parameter tags', () => {
@@ -41,9 +43,35 @@ test('detectModelOrigin identifies base model family across fine-tunes, architec
   assert.equal(detectModelOrigin({ backendType: 'mock', architecture: 'qwen2' }), 'default');
 });
 
-test('ModelOriginIcon renders Google, Qwen, Inkling, and fallback icons cleanly', () => {
-  for (const origin of ['google', 'qwen', 'inkling', 'default'] as const) {
-    const html = renderToStaticMarkup(React.createElement(ModelOriginIcon, { origin, size: 14 }));
-    assert.ok(html.includes(`data-testid="model-origin-icon-${origin}"`));
+test('resolveModelOrigin honors custom overrides (generic, ChatGPT, Claude) and falls back to auto-detection', () => {
+  const overrides = {
+    'google/gemma-4-12b-qat': 'anthropic' as const,
+    'qwen/qwen2.5-7b-instruct': 'openai' as const,
+    'custom/local-model': 'generic_spark' as const,
+  };
+
+  assert.equal(
+    resolveModelOrigin({ modelId: 'google/gemma-4-12b-qat', backendType: 'lm_studio' }, overrides),
+    'anthropic',
+  );
+  assert.equal(
+    resolveModelOrigin({ modelId: 'qwen/qwen2.5-7b-instruct', backendType: 'lm_studio' }, overrides),
+    'openai',
+  );
+  assert.equal(
+    resolveModelOrigin({ modelId: 'custom/local-model', backendType: 'lm_studio' }, overrides),
+    'generic_spark',
+  );
+  assert.equal(
+    resolveModelOrigin({ modelId: 'google/gemma-4-e2b', backendType: 'lm_studio' }, overrides),
+    'google',
+  );
+});
+
+test('ModelOriginIcon renders all MODEL_ICON_OPTIONS including generic, ChatGPT, Claude, and Inkling', () => {
+  assert.ok(MODEL_ICON_OPTIONS.filter((o) => o.group === 'generic').length === 3);
+  for (const opt of MODEL_ICON_OPTIONS) {
+    const html = renderToStaticMarkup(React.createElement(ModelOriginIcon, { origin: opt.id, size: 14 }));
+    assert.ok(html.includes(`data-testid="model-origin-icon-${opt.id}"`));
   }
 });

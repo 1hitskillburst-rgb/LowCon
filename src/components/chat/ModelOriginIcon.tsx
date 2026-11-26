@@ -1,5 +1,5 @@
 import React from 'react';
-import { Cpu } from 'lucide-react';
+import { Bot, Cpu, Sparkles } from 'lucide-react';
 import type { ModelOrigin } from '../../core/modelNames';
 
 interface ModelOriginIconProps {
@@ -14,11 +14,13 @@ const ORIGIN_TITLES: Record<ModelOrigin, string> = {
   meta: 'Meta / Llama',
   mistral: 'Mistral',
   deepseek: 'DeepSeek',
-  openai: 'OpenAI',
+  openai: 'ChatGPT / OpenAI',
   microsoft: 'Microsoft / Phi',
-  anthropic: 'Anthropic',
+  anthropic: 'Claude / Anthropic',
   inkling: 'Thinking Machines / Inkling',
-  default: 'Local Model',
+  generic_spark: 'Generic AI Spark',
+  generic_bot: 'Generic AI Bot',
+  default: 'Generic Local Chip',
 };
 
 export const ModelOriginIcon: React.FC<ModelOriginIconProps> = ({
@@ -131,10 +133,10 @@ export const ModelOriginIcon: React.FC<ModelOriginIconProps> = ({
           <title>{title}</title>
           <path
             d="M12 2.8a4.5 4.5 0 0 1 4.1 2.6 4.5 4.5 0 0 1 4.4 5.8 4.5 4.5 0 0 1-1.9 5.5 4.5 4.5 0 0 1-5.8 4.2 4.5 4.5 0 0 1-5.8-1.6 4.5 4.5 0 0 1-4-6.1 4.5 4.5 0 0 1 2.2-5.4A4.5 4.5 0 0 1 12 2.8Z"
-            stroke="currentColor"
-            strokeWidth="1.9"
+            stroke="#10A37F"
+            strokeWidth="2"
           />
-          <circle cx="12" cy="12" r="2.6" stroke="currentColor" strokeWidth="1.8" />
+          <circle cx="12" cy="12" r="2.7" stroke="#10A37F" strokeWidth="1.9" />
         </svg>
       );
 
@@ -144,9 +146,9 @@ export const ModelOriginIcon: React.FC<ModelOriginIconProps> = ({
           <title>{title}</title>
           <path
             d="M14.2 4.5h2.6L21 19.5h-2.6l-1.1-4H13l-1.1 4H9.4l4.8-15Zm.9 3.7L13.6 13h3l-1.5-4.8Z"
-            fill="currentColor"
+            fill="#D97757"
           />
-          <path d="M7.6 4.5h2.5L6.2 19.5H3.6L7.6 4.5Z" fill="currentColor" />
+          <path d="M7.6 4.5h2.5L6.2 19.5H3.6L7.6 4.5Z" fill="#D97757" />
         </svg>
       );
 
@@ -164,6 +166,28 @@ export const ModelOriginIcon: React.FC<ModelOriginIconProps> = ({
             fillOpacity="0.88"
           />
         </svg>
+      );
+
+    case 'generic_spark':
+      return (
+        <Sparkles
+          size={size}
+          aria-hidden="true"
+          data-origin="generic_spark"
+          data-testid="model-origin-icon-generic_spark"
+          className={`shrink-0 text-[var(--lc-accent)] ${className}`.trim()}
+        />
+      );
+
+    case 'generic_bot':
+      return (
+        <Bot
+          size={size}
+          aria-hidden="true"
+          data-origin="generic_bot"
+          data-testid="model-origin-icon-generic_bot"
+          className={`shrink-0 text-[var(--lc-surf-ink2)] ${className}`.trim()}
+        />
       );
 
     case 'default':

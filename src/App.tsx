@@ -1651,6 +1651,7 @@ export const App: React.FC = () => {
                 connectedLmModels={workspace.settings.connectedLmModels}
                 selectedLmModel={workspace.settings.selectedLmModel}
                 modelDisplayAliases={workspace.settings.modelDisplayAliases}
+                modelIconOverrides={workspace.settings.modelIconOverrides}
                 onSelectLmModel={handleSelectLmModel}
                 effortLevel={workspace.settings.effortLevel}
                 chatWidth={workspace.settings.chatWidth ?? 'default'}
