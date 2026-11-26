@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { detectArtifactPreviewKind, type ArtifactPreviewKind } from '../../core/artifactPreview';
 import { getPackedTokens } from '../../core/context';
-import { resolveModelDisplayName } from '../../core/modelNames';
+import { detectModelOrigin, resolveModelDisplayName } from '../../core/modelNames';
 import { formatNumber, formatRelativeTime } from '../../core/privacy';
 import { getTpsColorVar } from '../../core/theme';
 import { shouldIndexAttachedFile } from '../../core/tier1Tools';
@@ -39,6 +39,7 @@ import type {
 } from '../../core/types';
 import { ContextStrip } from './ContextBudgetViz';
 import { MarkdownMessage } from './MarkdownMessage';
+import { ModelOriginIcon } from './ModelOriginIcon';
 
 const EFFORT_OPTIONS: Array<{ id: EffortLevel; label: string }> = [
   { id: 'low', label: 'Low' },
@@ -260,6 +261,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
     activeModel?.backendType === 'lm_studio' && selectedLmModel
       ? resolveModelDisplayName(selectedLmModel, modelDisplayAliases)
       : activeModel?.name ?? 'Model';
+  const activeModelOrigin = detectModelOrigin({
+    modelId: activeModel?.backendType === 'lm_studio' ? selectedLmModel : undefined,
+    profileName: activeModel?.name,
+    architecture: activeModel?.architecture,
+    backendType: activeModel?.backendType,
+  });
   const activeEffortLabel =
     EFFORT_OPTIONS.find((e) => e.id === effortLevel)?.label ?? 'Medium';
 
@@ -850,6 +857,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   onClick={() => setShowModelEffortMenu((prev) => !prev)}
                   className="inline-flex items-center gap-1.5 rounded-[6px] px-2 py-1 text-[12.5px] font-medium text-[var(--lc-surf-ink)] hover:bg-[var(--lc-surf-hover)]"
                 >
+                  <ModelOriginIcon origin={activeModelOrigin} size={14} />
                   <span className="max-w-[180px] truncate">{activeModelDisplayName}</span>
                   <span className="text-[var(--lc-surf-mute)]">{activeEffortLabel}</span>
                   <ChevronDown className="h-3 w-3 text-[var(--lc-surf-mute)]" />
@@ -869,6 +877,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       <div className="max-h-60 overflow-y-auto space-y-0.5">
                         {models.map((m) => {
                           const isSelected = m.id === activeModelId;
+                          const itemOrigin = detectModelOrigin({
+                            profileName: m.name,
+                            architecture: m.architecture,
+                            backendType: m.backendType,
+                          });
                           return (
                             <button
                               key={m.id}
@@ -883,7 +896,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                   : 'text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]/70 hover:text-[var(--lc-surf-ink)]'
                               }`}
                             >
-                              <span className="truncate">{m.name}</span>
+                              <span className="flex min-w-0 items-center gap-2">
+                                <ModelOriginIcon origin={itemOrigin} size={14} />
+                                <span className="truncate">{m.name}</span>
+                              </span>
                               {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--lc-accent)]" />}
                             </button>
                           );
@@ -899,6 +915,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                 activeModel?.backendType === 'lm_studio' &&
                                 selectedLmModel === lmName;
                               const cleanLabel = resolveModelDisplayName(lmName, modelDisplayAliases);
+                              const lmOrigin = detectModelOrigin({
+                                modelId: lmName,
+                                backendType: 'lm_studio',
+                              });
                               return (
                                 <button
                                   key={lmName}
@@ -914,14 +934,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                       : 'text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]/70 hover:text-[var(--lc-surf-ink)]'
                                   }`}
                                 >
-                                  <div className="min-w-0 flex-1">
-                                    <div className="truncate">{cleanLabel}</div>
-                                    {cleanLabel !== lmName && (
-                                      <div className="truncate font-mono text-[10.5px] text-[var(--lc-surf-mute)]">
-                                        {lmName}
-                                      </div>
-                                    )}
-                                  </div>
+                                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                                    <ModelOriginIcon origin={lmOrigin} size={14} />
+                                    <div className="min-w-0 flex-1">
+                                      <div className="truncate">{cleanLabel}</div>
+                                      {cleanLabel !== lmName && (
+                                        <div className="truncate font-mono text-[10.5px] text-[var(--lc-surf-mute)]">
+                                          {lmName}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </span>
                                   {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--lc-accent)]" />}
                                 </button>
                               );

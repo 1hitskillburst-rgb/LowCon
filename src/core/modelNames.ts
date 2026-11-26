@@ -1,3 +1,17 @@
+import type { BackendType } from './types';
+
+export type ModelOrigin =
+  | 'google'
+  | 'qwen'
+  | 'meta'
+  | 'mistral'
+  | 'deepseek'
+  | 'openai'
+  | 'microsoft'
+  | 'anthropic'
+  | 'inkling'
+  | 'default';
+
 const EXACT_TOKEN_CASE: Record<string, string> = {
   gemma: 'Gemma',
   qwen: 'Qwen',
@@ -121,4 +135,102 @@ export function resolveModelDisplayName(
   if (custom) return custom;
   const cleaned = formatCleanModelName(rawModelId);
   return cleaned || rawModelId;
+}
+
+function stripPublisherPrefix(raw: string): string {
+  const trimmed = raw.trim();
+  const slashIdx = trimmed.lastIndexOf('/');
+  return slashIdx !== -1 && slashIdx < trimmed.length - 1 ? trimmed.slice(slashIdx + 1) : trimmed;
+}
+
+function detectOriginFromText(text: string): ModelOrigin | null {
+  const lower = text.toLowerCase();
+  if (!lower) return null;
+
+  // Check underlying base model architecture/family first (handles fine-tunes & distills,
+  // e.g. `bartowski/DeepSeek-R1-Distill-Qwen-14B` -> `qwen`, `unsloth/gemma-4-e2b` -> `google`)
+  if (/\b(?:distill[-_ ]?qwen|qwen\d*|qwq)\b/i.test(lower) || /(?:^|[-_/])qwen/i.test(lower)) {
+    return 'qwen';
+  }
+  if (
+    /\b(?:distill[-_ ]?llama|codellama|meta[-_ ]?llama|llama\d*|hermes[-_ ]\d*[-_ ]?llama|tinyllama)\b/i.test(
+      lower,
+    ) ||
+    /(?:^|[-_/])llama/i.test(lower)
+  ) {
+    return 'meta';
+  }
+  if (/\b(?:gemma\d*|codegemma|paligemma|recurrentgemma)\b/i.test(lower) || /(?:^|[-_/])gemma/i.test(lower)) {
+    return 'google';
+  }
+  if (
+    /\b(?:mistral|mixtral|codestral|devstral|mathstral|pixtral|ministral)\b/i.test(lower)
+  ) {
+    return 'mistral';
+  }
+  if (/\bdeepseek\b/i.test(lower)) {
+    return 'deepseek';
+  }
+  if (/\bphi[-_ ]?\d/i.test(lower) || /(?:^|[-_/])phi\d/i.test(lower)) {
+    return 'microsoft';
+  }
+  if (/\binklings?\b/i.test(lower)) {
+    return 'inkling';
+  }
+  if (/\bgpt[-_ ]?(?:oss|\d|4o|3\.5)\b/i.test(lower)) {
+    return 'openai';
+  }
+  if (/\bclaude\b/i.test(lower)) {
+    return 'anthropic';
+  }
+
+  return null;
+}
+
+/**
+ * Determines the underlying origin/provider logo from what a model is built on
+ * (base model name, architecture metadata, or publisher prefix as fallback).
+ */
+export function detectModelOrigin(params: {
+  modelId?: string;
+  profileName?: string;
+  architecture?: string;
+  backendType?: BackendType;
+}): ModelOrigin {
+  if (params.backendType === 'mock') {
+    return 'default';
+  }
+
+  // 1. Base model leaf name (ignoring uploader org like `bartowski/` or `unsloth/`)
+  const leafId = params.modelId ? stripPublisherPrefix(params.modelId) : '';
+  const fromLeaf = detectOriginFromText(leafId);
+  if (fromLeaf) return fromLeaf;
+
+  // 2. Loaded GGUF/profile architecture field (e.g. `qwen2`, `gemma3`, `llama`, `mistral`)
+  if (params.architecture) {
+    const fromArch = detectOriginFromText(params.architecture);
+    if (fromArch) return fromArch;
+  }
+
+  // 3. Profile display name (skipping generic built-in placeholder names like `LM Studio · Local Server`)
+  if (params.profileName && !/local server|offline mock/i.test(params.profileName)) {
+    const fromProfile = detectOriginFromText(params.profileName);
+    if (fromProfile) return fromProfile;
+  }
+
+  // 4. Publisher prefix fallback (e.g. `google/...`, `thinking-machines/...`)
+  if (params.modelId && params.modelId.includes('/')) {
+    const org = params.modelId.slice(0, params.modelId.indexOf('/')).toLowerCase();
+    if (org === 'google') return 'google';
+    if (org === 'qwen') return 'qwen';
+    if (org === 'meta-llama' || org === 'meta') return 'meta';
+    if (org === 'mistralai' || org === 'mistral') return 'mistral';
+    if (org === 'deepseek-ai' || org === 'deepseek') return 'deepseek';
+    if (org === 'microsoft') return 'microsoft';
+    if (org === 'openai') return 'openai';
+    if (org === 'anthropic') return 'anthropic';
+    if (org.includes('thinking') || org.includes('inkling')) return 'inkling';
+  }
+
+  return 'default';
 }
