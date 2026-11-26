@@ -1,20 +1,31 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  AlertCircle,
+  BookmarkPlus,
+  BookOpen,
   Brain,
+  Calculator,
   Check,
   ChevronDown,
   ChevronRight,
   Code2,
   Copy,
   FileCode2,
+  FilePenLine,
   FileText,
+  Globe,
+  Image,
   Paperclip,
+  Search,
   Square,
+  Table2,
   X,
 } from 'lucide-react';
+import { detectArtifactPreviewKind, type ArtifactPreviewKind } from '../../core/artifactPreview';
 import { getPackedTokens } from '../../core/context';
 import { formatNumber, formatRelativeTime } from '../../core/privacy';
 import { getTpsColorVar } from '../../core/theme';
+import { shouldIndexAttachedFile } from '../../core/tier1Tools';
 import { countLines, getFileExtensionBadge } from '../../core/tools';
 import type {
   ChatWidthPreset,
@@ -41,6 +52,71 @@ const CHAT_WIDTH_CLASSES: Record<ChatWidthPreset, { outerPad: string; innerMax: 
   wide: { outerPad: 'px-6', innerMax: 'max-w-[1060px]' },
   fill: { outerPad: 'px-2.5', innerMax: 'max-w-none' },
 };
+
+const ARTIFACT_KIND_META: Record<
+  ArtifactPreviewKind,
+  { label: string; badge: string | null; icon: React.ReactNode }
+> = {
+  markdown: {
+    label: 'Markdown',
+    badge: 'Preview',
+    icon: <FileText className="h-4 w-4" />,
+  },
+  csv: {
+    label: 'Table',
+    badge: 'Preview',
+    icon: <Table2 className="h-4 w-4" />,
+  },
+  svg: {
+    label: 'SVG',
+    badge: 'Preview',
+    icon: <Image className="h-4 w-4" />,
+  },
+  html: {
+    label: 'HTML',
+    badge: 'Sandbox',
+    icon: <Globe className="h-4 w-4" />,
+  },
+  code: {
+    label: 'Code',
+    badge: null,
+    icon: <Code2 className="h-4 w-4" />,
+  },
+};
+
+function renderToolActivityBadge(label: string, idx: number): React.ReactNode {
+  const lower = label.toLowerCase();
+  let icon: React.ReactNode = <FileCode2 className="h-3 w-3 shrink-0" />;
+  let tone =
+    'border-[var(--lc-line)] bg-[var(--lc-panel)]/70 text-[var(--lc-mute)]';
+
+  if (lower.startsWith('failed ')) {
+    icon = <AlertCircle className="h-3 w-3 shrink-0" />;
+    tone = 'border-[var(--lc-danger)]/35 bg-[var(--lc-danger)]/8 text-[var(--lc-danger)]';
+  } else if (lower.startsWith('updated ') || lower.startsWith('editing ')) {
+    icon = <FilePenLine className="h-3 w-3 shrink-0 text-[var(--lc-accent)]" />;
+    tone = 'border-[var(--lc-accent)]/30 bg-[var(--lc-accent)]/8 text-[var(--lc-ink2)]';
+  } else if (lower.startsWith('calculated') || lower.startsWith('calculating')) {
+    icon = <Calculator className="h-3 w-3 shrink-0 text-[var(--lc-accent)]" />;
+  } else if (lower.startsWith('read ') || lower.startsWith('reading ')) {
+    icon = <BookOpen className="h-3 w-3 shrink-0 text-[var(--lc-accent)]" />;
+  } else if (lower.startsWith('searched memory') || lower.startsWith('searching ')) {
+    icon = <Search className="h-3 w-3 shrink-0 text-[var(--lc-accent)]" />;
+  } else if (lower.startsWith('saved note') || lower.startsWith('saving memory')) {
+    icon = <BookmarkPlus className="h-3 w-3 shrink-0 text-[var(--lc-success)]" />;
+    tone = 'border-[var(--lc-success)]/30 bg-[var(--lc-success)]/8 text-[var(--lc-success)]';
+  }
+
+  return (
+    <span
+      key={`${idx}-${label}`}
+      className={`inline-flex items-center gap-1 rounded-[5px] border px-2 py-0.5 text-[11.5px] font-medium ${tone}`}
+    >
+      {icon}
+      <span>{label}</span>
+    </span>
+  );
+}
 
 interface ChatViewProps {
   session: Session;
@@ -443,10 +519,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         {msg.toolActivity && msg.toolActivity.length > 0 && (
                           <div
                             data-testid={`tool-activity-${msg.id}`}
-                            className="flex flex-wrap items-center gap-1.5 text-[12.5px] text-[var(--lc-mute)]"
+                            className="flex flex-wrap items-center gap-1.5"
                           >
-                            <FileCode2 className="h-3.5 w-3.5 shrink-0" />
-                            <span>{msg.toolActivity.join(' · ')}</span>
+                            {msg.toolActivity.map((label, idx) =>
+                              renderToolActivityBadge(label, idx),
+                            )}
                           </div>
                         )}
 
@@ -528,13 +605,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
                               const isPreviewActive = activePreviewFileId === file.id;
                               const extBadge = getFileExtensionBadge(file.filename, file.language);
                               const lines = countLines(file.content);
+                              const previewKind = detectArtifactPreviewKind(
+                                file.filename,
+                                file.language,
+                              );
+                              const kindMeta = ARTIFACT_KIND_META[previewKind];
                               return (
                                 <button
                                   key={file.id}
                                   type="button"
                                   data-testid={`file-artifact-card-${file.id}`}
                                   onClick={() => onOpenFilePreview(file)}
-                                  className={`group flex w-full max-w-[360px] items-center justify-between gap-3 rounded-[10px] border px-3.5 py-2.5 text-left transition-colors ${
+                                  className={`group flex w-full max-w-[400px] items-center justify-between gap-3 rounded-[10px] border px-3.5 py-2.5 text-left transition-colors ${
                                     isPreviewActive
                                       ? 'border-[var(--lc-accent)] bg-[var(--lc-accent)]/8'
                                       : 'border-[var(--lc-surf-line)] bg-[var(--lc-surface)] hover:border-[var(--lc-accent)]/60 hover:bg-[var(--lc-surf-hover)]/60'
@@ -548,14 +630,33 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                           : 'border-[var(--lc-surf-line)] bg-[var(--lc-panel)] text-[var(--lc-surf-ink2)] group-hover:text-[var(--lc-surf-ink)]'
                                       }`}
                                     >
-                                      <Code2 className="h-4 w-4" />
+                                      {kindMeta.icon}
                                     </div>
                                     <div className="min-w-0">
-                                      <div className="truncate text-[13.5px] font-semibold text-[var(--lc-surf-ink)]">
-                                        {file.title}
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="truncate text-[13.5px] font-semibold text-[var(--lc-surf-ink)]">
+                                          {file.title}
+                                        </span>
+                                        {kindMeta.badge && (
+                                          <span
+                                            data-testid={`file-artifact-rich-badge-${file.id}`}
+                                            className="shrink-0 rounded-[4px] border border-[var(--lc-accent)]/30 bg-[var(--lc-accent)]/10 px-1.5 py-[1px] text-[10px] font-semibold text-[var(--lc-accent)]"
+                                          >
+                                            {kindMeta.badge}
+                                          </span>
+                                        )}
+                                        {file.isEdited && (
+                                          <span
+                                            data-testid={`file-artifact-edited-badge-${file.id}`}
+                                            className="shrink-0 rounded-[4px] border border-[var(--lc-success)]/35 bg-[var(--lc-success)]/10 px-1.5 py-[1px] text-[10px] font-semibold text-[var(--lc-success)]"
+                                          >
+                                            Edited
+                                          </span>
+                                        )}
                                       </div>
                                       <div className="truncate text-[12px] text-[var(--lc-surf-mute)]">
-                                        Code · {extBadge} · {lines} {lines === 1 ? 'line' : 'lines'}
+                                        {kindMeta.label} · {extBadge} · {lines}{' '}
+                                        {lines === 1 ? 'line' : 'lines'}
                                       </div>
                                     </div>
                                   </div>
@@ -652,16 +753,27 @@ export const ChatView: React.FC<ChatViewProps> = ({
           className={`mx-auto w-full ${widthLayout.innerMax} rounded-[12px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-4 py-3 text-[var(--lc-surf-ink)] shadow-xs focus-within:border-[var(--lc-accent)]`}
         >
           {attachedFile && (
-            <div className="mb-2 flex items-center justify-between rounded-[6px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-2.5 py-1 text-[12px] text-[var(--lc-side-ink)]">
-              <span className="truncate">
-                Attached local file: <strong>{attachedFile.name}</strong> (
-                {formatNumber(attachedFile.content.length)} chars)
+            <div className="mb-2 flex items-center justify-between gap-2 rounded-[6px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-2.5 py-1 text-[12px] text-[var(--lc-side-ink)]">
+              <span className="flex min-w-0 items-center gap-1.5 truncate">
+                <span className="truncate">
+                  Attached local file: <strong>{attachedFile.name}</strong> (
+                  {formatNumber(countLines(attachedFile.content))} lines ·{' '}
+                  {formatNumber(attachedFile.content.length)} chars)
+                </span>
+                {shouldIndexAttachedFile(attachedFile.content) && (
+                  <span
+                    data-testid="attached-file-indexed-badge"
+                    className="shrink-0 rounded-[4px] border border-[var(--lc-accent)]/30 bg-[var(--lc-accent)]/10 px-1.5 py-[1px] text-[10.5px] font-semibold text-[var(--lc-accent)]"
+                  >
+                    Indexed · chunked read
+                  </span>
+                )}
               </span>
               <button
                 type="button"
                 onClick={() => onAttachFile(null)}
                 aria-label="Remove attached file"
-                className="ml-2 text-[var(--lc-side-mute)] hover:text-[var(--lc-danger)]"
+                className="ml-2 shrink-0 text-[var(--lc-side-mute)] hover:text-[var(--lc-danger)]"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -692,7 +804,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".txt,.md,.json,.csv,.rs,.ts,.tsx,.js,.py"
+                accept=".txt,.md,.markdown,.log,.json,.csv,.tsv,.svg,.html,.htm,.yaml,.yml,.toml,.css,.sql,.sh,.rs,.ts,.tsx,.js,.jsx,.py,.go,.c,.cpp,.java"
                 onChange={(e) => void handleFileChange(e)}
                 className="hidden"
               />

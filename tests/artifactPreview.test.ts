@@ -13,8 +13,11 @@ import {
   sanitizeSvgForPreview,
   supportsRichPreview,
 } from '../src/core/artifactPreview';
+import { FilePreviewPanel } from '../src/components/chat/FilePreviewPanel';
 import { RichArtifactPreview } from '../src/components/chat/RichArtifactPreview';
-import type { GeneratedFileArtifact } from '../src/core/types';
+import { ChatView } from '../src/components/chat/ChatView';
+import { createDefaultModels } from '../src/core/storage';
+import type { GeneratedFileArtifact, Session } from '../src/core/types';
 
 test('detectArtifactPreviewKind and supportsRichPreview classify extensions and fallback languages', () => {
   assert.equal(detectArtifactPreviewKind('README.md'), 'markdown');
@@ -254,4 +257,154 @@ test('RichArtifactPreview renders markdown, csv, sanitized svg, and sandboxed ht
   assert.ok(htmlView.includes('sandbox="allow-scripts"'));
   assert.ok(htmlView.includes('title="Interactive Widget"'));
   assert.ok(htmlView.includes('Content-Security-Policy'));
+});
+
+test('FilePreviewPanel defaults rich formats to Preview mode with 1-click Code toggle and renders code-only files directly', () => {
+  const mdFile: GeneratedFileArtifact = {
+    id: 'fp_md',
+    filename: 'notes.md',
+    title: 'Notes',
+    language: 'markdown',
+    content: '# Release Notes\n\n- Ready',
+    createdAt: 1700000000000,
+    isEdited: true,
+  };
+  const mdPanel = renderToStaticMarkup(
+    React.createElement(FilePreviewPanel, { file: mdFile, onClose: () => {} }),
+  );
+  assert.ok(mdPanel.includes('data-testid="file-preview-mode-toggle"'));
+  assert.ok(mdPanel.includes('data-testid="file-preview-mode-preview"'));
+  assert.ok(mdPanel.includes('data-testid="file-preview-mode-code"'));
+  assert.ok(mdPanel.includes('data-testid="rich-markdown-preview"'));
+  assert.ok(mdPanel.includes('data-testid="file-preview-edited-badge"'));
+  assert.equal(mdPanel.includes('data-testid="file-preview-code-view"'), false);
+
+  const csvPanel = renderToStaticMarkup(
+    React.createElement(FilePreviewPanel, {
+      file: {
+        id: 'fp_csv',
+        filename: 'metrics.csv',
+        title: 'Metrics',
+        language: 'csv',
+        content: 'k,v\na,1',
+        createdAt: 1700000000000,
+      },
+      onClose: () => {},
+    }),
+  );
+  assert.ok(csvPanel.includes('data-testid="rich-csv-preview"'));
+
+  const codePanel = renderToStaticMarkup(
+    React.createElement(FilePreviewPanel, {
+      file: {
+        id: 'fp_rs',
+        filename: 'main.rs',
+        title: 'Main',
+        language: 'rust',
+        content: 'fn main() {}',
+        createdAt: 1700000000000,
+      },
+      onClose: () => {},
+    }),
+  );
+  assert.equal(codePanel.includes('data-testid="file-preview-mode-toggle"'), false);
+  assert.ok(codePanel.includes('data-testid="file-preview-code-view"'));
+});
+
+test('ChatView renders rich artifact card badges, edit badges, tool activity pills, and indexed attachment badge', () => {
+  const models = createDefaultModels();
+  const session: Session = {
+    id: 'sess_preview',
+    title: 'Rich UI Session',
+    subtitle: 'Local test',
+    createdAt: 1700000000000,
+    updatedAt: 1700000000000,
+    messages: [
+      {
+        id: 'm_ast',
+        role: 'assistant',
+        authorName: 'LowCon',
+        createdAt: 1700000001000,
+        content: 'Updated artifacts.',
+        sources: [],
+        toolActivity: [
+          'Calculated: 37.7',
+          'Updated report.md (2 lines)',
+          'Saved note: Release policy',
+        ],
+        generatedFiles: [
+          {
+            id: 'g_md',
+            filename: 'report.md',
+            title: 'Report',
+            language: 'markdown',
+            content: '# Report',
+            createdAt: 1700000001000,
+            isEdited: true,
+          },
+          {
+            id: 'g_csv',
+            filename: 'data.csv',
+            title: 'Metrics',
+            language: 'csv',
+            content: 'a,b\n1,2',
+            createdAt: 1700000001000,
+          },
+          {
+            id: 'g_html',
+            filename: 'widget.html',
+            title: 'Widget',
+            language: 'html',
+            content: '<div>ok</div>',
+            createdAt: 1700000001000,
+          },
+        ],
+      },
+    ],
+  };
+
+  const largeContent = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join('\n');
+  const html = renderToStaticMarkup(
+    React.createElement(ChatView, {
+      session,
+      models,
+      activeModelId: models[0].id,
+      onSelectActiveModel: () => {},
+      connectedLmModels: [],
+      selectedLmModel: '',
+      onSelectLmModel: () => {},
+      effortLevel: 'medium',
+      onChangeEffortLevel: () => {},
+      backendLabel: 'Offline Mock',
+      workerStatus: { state: 'loaded', modelId: models[0].id, modelName: models[0].name, backend: 'mock', contextLimit: 8192 },
+      composerText: '',
+      onComposerTextChange: () => {},
+      attachedFile: { name: 'big.log', content: largeContent },
+      onAttachFile: () => {},
+      memoryRetrievalEnabled: true,
+      onToggleMemoryRetrieval: () => {},
+      isGenerating: false,
+      hoveredSegment: null,
+      onHoverSegment: () => {},
+      onSendMessage: () => {},
+      onStopGeneration: () => {},
+      onNewSession: () => {},
+      onSummarizeSession: () => true,
+      onReviewSummaries: () => {},
+      onOpenSources: () => {},
+      onSaveAsNote: () => {},
+      onOpenFilePreview: () => {},
+    }),
+  );
+
+  assert.ok(html.includes('data-testid="file-artifact-rich-badge-g_md"'));
+  assert.ok(html.includes('data-testid="file-artifact-edited-badge-g_md"'));
+  assert.ok(html.includes('Markdown · MD · 1 line'));
+  assert.ok(html.includes('Table · CSV · 2 lines'));
+  assert.ok(html.includes('HTML · HTML · 1 line'));
+  assert.ok(html.includes('Sandbox'));
+  assert.ok(html.includes('Calculated: 37.7'));
+  assert.ok(html.includes('Updated report.md (2 lines)'));
+  assert.ok(html.includes('Saved note: Release policy'));
+  assert.ok(html.includes('data-testid="attached-file-indexed-badge"'));
 });

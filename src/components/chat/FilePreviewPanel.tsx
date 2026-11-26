@@ -1,16 +1,48 @@
 import React, { useMemo, useState } from 'react';
-import { Check, Code2, Copy, Download, X } from 'lucide-react';
+import { Check, Code2, Copy, Download, Eye, FileText, Globe, Image, Table2, X } from 'lucide-react';
+import { detectArtifactPreviewKind, type ArtifactPreviewKind } from '../../core/artifactPreview';
 import { countLines, getFileExtensionBadge } from '../../core/tools';
 import type { GeneratedFileArtifact } from '../../core/types';
 import { highlightCodeHtml } from './MarkdownMessage';
+import { RichArtifactPreview } from './RichArtifactPreview';
 
 interface FilePreviewPanelProps {
   file: GeneratedFileArtifact;
   onClose: () => void;
 }
 
+function renderKindIcon(kind: ArtifactPreviewKind): React.ReactNode {
+  switch (kind) {
+    case 'markdown':
+      return <FileText className="h-4 w-4 shrink-0 text-[var(--lc-accent)]" />;
+    case 'csv':
+      return <Table2 className="h-4 w-4 shrink-0 text-[var(--lc-accent)]" />;
+    case 'svg':
+      return <Image className="h-4 w-4 shrink-0 text-[var(--lc-accent)]" />;
+    case 'html':
+      return <Globe className="h-4 w-4 shrink-0 text-[var(--lc-accent)]" />;
+    case 'code':
+      return <Code2 className="h-4 w-4 shrink-0 text-[var(--lc-accent)]" />;
+  }
+}
+
 export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({ file, onClose }) => {
   const [copied, setCopied] = useState(false);
+  const [viewModeOverride, setViewModeOverride] = useState<{
+    fileId: string;
+    mode: 'preview' | 'code';
+  } | null>(null);
+
+  const previewKind = useMemo(
+    () => detectArtifactPreviewKind(file.filename, file.language),
+    [file.filename, file.language],
+  );
+  const isRichFormat = previewKind !== 'code';
+  const activeViewMode: 'preview' | 'code' = !isRichFormat
+    ? 'code'
+    : viewModeOverride && viewModeOverride.fileId === file.id
+      ? viewModeOverride.mode
+      : 'preview';
 
   const lineCount = useMemo(() => countLines(file.content), [file.content]);
   const extBadge = useMemo(
@@ -52,18 +84,64 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({ file, onClos
       className="flex h-full w-[46%] min-w-[380px] max-w-[740px] shrink-0 flex-col border-l border-[var(--lc-line)] bg-[var(--lc-code-bg)] text-[var(--lc-code-text)]"
     >
       {/* Top Preview Header */}
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--lc-code-border)] bg-[var(--lc-code-header)] px-4 py-2.5">
-        <div className="flex min-w-0 items-center gap-2">
-          <Code2 className="h-4 w-4 shrink-0 text-[var(--lc-accent)]" />
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--lc-code-border)] bg-[var(--lc-code-header)] px-3.5 py-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {renderKindIcon(previewKind)}
           <span className="truncate font-mono text-[13px] font-semibold text-[var(--lc-code-text)]">
             {file.filename}
           </span>
           <span className="shrink-0 rounded-[5px] border border-[var(--lc-code-border)] bg-[var(--lc-code-bg)] px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--lc-code-mute)]">
             {extBadge} · {lineCount} {lineCount === 1 ? 'line' : 'lines'}
           </span>
+          {file.isEdited && (
+            <span
+              data-testid="file-preview-edited-badge"
+              className="shrink-0 rounded-[5px] border border-[var(--lc-accent)]/35 bg-[var(--lc-accent)]/12 px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--lc-accent)]"
+            >
+              Edited
+            </span>
+          )}
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
+          {isRichFormat && (
+            <div
+              role="group"
+              aria-label="Preview mode"
+              data-testid="file-preview-mode-toggle"
+              className="inline-flex items-center rounded-[6px] border border-[var(--lc-code-border)] bg-[var(--lc-code-bg)] p-0.5"
+            >
+              <button
+                type="button"
+                data-testid="file-preview-mode-preview"
+                aria-pressed={activeViewMode === 'preview'}
+                onClick={() => setViewModeOverride({ fileId: file.id, mode: 'preview' })}
+                className={`inline-flex items-center gap-1 rounded-[4px] px-2 py-0.5 text-[11.5px] font-medium transition-colors ${
+                  activeViewMode === 'preview'
+                    ? 'bg-[var(--lc-active-pill-bg)] text-[var(--lc-active-pill-fg)]'
+                    : 'text-[var(--lc-code-mute)] hover:text-[var(--lc-code-text)]'
+                }`}
+              >
+                <Eye className="h-3 w-3" />
+                <span>Preview</span>
+              </button>
+              <button
+                type="button"
+                data-testid="file-preview-mode-code"
+                aria-pressed={activeViewMode === 'code'}
+                onClick={() => setViewModeOverride({ fileId: file.id, mode: 'code' })}
+                className={`inline-flex items-center gap-1 rounded-[4px] px-2 py-0.5 text-[11.5px] font-medium transition-colors ${
+                  activeViewMode === 'code'
+                    ? 'bg-[var(--lc-active-pill-bg)] text-[var(--lc-active-pill-fg)]'
+                    : 'text-[var(--lc-code-mute)] hover:text-[var(--lc-code-text)]'
+                }`}
+              >
+                <Code2 className="h-3 w-3" />
+                <span>Code</span>
+              </button>
+            </div>
+          )}
+
           <button
             type="button"
             onClick={handleCopy}
@@ -107,22 +185,28 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({ file, onClos
         </div>
       </div>
 
-      {/* Line-numbered Syntax-Highlighted Code */}
-      <div className="min-h-0 flex-1 overflow-auto">
-        <div className="flex min-h-full min-w-max items-stretch">
-          <div
-            aria-hidden="true"
-            className="select-none border-r border-[var(--lc-code-border)] bg-[var(--lc-code-header)]/55 px-3 py-3 text-right font-mono text-[12.5px] leading-[20px] text-[var(--lc-code-mute)] tabular-nums"
-          >
-            {lineNumbers.map((num) => (
-              <div key={num}>{num}</div>
-            ))}
-          </div>
-          <pre className="flex-1 py-3 pr-5 pl-4 font-mono text-[12.5px] leading-[20px]">
-            <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
-          </pre>
+      {/* Rich Preview or Line-numbered Syntax-Highlighted Code */}
+      {isRichFormat && activeViewMode === 'preview' ? (
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <RichArtifactPreview file={file} kind={previewKind} />
         </div>
-      </div>
+      ) : (
+        <div data-testid="file-preview-code-view" className="min-h-0 flex-1 overflow-auto">
+          <div className="flex min-h-full min-w-max items-stretch">
+            <div
+              aria-hidden="true"
+              className="select-none border-r border-[var(--lc-code-border)] bg-[var(--lc-code-header)]/55 px-3 py-3 text-right font-mono text-[12.5px] leading-[20px] text-[var(--lc-code-mute)] tabular-nums"
+            >
+              {lineNumbers.map((num) => (
+                <div key={num}>{num}</div>
+              ))}
+            </div>
+            <pre className="flex-1 py-3 pr-5 pl-4 font-mono text-[12.5px] leading-[20px]">
+              <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
+            </pre>
+          </div>
+        </div>
+      )}
     </aside>
   );
 };
