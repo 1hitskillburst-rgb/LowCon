@@ -4,7 +4,9 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Code2,
   Copy,
+  FileCode2,
   FileText,
   Paperclip,
   Square,
@@ -13,10 +15,12 @@ import {
 import { getPackedTokens } from '../../core/context';
 import { formatNumber, formatRelativeTime } from '../../core/privacy';
 import { getTpsColorVar } from '../../core/theme';
+import { countLines, getFileExtensionBadge } from '../../core/tools';
 import type {
   ChatWidthPreset,
   ContextSegmentKey,
   EffortLevel,
+  GeneratedFileArtifact,
   ModelProfile,
   Session,
   WorkerStatus,
@@ -68,6 +72,8 @@ interface ChatViewProps {
   onReviewSummaries: () => void;
   onOpenSources: (sources: string[]) => void;
   onSaveAsNote: (content: string, messageId: string) => void;
+  activePreviewFileId?: string | null;
+  onOpenFilePreview: (file: GeneratedFileArtifact) => void;
 }
 
 export const ChatView: React.FC<ChatViewProps> = ({
@@ -100,6 +106,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onReviewSummaries,
   onOpenSources,
   onSaveAsNote,
+  activePreviewFileId,
+  onOpenFilePreview,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
@@ -432,6 +440,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       </div>
                     ) : (
                       <div className="space-y-3 pt-0.5">
+                        {msg.toolActivity && msg.toolActivity.length > 0 && (
+                          <div
+                            data-testid={`tool-activity-${msg.id}`}
+                            className="flex flex-wrap items-center gap-1.5 text-[12.5px] text-[var(--lc-mute)]"
+                          >
+                            <FileCode2 className="h-3.5 w-3.5 shrink-0" />
+                            <span>{msg.toolActivity.join(' · ')}</span>
+                          </div>
+                        )}
+
                         {hasThinking && (
                           <div className="rounded-[8px] border border-[var(--lc-line)] bg-[var(--lc-panel)]/80">
                             <button
@@ -500,6 +518,57 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         {msg.aside && (
                           <div className="border-l-[2px] border-[var(--lc-seg-tpl)] pl-3.5 text-[13px] italic text-[var(--lc-ink2)]">
                             {msg.aside}
+                          </div>
+                        )}
+
+                        {/* Generated File Artifact Cards */}
+                        {msg.generatedFiles && msg.generatedFiles.length > 0 && (
+                          <div className="flex flex-col gap-2 pt-1">
+                            {msg.generatedFiles.map((file) => {
+                              const isPreviewActive = activePreviewFileId === file.id;
+                              const extBadge = getFileExtensionBadge(file.filename, file.language);
+                              const lines = countLines(file.content);
+                              return (
+                                <button
+                                  key={file.id}
+                                  type="button"
+                                  data-testid={`file-artifact-card-${file.id}`}
+                                  onClick={() => onOpenFilePreview(file)}
+                                  className={`group flex w-full max-w-[360px] items-center justify-between gap-3 rounded-[10px] border px-3.5 py-2.5 text-left transition-colors ${
+                                    isPreviewActive
+                                      ? 'border-[var(--lc-accent)] bg-[var(--lc-accent)]/8'
+                                      : 'border-[var(--lc-surf-line)] bg-[var(--lc-surface)] hover:border-[var(--lc-accent)]/60 hover:bg-[var(--lc-surf-hover)]/60'
+                                  }`}
+                                >
+                                  <div className="flex min-w-0 items-center gap-3">
+                                    <div
+                                      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] border ${
+                                        isPreviewActive
+                                          ? 'border-[var(--lc-accent)]/40 bg-[var(--lc-accent)]/15 text-[var(--lc-accent)]'
+                                          : 'border-[var(--lc-surf-line)] bg-[var(--lc-panel)] text-[var(--lc-surf-ink2)] group-hover:text-[var(--lc-surf-ink)]'
+                                      }`}
+                                    >
+                                      <Code2 className="h-4 w-4" />
+                                    </div>
+                                    <div className="min-w-0">
+                                      <div className="truncate text-[13.5px] font-semibold text-[var(--lc-surf-ink)]">
+                                        {file.title}
+                                      </div>
+                                      <div className="truncate text-[12px] text-[var(--lc-surf-mute)]">
+                                        Code · {extBadge} · {lines} {lines === 1 ? 'line' : 'lines'}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <ChevronRight
+                                    className={`h-4 w-4 shrink-0 transition-transform ${
+                                      isPreviewActive
+                                        ? 'text-[var(--lc-accent)]'
+                                        : 'text-[var(--lc-surf-mute)] group-hover:translate-x-0.5 group-hover:text-[var(--lc-surf-ink)]'
+                                    }`}
+                                  />
+                                </button>
+                              );
+                            })}
                           </div>
                         )}
 

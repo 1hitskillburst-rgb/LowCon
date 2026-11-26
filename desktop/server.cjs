@@ -112,13 +112,113 @@ function readJsonBody(req, maxBytes = 2 * 1024 * 1024) {
   });
 }
 
+function validateToolCalls(input) {
+  if (!Array.isArray(input) || input.length === 0 || input.length > 32) return null;
+  const out = [];
+  for (const item of input) {
+    if (!item || typeof item !== 'object') return null;
+    if (typeof item.id !== 'string' || !item.id.trim()) return null;
+    if (item.type !== undefined && item.type !== 'function') return null;
+    if (!item.function || typeof item.function !== 'object') return null;
+    if (typeof item.function.name !== 'string' || !item.function.name.trim()) return null;
+    if (typeof item.function.arguments !== 'string') return null;
+    out.push({
+      id: item.id,
+      type: 'function',
+      function: {
+        name: item.function.name.trim(),
+        arguments: item.function.arguments,
+      },
+    });
+  }
+  return out;
+}
+
+function validateTools(input) {
+  if (input === undefined) return undefined;
+  if (!Array.isArray(input) || input.length > 32) return null;
+  const out = [];
+  for (const item of input) {
+    if (!item || typeof item !== 'object') return null;
+    if (item.type !== 'function' || !item.function || typeof item.function !== 'object') return null;
+    if (typeof item.function.name !== 'string' || !item.function.name.trim()) return null;
+    if (item.function.description !== undefined && typeof item.function.description !== 'string') {
+      return null;
+    }
+    if (
+      item.function.parameters !== undefined &&
+      (!item.function.parameters ||
+        typeof item.function.parameters !== 'object' ||
+        Array.isArray(item.function.parameters))
+    ) {
+      return null;
+    }
+    out.push({
+      type: 'function',
+      function: {
+        name: item.function.name.trim(),
+        ...(typeof item.function.description === 'string'
+          ? { description: item.function.description }
+          : {}),
+        ...(item.function.parameters ? { parameters: item.function.parameters } : {}),
+      },
+    });
+  }
+  return out;
+}
+
+function validateToolChoice(input) {
+  if (input === undefined) return undefined;
+  if (typeof input === 'string') {
+    return input === 'auto' || input === 'none' || input === 'required' ? input : undefined;
+  }
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    if (
+      input.type === 'function' &&
+      input.function &&
+      typeof input.function.name === 'string' &&
+      input.function.name.trim()
+    ) {
+      return { type: 'function', function: { name: input.function.name.trim() } };
+    }
+  }
+  return undefined;
+}
+
 function validateMessages(input) {
   if (!Array.isArray(input) || input.length === 0 || input.length > 500) return null;
-  const roles = new Set(['system', 'user', 'assistant']);
+  const roles = new Set(['system', 'user', 'assistant', 'tool']);
   const out = [];
   for (const item of input) {
     if (!item || typeof item !== 'object') return null;
     if (typeof item.role !== 'string' || !roles.has(item.role)) return null;
+
+    if (item.role === 'tool') {
+      if (typeof item.content !== 'string') return null;
+      if (typeof item.tool_call_id !== 'string' || !item.tool_call_id.trim()) return null;
+      out.push({
+        role: 'tool',
+        content: item.content,
+        tool_call_id: item.tool_call_id,
+        ...(typeof item.name === 'string' && item.name.trim() ? { name: item.name.trim() } : {}),
+      });
+      continue;
+    }
+
+    if (item.role === 'assistant' && item.tool_calls !== undefined) {
+      const toolCalls = validateToolCalls(item.tool_calls);
+      if (!toolCalls) return null;
+      if (item.content !== undefined && item.content !== null && typeof item.content !== 'string') {
+        return null;
+      }
+      out.push({
+        role: 'assistant',
+        content: typeof item.content === 'string' ? item.content : null,
+        tool_calls: toolCalls,
+      });
+      continue;
+    }
+
     if (typeof item.content !== 'string') return null;
     out.push({ role: item.role, content: item.content });
   }
@@ -261,6 +361,12 @@ async function handleChatProxy(req, res) {
       typeof body.reasoning_effort === 'string' && allowedEfforts.has(body.reasoning_effort)
         ? body.reasoning_effort
         : undefined;
+    const tools = validateTools(body.tools);
+    if (tools === null) {
+      sendJson(res, 400, { error: 'Invalid chat payload: malformed tools array.' });
+      return;
+    }
+    const toolChoice = tools && tools.length > 0 ? validateToolChoice(body.tool_choice) : undefined;
 
     const upstream = await fetch(url, {
       method: 'POST',
@@ -285,6 +391,8 @@ async function handleChatProxy(req, res) {
           ? body.stop.filter((s) => typeof s === 'string' && s.length > 0).slice(0, 8)
           : undefined,
         ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+        ...(tools && tools.length > 0 ? { tools } : {}),
+        ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
       }),
       signal: controller.signal,
     });

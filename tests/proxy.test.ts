@@ -54,18 +54,31 @@ test('server loopback proxy allows only local loopback addresses and rejects rem
   assert.equal(normalizeLocalEndpoint('http://localhost:1234/'), 'http://localhost:1234/v1');
 });
 
-test('server chat message validator accepts structured roles and rejects malformed inputs', () => {
+test('server chat message validator accepts structured roles including tool calls/results and rejects malformed inputs', () => {
   const valid = validateChatMessages([
     { role: 'system', content: 'Follow pinned rules.' },
     { role: 'user', content: 'Hello' },
+    {
+      role: 'assistant',
+      content: null,
+      tool_calls: [
+        {
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'create_file', arguments: '{"filename":"a.rs","content":"fn main(){}"}' },
+        },
+      ],
+    },
+    { role: 'tool', content: '{"status":"ok"}', tool_call_id: 'call_1', name: 'create_file' },
   ]);
   assert.ok(valid);
-  assert.equal(valid.length, 2);
+  assert.equal(valid.length, 4);
 
   assert.equal(validateChatMessages([]), null);
   assert.equal(validateChatMessages('not-an-array'), null);
   assert.equal(validateChatMessages([{ role: 'admin', content: 'hack' }]), null);
   assert.equal(validateChatMessages([{ role: 'user', content: 123 }]), null);
+  assert.equal(validateChatMessages([{ role: 'tool', content: 'ok' }]), null);
 });
 
 test('HTTP integration: /api/health, /api/local-llm/models, and /api/local-llm/chat (streaming, non-streaming, abort, and error handling)', async () => {
@@ -187,7 +200,7 @@ test('HTTP integration: /api/health, /api/local-llm/models, and /api/local-llm/c
     });
     assert.equal(modelsDead.status, 502);
 
-    // 5. /api/local-llm/chat -> streaming SSE chunks without premature abort
+    // 5. /api/local-llm/chat -> streaming SSE chunks without premature abort (forwards tools & tool_choice)
     const streamResp = await fetch(`${proxyServer.baseUrl}/api/local-llm/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -195,6 +208,17 @@ test('HTTP integration: /api/health, /api/local-llm/models, and /api/local-llm/c
         endpoint: mockLlm.baseUrl,
         model: 'qwen2.5-7b-instruct',
         messages: [{ role: 'user', content: 'Say hi' }],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'create_file',
+              description: 'Create file',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+        ],
+        tool_choice: 'auto',
       }),
     });
     assert.equal(streamResp.status, 200);
@@ -205,6 +229,8 @@ test('HTTP integration: /api/health, /api/local-llm/models, and /api/local-llm/c
     assert.ok(sseBody.includes('data: [DONE]'));
     assert.equal(upstreamAborts, 0);
     assert.equal(lastChatPayload?.stream, true);
+    assert.equal(Array.isArray(lastChatPayload?.tools), true);
+    assert.equal(lastChatPayload?.tool_choice, 'auto');
 
     // 6. /api/local-llm/chat -> non-streaming JSON
     const nonStreamResp = await fetch(`${proxyServer.baseUrl}/api/local-llm/chat`, {

@@ -9,6 +9,8 @@ import {
   type PromptInspection,
   type SectionTokenBreakdown,
   type StructuredChatMessage,
+  type ToolCallRecord,
+  type ToolDefinition,
   type TurnContextBudget,
 } from './types';
 import { safeTruncateChars } from './privacy';
@@ -44,8 +46,11 @@ export interface SummaryExcerptCandidate {
 
 export interface ConversationTurnCandidate {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'tool';
   content: string;
+  toolCalls?: ToolCallRecord[];
+  toolCallId?: string;
+  name?: string;
   isPinned?: boolean;
 }
 
@@ -58,6 +63,7 @@ export interface AssemblyCandidates {
   retrievedMemories: MemoryExcerptCandidate[];
   conversationTurns: ConversationTurnCandidate[];
   summaries: SummaryExcerptCandidate[];
+  tools?: ToolDefinition[];
 }
 
 export interface AssemblyOptions {
@@ -350,6 +356,29 @@ function buildSystemText(
   return systemText;
 }
 
+function formatTurnForTemplate(turn: ConversationTurnCandidate): {
+  role: 'user' | 'assistant';
+  content: string;
+} {
+  if (turn.role === 'tool') {
+    return {
+      role: 'user',
+      content: `[Tool result (${turn.name ?? 'tool'})]: ${turn.content}`,
+    };
+  }
+  if (turn.role === 'assistant' && turn.toolCalls && turn.toolCalls.length > 0) {
+    const callsSummary = turn.toolCalls
+      .map((tc) => `${tc.function.name}(${tc.function.arguments})`)
+      .join('\n');
+    const prefix = turn.content.trim() ? `${turn.content.trim()}\n` : '';
+    return {
+      role: 'assistant',
+      content: `${prefix}[Tool call]: ${callsSummary}`,
+    };
+  }
+  return { role: turn.role, content: turn.content };
+}
+
 function renderStructuredAndPrompt(
   templateType: ChatTemplateType,
   coreInstruction: string,
@@ -377,17 +406,43 @@ function renderStructuredAndPrompt(
     finalUserText += `\n[Context Metadata: ${userMetadata.trim()}]`;
   }
 
-  const history = turns.map((t) => ({ role: t.role, content: t.content }));
-  const exactRenderedPrompt = renderFullChatTemplate(templateType, systemText, history, finalUserText);
+  const isToolContinuation =
+    !finalUserText && turns.length > 0 && turns[turns.length - 1]?.role === 'tool';
+  const templateTurns = turns.map(formatTurnForTemplate);
+  const exactRenderedPrompt = isToolContinuation
+    ? renderFullChatTemplate(
+        templateType,
+        systemText,
+        templateTurns.slice(0, -1),
+        templateTurns[templateTurns.length - 1].content,
+      )
+    : renderFullChatTemplate(templateType, systemText, templateTurns, finalUserText);
 
   const structuredMessages: StructuredChatMessage[] = [];
   if (systemText.trim()) {
     structuredMessages.push({ role: 'system', content: systemText });
   }
-  for (const h of history) {
-    structuredMessages.push({ role: h.role, content: h.content });
+  for (const t of turns) {
+    if (t.role === 'tool') {
+      structuredMessages.push({
+        role: 'tool',
+        content: t.content,
+        tool_call_id: t.toolCallId,
+        ...(t.name ? { name: t.name } : {}),
+      });
+    } else if (t.role === 'assistant' && t.toolCalls && t.toolCalls.length > 0) {
+      structuredMessages.push({
+        role: 'assistant',
+        content: t.content.trim() ? t.content : null,
+        tool_calls: t.toolCalls,
+      });
+    } else {
+      structuredMessages.push({ role: t.role, content: t.content });
+    }
   }
-  structuredMessages.push({ role: 'user', content: finalUserText });
+  if (!isToolContinuation) {
+    structuredMessages.push({ role: 'user', content: finalUserText });
+  }
 
   return { exactRenderedPrompt, structuredMessages };
 }
@@ -428,6 +483,9 @@ export function assembleContext(
   const workingTurns = [...candidates.conversationTurns];
   const workingSummaries = [...candidates.summaries];
 
+  const activeTools = candidates.tools && candidates.tools.length > 0 ? candidates.tools : undefined;
+  const toolsTokens = activeTools ? estimateTokensConservative(JSON.stringify(activeTools)) : 0;
+
   let useCompactSummaries = false;
   let includeMetadata = Boolean(candidates.currentUserMetadata?.trim());
   const excludedCandidates: ExcludedCandidate[] = [];
@@ -445,7 +503,7 @@ export function assembleContext(
     candidates.currentUserMetadata,
     includeMetadata,
   );
-  let currentTokens = estimateTokensConservative(rendered.exactRenderedPrompt);
+  let currentTokens = estimateTokensConservative(rendered.exactRenderedPrompt) + toolsTokens;
 
   // Stage 1: Drop lowest-ranked unpinned retrieved memory notes
   while (currentTokens > promptBudget) {
@@ -480,7 +538,7 @@ export function assembleContext(
       candidates.currentUserMetadata,
       includeMetadata,
     );
-    currentTokens = estimateTokensConservative(rendered.exactRenderedPrompt);
+    currentTokens = estimateTokensConservative(rendered.exactRenderedPrompt) + toolsTokens;
   }
 
   // Stage 2: Compact then drop unpinned summaries
@@ -499,7 +557,7 @@ export function assembleContext(
       candidates.currentUserMetadata,
       includeMetadata,
     );
-    currentTokens = estimateTokensConservative(rendered.exactRenderedPrompt);
+    currentTokens = estimateTokensConservative(rendered.exactRenderedPrompt) + toolsTokens;
   }
 
   while (currentTokens > promptBudget) {
@@ -534,7 +592,7 @@ export function assembleContext(
       candidates.currentUserMetadata,
       includeMetadata,
     );
-    currentTokens = estimateTokensConservative(rendered.exactRenderedPrompt);
+    currentTokens = estimateTokensConservative(rendered.exactRenderedPrompt) + toolsTokens;
   }
 
   // Stage 3: Drop oldest unpinned conversation turns
@@ -543,11 +601,12 @@ export function assembleContext(
     if (removeIdx === -1) break;
 
     const [removed] = workingTurns.splice(removeIdx, 1);
+    const removedPreview = removed.content || removed.toolCalls?.map((c) => c.function.name).join(', ') || 'tool';
     excludedCandidates.push({
       id: removed.id,
       kind: 'conversation_turn',
-      label: `Turn (${removed.role}): ${safeTruncateChars(removed.content, 28)}`,
-      estimatedTokens: estimateTokensConservative(removed.content),
+      label: `Turn (${removed.role}): ${safeTruncateChars(removedPreview, 28)}`,
+      estimatedTokens: estimateTokensConservative(formatTurnForTemplate(removed).content),
       reason: `Trimmed during Stage 3 overflow pass: oldest unpinned turn removed to preserve newer turns within ${promptBudget} token budget.`,
     });
 
@@ -564,7 +623,7 @@ export function assembleContext(
       candidates.currentUserMetadata,
       includeMetadata,
     );
-    currentTokens = estimateTokensConservative(rendered.exactRenderedPrompt);
+    currentTokens = estimateTokensConservative(rendered.exactRenderedPrompt) + toolsTokens;
   }
 
   // Stage 4: Strip optional metadata
@@ -591,12 +650,12 @@ export function assembleContext(
       candidates.currentUserMetadata,
       includeMetadata,
     );
-    currentTokens = estimateTokensConservative(rendered.exactRenderedPrompt);
+    currentTokens = estimateTokensConservative(rendered.exactRenderedPrompt) + toolsTokens;
   }
 
   // Stage 5: Mandatory Content Verification (NEVER silently clip)
   if (currentTokens > promptBudget) {
-    const coreTok = estimateTokensConservative(coreInstruction);
+    const coreTok = estimateTokensConservative(coreInstruction) + toolsTokens;
     const userTok = estimateTokensConservative(candidates.currentUserMessage);
     const pinnedTok = pinnedFacts.reduce(
       (sum, f) => sum + estimateTokensConservative(`${f.title}: ${f.content}`),
@@ -613,19 +672,28 @@ export function assembleContext(
   const sections: SectionTokenBreakdown[] = [];
   const includedItems: IncludedItem[] = [];
 
-  const coreTokens = estimateTokensConservative(coreInstruction);
+  const coreBaseTokens = estimateTokensConservative(coreInstruction);
+  const coreTokens = coreBaseTokens + toolsTokens;
   sections.push({
     segmentKey: 'core',
     name: 'Core instructions',
     tokens: coreTokens,
-    description: 'Always included, compact',
+    description: activeTools ? 'Always included + tool schema' : 'Always included, compact',
   });
   includedItems.push({
     id: 'core_instruction',
     kind: 'core_instruction',
     label: 'Core system prompt',
-    tokens: coreTokens,
+    tokens: coreBaseTokens,
   });
+  if (activeTools) {
+    includedItems.push({
+      id: 'tool_definitions',
+      kind: 'core_instruction',
+      label: `Tool schemas (${activeTools.map((t) => t.function.name).join(', ')})`,
+      tokens: toolsTokens,
+    });
+  }
 
   // Pinned rules + active task state -> 'task' segment
   let pinnedAndTaskTokens = 0;
@@ -727,7 +795,7 @@ export function assembleContext(
   }
 
   // Conversation turns + current user message -> 'recent' segment
-  const turnsBlock = workingTurns.map((t) => t.content).join('\n');
+  const turnsBlock = workingTurns.map((t) => formatTurnForTemplate(t).content).join('\n');
   const turnsTokens = workingTurns.length > 0 ? estimateTokensConservative(turnsBlock) : 0;
   const hasCurrentUserMsg = candidates.currentUserMessage.trim().length > 0;
   const userTokens = hasCurrentUserMsg ? estimateTokensConservative(candidates.currentUserMessage) : 0;
@@ -741,11 +809,12 @@ export function assembleContext(
       : `${workingTurns.length} conversation turn${workingTurns.length === 1 ? '' : 's'} in context`,
   });
   for (const t of workingTurns) {
+    const formatted = formatTurnForTemplate(t);
     includedItems.push({
       id: t.id,
       kind: 'conversation_turn',
-      label: `Turn (${t.role}): ${safeTruncateChars(t.content, 36)}`,
-      tokens: estimateTokensConservative(t.content),
+      label: `Turn (${t.role}): ${safeTruncateChars(formatted.content, 36)}`,
+      tokens: estimateTokensConservative(formatted.content),
     });
   }
   if (hasCurrentUserMsg) {
@@ -800,6 +869,7 @@ export function assembleContext(
     inspection: {
       exactRenderedPrompt: rendered.exactRenderedPrompt,
       structuredMessages: rendered.structuredMessages,
+      ...(activeTools ? { tools: activeTools } : {}),
       totalTokens: packedTotal,
       isExactCount: false,
       tokenizerName: 'Conservative Token Estimator (heuristic + 15% cushion)',

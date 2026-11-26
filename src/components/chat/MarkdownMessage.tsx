@@ -69,7 +69,7 @@ function renderKatexHtml(expr: string, displayMode: boolean): string {
   });
 }
 
-function highlightCodeHtml(code: string, lang: string): { html: string; detectedLang: string } {
+export function highlightCodeHtml(code: string, lang: string): { html: string; detectedLang: string } {
   const normalizedLang = lang.trim().toLowerCase();
   if (normalizedLang && hljs.getLanguage(normalizedLang)) {
     const result = hljs.highlight(code, { language: normalizedLang, ignoreIllegals: true });

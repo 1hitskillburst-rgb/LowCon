@@ -80,14 +80,47 @@ export interface ExcludedCandidate {
   reason: string;
 }
 
-export interface StructuredChatMessage {
-  role: 'system' | 'user' | 'assistant';
+export interface ToolFunctionDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface ToolDefinition {
+  type: 'function';
+  function: ToolFunctionDefinition;
+}
+
+export interface ToolCallRecord {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+export interface GeneratedFileArtifact {
+  id: string;
+  filename: string;
+  title: string;
+  language: string;
   content: string;
+  createdAt: number;
+}
+
+export interface StructuredChatMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | null;
+  tool_calls?: ToolCallRecord[];
+  tool_call_id?: string;
+  name?: string;
 }
 
 export interface PromptInspection {
   exactRenderedPrompt: string;
   structuredMessages: StructuredChatMessage[];
+  tools?: ToolDefinition[];
   totalTokens: number;
   isExactCount: boolean;
   tokenizerName: string;
@@ -110,10 +143,12 @@ export interface ChatMessage {
   thinkingContent?: string;
   thinkingDurationMs?: number;
   tokensPerSecond?: number;
-  stopReason?: 'done' | 'max_tokens' | 'stop_sequence';
+  stopReason?: 'done' | 'max_tokens' | 'stop_sequence' | 'tool_calls';
   aside?: string;
   sources: string[];
   turnBudget?: TurnContextBudget;
+  generatedFiles?: GeneratedFileArtifact[];
+  toolActivity?: string[];
   isError?: boolean;
   tokenCount?: number;
 }

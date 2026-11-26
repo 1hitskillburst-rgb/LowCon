@@ -22,7 +22,13 @@ export const PromptInspectorModal: React.FC<PromptInspectorModalProps> = ({
   const displayPayload =
     viewMode === 'rendered'
       ? inspection.exactRenderedPrompt
-      : JSON.stringify(inspection.structuredMessages, null, 2);
+      : JSON.stringify(
+          inspection.tools && inspection.tools.length > 0
+            ? { messages: inspection.structuredMessages, tools: inspection.tools }
+            : inspection.structuredMessages,
+          null,
+          2,
+        );
 
   const handleCopy = () => {
     void navigator.clipboard?.writeText(displayPayload).then(() => {

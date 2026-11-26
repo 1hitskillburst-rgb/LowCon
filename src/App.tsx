@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, X } from 'lucide-react';
 import { ChatView } from './components/chat/ChatView';
 import { ContextPanel } from './components/chat/ContextPanel';
+import { FilePreviewPanel } from './components/chat/FilePreviewPanel';
 import { SidebarNav } from './components/layout/SidebarNav';
 import { PromptInspectorModal } from './components/modals/PromptInspectorModal';
 import { SourcesModal } from './components/modals/SourcesModal';
@@ -14,8 +15,13 @@ import {
   buildTurnContextBudget,
   stopSequencesForTemplate,
   type AssemblyCandidates,
+  type ConversationTurnCandidate,
 } from './core/context';
-import { fetchLocalLmStudioModels, InferenceController } from './core/inference';
+import {
+  fetchLocalLmStudioModels,
+  InferenceController,
+  type StreamStopReason,
+} from './core/inference';
 import {
   buildDraftSessionSummary,
   buildSummaryCandidates,
@@ -34,33 +40,64 @@ import {
 } from './core/storage';
 import { applyThemeToDocument } from './core/theme';
 import {
+  countLines,
+  CREATE_FILE_TOOL_DEFINITION,
+  CREATE_FILE_TOOL_NAME,
+  executeCreateFileTool,
+  TOOL_CALL_POLICY_INSTRUCTION,
+} from './core/tools';
+import {
   getEffectiveContextLimit,
   type AppSettings,
   type BackendType,
   type ChatMessage,
   type ContextSegmentKey,
   type DiagnosticEntry,
+  type GeneratedFileArtifact,
   type MemoryNote,
   type ModelProfile,
   type NavigationTab,
   type PersistedWorkspace,
   type PromptInspection,
   type Session,
+  type ToolCallRecord,
   type WorkerStatus,
 } from './core/types';
+
+const MAX_TOOL_ROUNDS = 4;
 
 const CORE_SYSTEM_INSTRUCTION =
   'You are LowCon, a private, deterministic assistant running on this device. Respect all pinned project rules, cite local memory when relevant, and keep responses accurate and concise.';
 
 function buildEffectiveCoreInstruction(settings: AppSettings): string {
+  const base = `${CORE_SYSTEM_INSTRUCTION}\n\n${TOOL_CALL_POLICY_INSTRUCTION}`;
   if (!settings.promptEffortEnabled) {
-    return CORE_SYSTEM_INSTRUCTION;
+    return base;
   }
   const effortPrompt = settings.promptEffortPrompts?.[settings.effortLevel]?.trim();
   if (!effortPrompt) {
-    return CORE_SYSTEM_INSTRUCTION;
+    return base;
   }
-  return `${CORE_SYSTEM_INSTRUCTION}\n\n[Reasoning Effort: ${settings.effortLevel.toUpperCase()}]\n${effortPrompt}`;
+  return `${base}\n\n[Reasoning Effort: ${settings.effortLevel.toUpperCase()}]\n${effortPrompt}`;
+}
+
+function mapSessionHistoryTurns(messages: ChatMessage[]): ConversationTurnCandidate[] {
+  return messages
+    .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.isError && m.content.trim())
+    .map((m) => {
+      let content = m.content;
+      if (m.role === 'assistant' && m.generatedFiles && m.generatedFiles.length > 0) {
+        const fileSummary = m.generatedFiles
+          .map((f) => `${f.filename} (${f.language}, ${countLines(f.content)} lines)`)
+          .join(', ');
+        content = `${content}\n\n[Attached generated files: ${fileSummary}]`;
+      }
+      return {
+        id: m.id,
+        role: m.role as 'user' | 'assistant',
+        content,
+      };
+    });
 }
 
 function takeNextWordChunk(
@@ -123,14 +160,7 @@ function buildLivePreviewInspection(
     : [];
 
   const summaries = buildSummaryCandidates(memoryNotes, sessionId);
-
-  const historyTurns = (session?.messages ?? [])
-    .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.isError && m.content.trim())
-    .map((m) => ({
-      id: m.id,
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-    }));
+  const historyTurns = mapSessionHistoryTurns(session?.messages ?? []);
 
   const rawDraft = composerText.trim();
   const previewUserMsg = attachedFile
@@ -159,6 +189,7 @@ function buildLivePreviewInspection(
     })),
     conversationTurns: historyTurns,
     summaries,
+    tools: [CREATE_FILE_TOOL_DEFINITION],
   };
 
   const result = assembleContext(candidates, {
@@ -224,6 +255,10 @@ export const App: React.FC = () => {
   const [hoveredSegment, setHoveredSegment] = useState<ContextSegmentKey | null>(null);
   const [showPromptInspector, setShowPromptInspector] = useState(false);
   const [activeSources, setActiveSources] = useState<string[] | null>(null);
+  const [previewFile, setPreviewFile] = useState<{
+    file: GeneratedFileArtifact;
+    sessionId: string;
+  } | null>(null);
   const [lastTurnInspection, setLastTurnInspection] = useState<PromptInspection | null>(null);
   const [workerStatus, setWorkerStatus] = useState<WorkerStatus>({ state: 'unloaded' });
   const [generatingSessionId, setGeneratingSessionId] = useState<string | null>(null);
@@ -436,6 +471,7 @@ export const App: React.FC = () => {
       messages: [],
     };
     setLastTurnInspection(null);
+    setPreviewFile(null);
     setWorkspace((prev) => ({
       ...prev,
       sessions: [newSession, ...prev.sessions],
@@ -446,6 +482,7 @@ export const App: React.FC = () => {
 
   const handleSelectSession = useCallback((sessionId: string) => {
     setLastTurnInspection(null);
+    setPreviewFile((curr) => (curr && curr.sessionId === sessionId ? curr : null));
     setWorkspace((prev) => ({
       ...prev,
       activeSessionId: sessionId,
@@ -455,6 +492,7 @@ export const App: React.FC = () => {
 
   const handleDeleteSession = useCallback((sessionId: string) => {
     setLastTurnInspection(null);
+    setPreviewFile((curr) => (curr && curr.sessionId === sessionId ? null : curr));
     setWorkspace((prev) => {
       const remaining = prev.sessions.filter((s) => s.id !== sessionId);
       if (remaining.length === 0) return prev;
@@ -514,37 +552,35 @@ export const App: React.FC = () => {
       : [];
 
     const summaryCandidates = buildSummaryCandidates(workspace.memoryNotes, targetSessionId);
+    const historyTurns = mapSessionHistoryTurns(activeSession.messages);
 
-    const historyTurns = activeSession.messages
-      .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.isError && m.content.trim())
-      .map((m) => ({
-        id: m.id,
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-      }));
+    const baseAssemblyCandidates = {
+      coreInstruction: buildEffectiveCoreInstruction(workspace.settings),
+      pinnedFacts: pinnedNotes.map((n) => ({
+        id: n.id,
+        title: n.title,
+        content: n.content,
+        sourceReference: n.sourceReference,
+      })),
+      taskState: activeSession.taskGoal ? { goal: activeSession.taskGoal } : undefined,
+      retrievedMemories: retrievedScored.map((s) => ({
+        id: s.note.id,
+        title: s.note.title,
+        excerpt: s.note.content,
+        sourceMessageId: s.note.sourceMessageIds[0],
+        relevanceScore: s.finalScore,
+        isPinned: false,
+      })),
+      summaries: summaryCandidates,
+      tools: [CREATE_FILE_TOOL_DEFINITION],
+    };
 
     // 4. Deterministic budget-first context assembly with user's exact reserve % & model template
     const assemblyResult = assembleContext(
       {
-        coreInstruction: buildEffectiveCoreInstruction(workspace.settings),
+        ...baseAssemblyCandidates,
         currentUserMessage: userContent,
-        pinnedFacts: pinnedNotes.map((n) => ({
-          id: n.id,
-          title: n.title,
-          content: n.content,
-          sourceReference: n.sourceReference,
-        })),
-        taskState: activeSession.taskGoal ? { goal: activeSession.taskGoal } : undefined,
-        retrievedMemories: retrievedScored.map((s) => ({
-          id: s.note.id,
-          title: s.note.title,
-          excerpt: s.note.content,
-          sourceMessageId: s.note.sourceMessageIds[0],
-          relevanceScore: s.finalScore,
-          isPinned: false,
-        })),
         conversationTurns: historyTurns,
-        summaries: summaryCandidates,
       },
       {
         modelContextLimit: effectiveLimit,
@@ -638,16 +674,14 @@ export const App: React.FC = () => {
     let thinkingFinishedAt: number | null = null;
     let streamCompletion: {
       totalTokens: number;
-      stopReason: 'done' | 'max_tokens' | 'stop_sequence';
+      stopReason: StreamStopReason;
       tokensPerSecond: number;
     } | null = null;
     let dripStopped = false;
+    const collectedFiles: GeneratedFileArtifact[] = [];
+    const toolActivityLabels: string[] = [];
 
-    const finalizeStream = (completion: NonNullable<typeof streamCompletion>) => {
-      const thinkingDurationMs =
-        thinkingStartedAt !== null
-          ? Math.max(100, (thinkingFinishedAt ?? performance.now()) - thinkingStartedAt)
-          : undefined;
+    const updateAssistantMessage = (updater: (m: ChatMessage) => ChatMessage) => {
       setWorkspace((prev) => ({
         ...prev,
         sessions: prev.sessions.map((s) => {
@@ -655,22 +689,26 @@ export const App: React.FC = () => {
           return {
             ...s,
             updatedAt: Date.now(),
-            messages: s.messages.map((m) =>
-              m.id === assistantMsgId
-                ? {
-                    ...m,
-                    tokenCount: completion.totalTokens,
-                    tokensPerSecond:
-                      completion.tokensPerSecond > 0
-                        ? completion.tokensPerSecond
-                        : m.tokensPerSecond,
-                    stopReason: completion.stopReason,
-                    thinkingDurationMs: thinkingDurationMs ?? m.thinkingDurationMs,
-                  }
-                : m,
-            ),
+            messages: s.messages.map((m) => (m.id === assistantMsgId ? updater(m) : m)),
           };
         }),
+      }));
+    };
+
+    const finalizeStream = (completion: NonNullable<typeof streamCompletion>) => {
+      const thinkingDurationMs =
+        thinkingStartedAt !== null
+          ? Math.max(100, (thinkingFinishedAt ?? performance.now()) - thinkingStartedAt)
+          : undefined;
+      updateAssistantMessage((m) => ({
+        ...m,
+        tokenCount: completion.totalTokens,
+        tokensPerSecond:
+          completion.tokensPerSecond > 0 ? completion.tokensPerSecond : m.tokensPerSecond,
+        stopReason: completion.stopReason,
+        thinkingDurationMs: thinkingDurationMs ?? m.thinkingDurationMs,
+        ...(collectedFiles.length > 0 ? { generatedFiles: [...collectedFiles] } : {}),
+        ...(toolActivityLabels.length > 0 ? { toolActivity: [...toolActivityLabels] } : {}),
       }));
       setLiveTokensPerSecond(null);
       setLastTurnInspection(null);
@@ -697,19 +735,7 @@ export const App: React.FC = () => {
         pendingWordQueue = rest;
 
         if (chunk) {
-          setWorkspace((prev) => ({
-            ...prev,
-            sessions: prev.sessions.map((s) => {
-              if (s.id !== targetSessionId) return s;
-              return {
-                ...s,
-                updatedAt: Date.now(),
-                messages: s.messages.map((m) =>
-                  m.id === assistantMsgId ? { ...m, content: m.content + chunk } : m,
-                ),
-              };
-            }),
-          }));
+          updateAssistantMessage((m) => ({ ...m, content: m.content + chunk }));
         }
       }
 
@@ -727,24 +753,11 @@ export const App: React.FC = () => {
         activeDripCleanupRef.current = null;
       }
       setLiveTokensPerSecond(null);
-      setWorkspace((prev) => ({
-        ...prev,
-        sessions: prev.sessions.map((s) => {
-          if (s.id !== targetSessionId) return s;
-          return {
-            ...s,
-            messages: s.messages.map((m) =>
-              m.id === assistantMsgId
-                ? {
-                    ...m,
-                    content: m.content
-                      ? `${m.content}\n\n[Generation stopped by user]`
-                      : '[Generation stopped by user]',
-                  }
-                : m,
-            ),
-          };
-        }),
+      updateAssistantMessage((m) => ({
+        ...m,
+        content: m.content
+          ? `${m.content}\n\n[Generation stopped by user]`
+          : '[Generation stopped by user]',
       }));
       setGeneratingSessionId((curr) => (curr === targetSessionId ? null : curr));
     };
@@ -762,143 +775,289 @@ export const App: React.FC = () => {
     };
     activeDripCleanupRef.current = stopDrip;
 
-    // 6. Stream tokens strictly to targetSessionId (session-isolated even if user switches tabs/sessions)
-    await controllerRef.current.startGeneration(
-      targetSessionId,
-      {
-        exactRenderedPrompt: inspection.exactRenderedPrompt,
-        structuredMessages: inspection.structuredMessages,
-        maxTokens: inspection.budgetPartition.outputReserve,
-        temperature: 0.7,
-        topP: 0.9,
-        stopSequences: stopSequencesForTemplate(activeModel.chatTemplate),
-        lmStudioEndpoint: workspace.settings.lmStudioEndpoint,
-        selectedLmModel: workspace.settings.selectedLmModel,
-        reasoningEffort: workspace.settings.promptEffortEnabled
-          ? undefined
-          : workspace.settings.effortLevel,
-      },
-      {
-        onThinkingToken: (token) => {
-          if (dripStopped) return;
-          if (thinkingStartedAt === null) {
-            thinkingStartedAt = performance.now();
-          }
-          setWorkspace((prev) => ({
-            ...prev,
-            sessions: prev.sessions.map((s) => {
-              if (s.id !== targetSessionId) return s;
-              return {
-                ...s,
-                updatedAt: Date.now(),
-                messages: s.messages.map((m) =>
-                  m.id === assistantMsgId
-                    ? { ...m, thinkingContent: (m.thinkingContent ?? '') + token }
-                    : m,
-                ),
-              };
-            }),
-          }));
-        },
-        onToken: (token) => {
-          if (dripStopped) return;
-          if (thinkingStartedAt !== null && thinkingFinishedAt === null && token.trim()) {
-            thinkingFinishedAt = performance.now();
-          }
-          pendingWordQueue += token;
-        },
-        onProgress: (progress) => {
-          if (dripStopped) return;
-          if (progress.tokensPerSecond > 0) {
-            setLiveTokensPerSecond(progress.tokensPerSecond);
-            setWorkspace((prev) => ({
-              ...prev,
-              sessions: prev.sessions.map((s) => {
-                if (s.id !== targetSessionId) return s;
-                return {
-                  ...s,
-                  messages: s.messages.map((m) =>
-                    m.id === assistantMsgId
-                      ? { ...m, tokensPerSecond: progress.tokensPerSecond }
-                      : m,
-                  ),
-                };
-              }),
-            }));
-          }
-        },
-        onComplete: (totalTokens, stopReason, stats) => {
-          logger.info(
-            'chat',
-            `Generation complete (session=${targetSessionId.slice(0, 8)}, tokens=${totalTokens}, stop=${stopReason}, tps=${stats?.tokensPerSecond ?? 0})`,
-          );
-          if (thinkingStartedAt !== null && thinkingFinishedAt === null) {
-            thinkingFinishedAt = performance.now();
-          }
-          const completion = {
-            totalTokens,
-            stopReason,
-            tokensPerSecond: stats?.tokensPerSecond ?? 0,
-          };
-          if (pendingWordQueue.length === 0) {
-            stopDrip();
-            finalizeStream(completion);
+    type StepOutcome =
+      | {
+          status: 'complete';
+          totalTokens: number;
+          stopReason: StreamStopReason;
+          tokensPerSecond: number;
+          toolCalls?: ToolCallRecord[];
+          rawText: string;
+        }
+      | { status: 'cancelled' }
+      | { status: 'error'; message: string };
+
+    const runStep = (stepInspection: PromptInspection): Promise<StepOutcome> =>
+      new Promise((resolve) => {
+        let stepRawText = '';
+        void controllerRef.current!.startGeneration(
+          targetSessionId,
+          {
+            exactRenderedPrompt: stepInspection.exactRenderedPrompt,
+            structuredMessages: stepInspection.structuredMessages,
+            maxTokens: stepInspection.budgetPartition.outputReserve,
+            temperature: 0.7,
+            topP: 0.9,
+            stopSequences: stopSequencesForTemplate(activeModel.chatTemplate),
+            lmStudioEndpoint: workspace.settings.lmStudioEndpoint,
+            selectedLmModel: workspace.settings.selectedLmModel,
+            reasoningEffort: workspace.settings.promptEffortEnabled
+              ? undefined
+              : workspace.settings.effortLevel,
+            tools: stepInspection.tools,
+            toolChoice: stepInspection.tools?.length ? 'auto' : undefined,
+          },
+          {
+            onThinkingToken: (token) => {
+              if (dripStopped) return;
+              if (thinkingStartedAt === null) {
+                thinkingStartedAt = performance.now();
+              }
+              updateAssistantMessage((m) => ({
+                ...m,
+                thinkingContent: (m.thinkingContent ?? '') + token,
+              }));
+            },
+            onToolCallDetected: (toolName) => {
+              if (dripStopped) return;
+              const label =
+                toolName === CREATE_FILE_TOOL_NAME ? 'Writing file...' : `Running ${toolName}...`;
+              updateAssistantMessage((m) => ({
+                ...m,
+                toolActivity: [...toolActivityLabels, label],
+              }));
+            },
+            onToken: (token) => {
+              if (dripStopped) return;
+              if (thinkingStartedAt !== null && thinkingFinishedAt === null && token.trim()) {
+                thinkingFinishedAt = performance.now();
+              }
+              stepRawText += token;
+              pendingWordQueue += token;
+            },
+            onProgress: (progress) => {
+              if (dripStopped) return;
+              if (progress.tokensPerSecond > 0) {
+                setLiveTokensPerSecond(progress.tokensPerSecond);
+                updateAssistantMessage((m) => ({
+                  ...m,
+                  tokensPerSecond: progress.tokensPerSecond,
+                }));
+              }
+            },
+            onComplete: (totalTokens, stopReason, stats) => {
+              resolve({
+                status: 'complete',
+                totalTokens,
+                stopReason,
+                tokensPerSecond: stats?.tokensPerSecond ?? 0,
+                toolCalls: stats?.toolCalls,
+                rawText: stepRawText,
+              });
+            },
+            onCancelled: () => resolve({ status: 'cancelled' }),
+            onError: (message) => resolve({ status: 'error', message }),
+          },
+        );
+      });
+
+    // 6. Execute bounded multi-turn tool loop (session-isolated even if user switches tabs/sessions)
+    const inTurnToolTurns: ConversationTurnCandidate[] = [
+      { id: userMsgId, role: 'user', content: userContent },
+    ];
+    let currentInspection = inspection;
+    let cumulativeTokens = 0;
+    let latestTps = 0;
+
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const outcome = await runStep(currentInspection);
+
+      if (outcome.status === 'cancelled') {
+        stopDrip();
+        setLiveTokensPerSecond(null);
+        logger.info('chat', `Generation cancelled (session=${targetSessionId.slice(0, 8)})`);
+        updateAssistantMessage((m) => ({
+          ...m,
+          content: m.content
+            ? `${m.content}\n\n[Generation stopped by user]`
+            : '[Generation stopped by user]',
+        }));
+        setGeneratingSessionId((curr) => (curr === targetSessionId ? null : curr));
+        return;
+      }
+
+      if (outcome.status === 'error') {
+        stopDrip();
+        setLiveTokensPerSecond(null);
+        setBannerError(outcome.message);
+        updateAssistantMessage((m) => ({
+          ...m,
+          content: outcome.message,
+          isError: true,
+        }));
+        setGeneratingSessionId((curr) => (curr === targetSessionId ? null : curr));
+        return;
+      }
+
+      cumulativeTokens += outcome.totalTokens;
+      if (outcome.tokensPerSecond > 0) {
+        latestTps = outcome.tokensPerSecond;
+      }
+
+      const hasToolCalls =
+        outcome.stopReason === 'tool_calls' &&
+        outcome.toolCalls &&
+        outcome.toolCalls.length > 0 &&
+        round < MAX_TOOL_ROUNDS - 1;
+
+      if (!hasToolCalls) {
+        logger.info(
+          'chat',
+          `Generation complete (session=${targetSessionId.slice(0, 8)}, tokens=${cumulativeTokens}, stop=${outcome.stopReason}, tps=${latestTps})`,
+        );
+        if (thinkingStartedAt !== null && thinkingFinishedAt === null) {
+          thinkingFinishedAt = performance.now();
+        }
+        const completion = {
+          totalTokens: cumulativeTokens,
+          stopReason: outcome.stopReason,
+          tokensPerSecond: latestTps,
+        };
+        if (pendingWordQueue.length === 0) {
+          stopDrip();
+          finalizeStream(completion);
+        } else {
+          streamCompletion = completion;
+          activeDripCleanupRef.current = handleCancelDrip;
+        }
+        return;
+      }
+
+      // Discard any partial tool-preamble whitespace if nothing meaningful streamed, or let it finish naturally
+      const roundToolCalls = outcome.toolCalls!;
+      const compactCallsForBudget: ToolCallRecord[] = [];
+
+      inTurnToolTurns.push({
+        id: `tool_req_${round}_${createUuid().slice(0, 6)}`,
+        role: 'assistant',
+        content: outcome.rawText,
+        toolCalls: roundToolCalls,
+      });
+
+      for (const tc of roundToolCalls) {
+        if (tc.function.name === CREATE_FILE_TOOL_NAME) {
+          const exec = executeCreateFileTool(tc.function.arguments, createUuid);
+          if (exec.ok) {
+            collectedFiles.push(exec.artifact);
+            toolActivityLabels.push(`Created ${exec.artifact.filename}`);
+            logger.info(
+              'chat',
+              `Tool create_file wrote '${exec.artifact.filename}' (${countLines(exec.artifact.content)} lines)`,
+            );
+            compactCallsForBudget.push({
+              ...tc,
+              function: {
+                name: tc.function.name,
+                arguments: JSON.stringify({
+                  filename: exec.artifact.filename,
+                  title: exec.artifact.title,
+                  language: exec.artifact.language,
+                  content: '[omitted to fit context budget]',
+                }),
+              },
+            });
           } else {
-            streamCompletion = completion;
-            activeDripCleanupRef.current = handleCancelDrip;
+            toolActivityLabels.push(`Failed create_file: ${exec.error}`);
+            logger.warn('chat', `Tool create_file error: ${exec.error}`);
+            compactCallsForBudget.push(tc);
           }
+          inTurnToolTurns.push({
+            id: `tool_res_${tc.id}`,
+            role: 'tool',
+            toolCallId: tc.id,
+            name: tc.function.name,
+            content: exec.toolResultJson,
+          });
+        } else {
+          const errJson = JSON.stringify({
+            status: 'error',
+            error: `Unsupported tool '${tc.function.name}'. Only '${CREATE_FILE_TOOL_NAME}' is available.`,
+          });
+          compactCallsForBudget.push(tc);
+          inTurnToolTurns.push({
+            id: `tool_res_${tc.id}`,
+            role: 'tool',
+            toolCallId: tc.id,
+            name: tc.function.name,
+            content: errJson,
+          });
+        }
+      }
+
+      updateAssistantMessage((m) => ({
+        ...m,
+        generatedFiles: collectedFiles.length > 0 ? [...collectedFiles] : m.generatedFiles,
+        toolActivity: toolActivityLabels.length > 0 ? [...toolActivityLabels] : m.toolActivity,
+      }));
+
+      // Re-assemble context for the next round (with compact fallback if full tool payload overflows tiny windows)
+      let nextAssembly = assembleContext(
+        {
+          ...baseAssemblyCandidates,
+          currentUserMessage: '',
+          conversationTurns: [...historyTurns, ...inTurnToolTurns],
         },
-        onCancelled: () => {
-          stopDrip();
-          setLiveTokensPerSecond(null);
-          logger.info('chat', `Generation cancelled (session=${targetSessionId.slice(0, 8)})`);
-          setWorkspace((prev) => ({
-            ...prev,
-            sessions: prev.sessions.map((s) => {
-              if (s.id !== targetSessionId) return s;
-              return {
-                ...s,
-                messages: s.messages.map((m) =>
-                  m.id === assistantMsgId
-                    ? {
-                        ...m,
-                        content: m.content
-                          ? `${m.content}\n\n[Generation stopped by user]`
-                          : '[Generation stopped by user]',
-                      }
-                    : m,
-                ),
-              };
-            }),
-          }));
-          setGeneratingSessionId((curr) => (curr === targetSessionId ? null : curr));
+        {
+          modelContextLimit: effectiveLimit,
+          outputReservePct: workspace.settings.outputReservePct,
+          safetyMarginPct: workspace.settings.safetyMarginPct,
+          templateType: activeModel.chatTemplate,
+          allowEmptyUserMessage: true,
         },
-        onError: (message) => {
-          stopDrip();
-          setLiveTokensPerSecond(null);
-          setBannerError(message);
-          setWorkspace((prev) => ({
-            ...prev,
-            sessions: prev.sessions.map((s) => {
-              if (s.id !== targetSessionId) return s;
-              return {
-                ...s,
-                messages: s.messages.map((m) =>
-                  m.id === assistantMsgId
-                    ? {
-                        ...m,
-                        content: message,
-                        isError: true,
-                      }
-                    : m,
-                ),
-              };
-            }),
-          }));
-          setGeneratingSessionId((curr) => (curr === targetSessionId ? null : curr));
-        },
-      },
-    );
+      );
+
+      if (!nextAssembly.ok && nextAssembly.code === 'MANDATORY_EXCEEDS_BUDGET') {
+        const compactedTurns = inTurnToolTurns.map((t) =>
+          t.role === 'assistant' && t.toolCalls === roundToolCalls
+            ? { ...t, toolCalls: compactCallsForBudget }
+            : t,
+        );
+        nextAssembly = assembleContext(
+          {
+            ...baseAssemblyCandidates,
+            currentUserMessage: '',
+            conversationTurns: [...historyTurns, ...compactedTurns],
+          },
+          {
+            modelContextLimit: effectiveLimit,
+            outputReservePct: workspace.settings.outputReservePct,
+            safetyMarginPct: workspace.settings.safetyMarginPct,
+            templateType: activeModel.chatTemplate,
+            allowEmptyUserMessage: true,
+          },
+        );
+      }
+
+      if (!nextAssembly.ok) {
+        stopDrip();
+        setLiveTokensPerSecond(null);
+        setBannerError(nextAssembly.message);
+        updateAssistantMessage((m) => ({
+          ...m,
+          content: nextAssembly.message,
+          isError: true,
+        }));
+        setGeneratingSessionId((curr) => (curr === targetSessionId ? null : curr));
+        return;
+      }
+
+      currentInspection = nextAssembly.inspection;
+      setLastTurnInspection(currentInspection);
+      updateAssistantMessage((m) => ({
+        ...m,
+        turnBudget: buildTurnContextBudget(currentInspection),
+      }));
+    }
   }, [
     composerText,
     attachedFile,
@@ -1256,27 +1415,46 @@ export const App: React.FC = () => {
                 }}
                 onOpenSources={setActiveSources}
                 onSaveAsNote={handleSaveReplyAsNote}
+                activePreviewFileId={
+                  previewFile && previewFile.sessionId === activeSession.id
+                    ? previewFile.file.id
+                    : null
+                }
+                onOpenFilePreview={(file) => {
+                  setPreviewFile((curr) =>
+                    curr && curr.file.id === file.id && curr.sessionId === activeSession.id
+                      ? null
+                      : { file, sessionId: activeSession.id },
+                  );
+                }}
               />
 
-              <ContextPanel
-                budget={activeTurnBudget}
-                previewWarning={previewWarning}
-                taskGoal={activeSession.taskGoal}
-                onUpdateTaskGoal={handleUpdateTaskGoal}
-                memoryNotes={workspace.memoryNotes}
-                includedMemoryIds={activeInspection.includedMemoryIds}
-                memoryRetrievalEnabled={workspace.settings.memoryRetrievalEnabled}
-                onToggleMemoryRetrieval={(enabled) => {
-                  setLastTurnInspection(null);
-                  setWorkspace((prev) => ({
-                    ...prev,
-                    settings: { ...prev.settings, memoryRetrievalEnabled: enabled },
-                  }));
-                }}
-                hoveredSegment={hoveredSegment}
-                onHoverSegment={setHoveredSegment}
-                onOpenPromptInspector={() => setShowPromptInspector(true)}
-              />
+              {previewFile && previewFile.sessionId === activeSession.id ? (
+                <FilePreviewPanel
+                  file={previewFile.file}
+                  onClose={() => setPreviewFile(null)}
+                />
+              ) : (
+                <ContextPanel
+                  budget={activeTurnBudget}
+                  previewWarning={previewWarning}
+                  taskGoal={activeSession.taskGoal}
+                  onUpdateTaskGoal={handleUpdateTaskGoal}
+                  memoryNotes={workspace.memoryNotes}
+                  includedMemoryIds={activeInspection.includedMemoryIds}
+                  memoryRetrievalEnabled={workspace.settings.memoryRetrievalEnabled}
+                  onToggleMemoryRetrieval={(enabled) => {
+                    setLastTurnInspection(null);
+                    setWorkspace((prev) => ({
+                      ...prev,
+                      settings: { ...prev.settings, memoryRetrievalEnabled: enabled },
+                    }));
+                  }}
+                  hoveredSegment={hoveredSegment}
+                  onHoverSegment={setHoveredSegment}
+                  onOpenPromptInspector={() => setShowPromptInspector(true)}
+                />
+              )}
             </>
           )}
 

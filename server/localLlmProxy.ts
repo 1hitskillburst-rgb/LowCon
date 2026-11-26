@@ -29,21 +29,165 @@ export function normalizeLocalEndpoint(rawEndpoint: string): string {
   return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
 }
 
+interface SanitizedToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
 interface SanitizedChatMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | null;
+  tool_calls?: SanitizedToolCall[];
+  tool_call_id?: string;
+  name?: string;
+}
+
+interface SanitizedToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+}
+
+function validateToolCalls(input: unknown): SanitizedToolCall[] | null {
+  if (!Array.isArray(input) || input.length === 0 || input.length > 32) {
+    return null;
+  }
+  const out: SanitizedToolCall[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== 'object') return null;
+    const rec = item as {
+      id?: unknown;
+      type?: unknown;
+      function?: { name?: unknown; arguments?: unknown };
+    };
+    if (typeof rec.id !== 'string' || !rec.id.trim()) return null;
+    if (rec.type !== undefined && rec.type !== 'function') return null;
+    if (!rec.function || typeof rec.function !== 'object') return null;
+    if (typeof rec.function.name !== 'string' || !rec.function.name.trim()) return null;
+    if (typeof rec.function.arguments !== 'string') return null;
+    out.push({
+      id: rec.id,
+      type: 'function',
+      function: {
+        name: rec.function.name.trim(),
+        arguments: rec.function.arguments,
+      },
+    });
+  }
+  return out;
+}
+
+export function validateTools(input: unknown): SanitizedToolDefinition[] | undefined | null {
+  if (input === undefined) return undefined;
+  if (!Array.isArray(input) || input.length > 32) return null;
+  const out: SanitizedToolDefinition[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== 'object') return null;
+    const rec = item as {
+      type?: unknown;
+      function?: { name?: unknown; description?: unknown; parameters?: unknown };
+    };
+    if (rec.type !== 'function' || !rec.function || typeof rec.function !== 'object') return null;
+    if (typeof rec.function.name !== 'string' || !rec.function.name.trim()) return null;
+    if (
+      rec.function.description !== undefined &&
+      typeof rec.function.description !== 'string'
+    ) {
+      return null;
+    }
+    if (
+      rec.function.parameters !== undefined &&
+      (!rec.function.parameters ||
+        typeof rec.function.parameters !== 'object' ||
+        Array.isArray(rec.function.parameters))
+    ) {
+      return null;
+    }
+    out.push({
+      type: 'function',
+      function: {
+        name: rec.function.name.trim(),
+        ...(typeof rec.function.description === 'string'
+          ? { description: rec.function.description }
+          : {}),
+        ...(rec.function.parameters
+          ? { parameters: rec.function.parameters as Record<string, unknown> }
+          : {}),
+      },
+    });
+  }
+  return out;
+}
+
+function validateToolChoice(input: unknown): unknown {
+  if (input === undefined) return undefined;
+  if (typeof input === 'string') {
+    return input === 'auto' || input === 'none' || input === 'required' ? input : undefined;
+  }
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    const rec = input as { type?: unknown; function?: { name?: unknown } };
+    if (
+      rec.type === 'function' &&
+      rec.function &&
+      typeof rec.function.name === 'string' &&
+      rec.function.name.trim()
+    ) {
+      return { type: 'function', function: { name: rec.function.name.trim() } };
+    }
+  }
+  return undefined;
 }
 
 export function validateChatMessages(input: unknown): SanitizedChatMessage[] | null {
   if (!Array.isArray(input) || input.length === 0 || input.length > 500) {
     return null;
   }
-  const allowedRoles = new Set(['system', 'user', 'assistant']);
+  const allowedRoles = new Set(['system', 'user', 'assistant', 'tool']);
   const sanitized: SanitizedChatMessage[] = [];
   for (const item of input) {
     if (!item || typeof item !== 'object') return null;
-    const rec = item as { role?: unknown; content?: unknown };
+    const rec = item as {
+      role?: unknown;
+      content?: unknown;
+      tool_calls?: unknown;
+      tool_call_id?: unknown;
+      name?: unknown;
+    };
     if (typeof rec.role !== 'string' || !allowedRoles.has(rec.role)) return null;
+
+    if (rec.role === 'tool') {
+      if (typeof rec.content !== 'string') return null;
+      if (typeof rec.tool_call_id !== 'string' || !rec.tool_call_id.trim()) return null;
+      sanitized.push({
+        role: 'tool',
+        content: rec.content,
+        tool_call_id: rec.tool_call_id,
+        ...(typeof rec.name === 'string' && rec.name.trim() ? { name: rec.name.trim() } : {}),
+      });
+      continue;
+    }
+
+    if (rec.role === 'assistant' && rec.tool_calls !== undefined) {
+      const toolCalls = validateToolCalls(rec.tool_calls);
+      if (!toolCalls) return null;
+      if (rec.content !== undefined && rec.content !== null && typeof rec.content !== 'string') {
+        return null;
+      }
+      sanitized.push({
+        role: 'assistant',
+        content: typeof rec.content === 'string' ? rec.content : null,
+        tool_calls: toolCalls,
+      });
+      continue;
+    }
+
     if (typeof rec.content !== 'string') return null;
     sanitized.push({
       role: rec.role as SanitizedChatMessage['role'],
@@ -237,6 +381,12 @@ export function createLocalLlmProxyRouter(): Router {
         typeof body.reasoning_effort === 'string' && allowedEfforts.has(body.reasoning_effort)
           ? body.reasoning_effort
           : undefined;
+      const tools = validateTools(body.tools);
+      if (tools === null) {
+        res.status(400).json({ error: 'Invalid chat payload: malformed tools array.' });
+        return;
+      }
+      const toolChoice = tools && tools.length > 0 ? validateToolChoice(body.tool_choice) : undefined;
 
       const base = normalizeLocalEndpoint(endpoint);
       const url = `${base}/chat/completions`;
@@ -253,6 +403,8 @@ export function createLocalLlmProxyRouter(): Router {
           stream,
           stop,
           ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+          ...(tools && tools.length > 0 ? { tools } : {}),
+          ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
         }),
         signal: controller.signal,
       });
