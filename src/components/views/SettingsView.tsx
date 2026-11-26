@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Lock, Palette, RefreshCw, ShieldCheck, Terminal, Trash2 } from 'lucide-react';
+import { Lock, Palette, RefreshCw, ShieldCheck, Sparkles, Terminal, Trash2 } from 'lucide-react';
 import { calculateBudgetPartition } from '../../core/context';
 import { formatNumber } from '../../core/privacy';
+import { DEFAULT_PROMPT_EFFORT_PROMPTS } from '../../core/storage';
 import { createDefaultTheme, THEME_PRESETS } from '../../core/theme';
 import {
   getEffectiveContextLimit,
@@ -9,6 +10,7 @@ import {
   type BackendType,
   type DiagnosticEntry,
   type DiagnosticLevel,
+  type EffortLevel,
   type ModelProfile,
   type ThemeSettings,
 } from '../../core/types';
@@ -113,7 +115,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col bg-[var(--lc-bg)] text-[var(--lc-ink)]">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--lc-bg)] text-[var(--lc-ink)]">
       {/* Header */}
       <header className="flex shrink-0 items-center justify-between border-b border-[var(--lc-line)] px-7 py-3">
         <div className="flex items-center text-[13px]">
@@ -123,7 +125,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       </header>
 
       {/* Body */}
-      <div className="flex-1 overflow-y-auto px-7 py-6">
+      <div className="min-h-0 flex-1 overflow-y-auto px-7 py-6">
         <div className="mx-auto max-w-[780px] space-y-5 pb-8">
           <div>
             <h1 className="text-[22px] font-bold tracking-tight text-[var(--lc-ink)]">
@@ -324,6 +326,107 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </select>
                 </div>
               )}
+            </div>
+          </section>
+
+          {/* 2b. Reasoning & Prompt Effort */}
+          <section className="rounded-[8px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] p-5 text-[var(--lc-surf-ink)]">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-[var(--lc-surf-ink)]" />
+                <h2 className="text-[15px] font-bold text-[var(--lc-surf-ink)]">
+                  Prompt Effort (System Prompt Fallback)
+                </h2>
+              </div>
+
+              <div className="flex items-center gap-2.5">
+                <span className="text-[12px] font-medium text-[var(--lc-surf-ink2)]">
+                  Prompt effort
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={settings.promptEffortEnabled}
+                  aria-label="Toggle prompt effort system prompt injection"
+                  data-testid="prompt-effort-toggle"
+                  onClick={() =>
+                    onUpdateSettings({ promptEffortEnabled: !settings.promptEffortEnabled })
+                  }
+                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                    settings.promptEffortEnabled ? 'bg-[var(--lc-accent)]' : 'bg-[var(--lc-seg-tpl)]'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                      settings.promptEffortEnabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            <p className="mt-1 text-[12.5px] text-[var(--lc-surf-mute)]">
+              When enabled, models that ignore native <code>reasoning_effort</code> receive the
+              active effort level&apos;s system prompt below. When disabled, LowCon forwards{' '}
+              <code>reasoning_effort</code> directly to LM Studio.
+            </p>
+
+            <div className="mt-4 space-y-3">
+              {(
+                [
+                  { id: 'low', label: 'Low' },
+                  { id: 'medium', label: 'Medium' },
+                  { id: 'high', label: 'High' },
+                  { id: 'xhigh', label: 'Extra High (xhigh)' },
+                ] as Array<{ id: EffortLevel; label: string }>
+              ).map((lvl) => {
+                const isActiveLevel = settings.effortLevel === lvl.id;
+                return (
+                  <div key={lvl.id}>
+                    <div className="flex items-center justify-between">
+                      <label
+                        htmlFor={`prompt-effort-${lvl.id}`}
+                        className="text-[12px] font-semibold text-[var(--lc-surf-ink2)]"
+                      >
+                        {lvl.label}
+                        {isActiveLevel && (
+                          <span className="ml-2 rounded bg-[var(--lc-accent)]/15 px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--lc-accent)]">
+                            Active
+                          </span>
+                        )}
+                      </label>
+                    </div>
+                    <textarea
+                      id={`prompt-effort-${lvl.id}`}
+                      rows={2}
+                      value={settings.promptEffortPrompts[lvl.id]}
+                      onChange={(e) =>
+                        onUpdateSettings({
+                          promptEffortPrompts: {
+                            ...settings.promptEffortPrompts,
+                            [lvl.id]: e.target.value,
+                          },
+                        })
+                      }
+                      className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[12.5px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
+                    />
+                  </div>
+                );
+              })}
+
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateSettings({
+                      promptEffortPrompts: { ...DEFAULT_PROMPT_EFFORT_PROMPTS },
+                    })
+                  }
+                  className="rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1 text-[11.5px] font-medium text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]"
+                >
+                  Reset default prompts
+                </button>
+              </div>
             </div>
           </section>
 

@@ -5,8 +5,18 @@ import type {
   MemoryNote,
   ModelProfile,
   PersistedWorkspace,
+  PromptEffortPrompts,
   Session,
 } from './types';
+
+export const DEFAULT_PROMPT_EFFORT_PROMPTS: PromptEffortPrompts = {
+  low: 'Keep reasoning brief and direct. Prioritize concise, fast answers with minimal step-by-step deliberation.',
+  medium:
+    'Use balanced reasoning. Think through key constraints and edge cases before answering clearly.',
+  high: 'Think thoroughly step by step. Verify assumptions, edge cases, and constraints carefully before giving your final answer.',
+  xhigh:
+    'Perform exhaustive, deep first-principles reasoning. Carefully analyze all edge cases, alternatives, and invariants before producing a comprehensive answer.',
+};
 import { decryptVaultString, encryptVaultString } from './vault';
 
 const WORKSPACE_STORAGE_KEY = 'lowcon.workspace.v1';
@@ -34,6 +44,9 @@ export function createDefaultSettings(): AppSettings {
     connectionStatus: 'Not tested yet',
     storageNamespace: 'localStorage://lowcon.workspace.v1 (Encrypted on Vault Lock)',
     theme: createDefaultTheme(),
+    effortLevel: 'medium',
+    promptEffortEnabled: false,
+    promptEffortPrompts: { ...DEFAULT_PROMPT_EFFORT_PROMPTS },
   };
 }
 
@@ -190,6 +203,10 @@ export function loadUnsealedWorkspace(logger: DiagnosticLogger): {
             ...createDefaultTheme(),
             ...(parsed.settings?.theme ?? {}),
           },
+          promptEffortPrompts: {
+            ...DEFAULT_PROMPT_EFFORT_PROMPTS,
+            ...(parsed.settings?.promptEffortPrompts ?? {}),
+          },
         },
       },
     };
@@ -266,6 +283,10 @@ export async function unsealWorkspaceVault(
         theme: {
           ...createDefaultTheme(),
           ...(rawWorkspace.settings?.theme ?? {}),
+        },
+        promptEffortPrompts: {
+          ...DEFAULT_PROMPT_EFFORT_PROMPTS,
+          ...(rawWorkspace.settings?.promptEffortPrompts ?? {}),
         },
       },
     };

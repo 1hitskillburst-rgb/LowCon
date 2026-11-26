@@ -232,6 +232,11 @@ export function createLocalLlmProxyRouter(): Router {
       const stop = Array.isArray(body.stop)
         ? body.stop.filter((s): s is string => typeof s === 'string' && s.length > 0).slice(0, 8)
         : undefined;
+      const allowedEfforts = new Set(['low', 'medium', 'high', 'xhigh']);
+      const reasoningEffort =
+        typeof body.reasoning_effort === 'string' && allowedEfforts.has(body.reasoning_effort)
+          ? body.reasoning_effort
+          : undefined;
 
       const base = normalizeLocalEndpoint(endpoint);
       const url = `${base}/chat/completions`;
@@ -247,6 +252,7 @@ export function createLocalLlmProxyRouter(): Router {
           max_tokens: maxTokens,
           stream,
           stop,
+          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
         }),
         signal: controller.signal,
       });

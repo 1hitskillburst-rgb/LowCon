@@ -256,6 +256,11 @@ async function handleChatProxy(req, res) {
     const stream = body.stream !== false;
     const base = normalizeLocalEndpoint(endpoint);
     const url = `${base}/chat/completions`;
+    const allowedEfforts = new Set(['low', 'medium', 'high', 'xhigh']);
+    const reasoningEffort =
+      typeof body.reasoning_effort === 'string' && allowedEfforts.has(body.reasoning_effort)
+        ? body.reasoning_effort
+        : undefined;
 
     const upstream = await fetch(url, {
       method: 'POST',
@@ -279,6 +284,7 @@ async function handleChatProxy(req, res) {
         stop: Array.isArray(body.stop)
           ? body.stop.filter((s) => typeof s === 'string' && s.length > 0).slice(0, 8)
           : undefined,
+        ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
       }),
       signal: controller.signal,
     });

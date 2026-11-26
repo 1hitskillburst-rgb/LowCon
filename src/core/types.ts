@@ -8,6 +8,10 @@ export type ChatTemplateType = 'ChatML' | 'Llama3' | 'Llama2' | 'Mistral' | 'Gem
 
 export type DiagnosticLevel = 'disabled' | 'minimal_redacted' | 'debug_redacted';
 
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh';
+
+export type PromptEffortPrompts = Record<EffortLevel, string>;
+
 export type ContextSegmentKey =
   | 'core'
   | 'task'
@@ -175,6 +179,9 @@ export interface AppSettings {
   connectionStatus: string;
   storageNamespace: string;
   theme?: ThemeSettings;
+  effortLevel: EffortLevel;
+  promptEffortEnabled: boolean;
+  promptEffortPrompts: PromptEffortPrompts;
 }
 
 export type WorkerStatus =

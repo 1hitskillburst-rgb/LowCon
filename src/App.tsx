@@ -52,6 +52,17 @@ import {
 const CORE_SYSTEM_INSTRUCTION =
   'You are LowCon, a private, deterministic assistant running on this device. Respect all pinned project rules, cite local memory when relevant, and keep responses accurate and concise.';
 
+function buildEffectiveCoreInstruction(settings: AppSettings): string {
+  if (!settings.promptEffortEnabled) {
+    return CORE_SYSTEM_INSTRUCTION;
+  }
+  const effortPrompt = settings.promptEffortPrompts?.[settings.effortLevel]?.trim();
+  if (!effortPrompt) {
+    return CORE_SYSTEM_INSTRUCTION;
+  }
+  return `${CORE_SYSTEM_INSTRUCTION}\n\n[Reasoning Effort: ${settings.effortLevel.toUpperCase()}]\n${effortPrompt}`;
+}
+
 function takeNextWordChunk(
   queue: string,
   maxWords: number,
@@ -129,7 +140,7 @@ function buildLivePreviewInspection(
     : rawDraft;
 
   const candidates: AssemblyCandidates = {
-    coreInstruction: CORE_SYSTEM_INSTRUCTION,
+    coreInstruction: buildEffectiveCoreInstruction(settings),
     currentUserMessage: previewUserMsg,
     pinnedFacts: pinnedNotes.map((n) => ({
       id: n.id,
@@ -350,6 +361,9 @@ export const App: React.FC = () => {
       manuallyUnloadedRef.current = false;
       setBannerError(null);
       setLastTurnInspection(null);
+      if (controllerRef.current?.isLoaded() && controllerRef.current.getLoadedModel()?.id !== modelId) {
+        controllerRef.current.unloadModel();
+      }
       setWorkspace((prev) => {
         const target = prev.models.find((m) => m.id === modelId);
         if (!target) return prev;
@@ -512,7 +526,7 @@ export const App: React.FC = () => {
     // 4. Deterministic budget-first context assembly with user's exact reserve % & model template
     const assemblyResult = assembleContext(
       {
-        coreInstruction: CORE_SYSTEM_INSTRUCTION,
+        coreInstruction: buildEffectiveCoreInstruction(workspace.settings),
         currentUserMessage: userContent,
         pinnedFacts: pinnedNotes.map((n) => ({
           id: n.id,
@@ -760,6 +774,9 @@ export const App: React.FC = () => {
         stopSequences: stopSequencesForTemplate(activeModel.chatTemplate),
         lmStudioEndpoint: workspace.settings.lmStudioEndpoint,
         selectedLmModel: workspace.settings.selectedLmModel,
+        reasoningEffort: workspace.settings.promptEffortEnabled
+          ? undefined
+          : workspace.settings.effortLevel,
       },
       {
         onThinkingToken: (token) => {
@@ -1082,14 +1099,36 @@ export const App: React.FC = () => {
 
   const handleSelectLmModel = useCallback(
     (modelName: string) => {
-      setWorkspace((prev) => ({
-        ...prev,
-        settings: {
-          ...prev.settings,
-          selectedLmModel: modelName,
-        },
-      }));
-      logger.info('settings', `Selected LM Studio server model '${modelName}'`);
+      manuallyUnloadedRef.current = false;
+      setBannerError(null);
+      setLastTurnInspection(null);
+      if (controllerRef.current?.isLoaded()) {
+        controllerRef.current.unloadModel();
+      }
+      setWorkspace((prev) => {
+        const lmProfile = prev.models.find((m) => m.backendType === 'lm_studio');
+        const nextActiveModelId = lmProfile ? lmProfile.id : prev.activeModelId;
+        if (lmProfile && controllerRef.current) {
+          const effectiveCtx = getEffectiveContextLimit(
+            lmProfile,
+            prev.settings.contextLimitOverride,
+          );
+          controllerRef.current.loadModel({
+            ...lmProfile,
+            contextOverride: effectiveCtx,
+          });
+        }
+        return {
+          ...prev,
+          activeModelId: nextActiveModelId,
+          settings: {
+            ...prev.settings,
+            activeBackendType: lmProfile ? 'lm_studio' : prev.settings.activeBackendType,
+            selectedLmModel: modelName,
+          },
+        };
+      });
+      logger.info('settings', `Selected LM Studio server model '${modelName}' (previous model unloaded)`);
     },
     [logger],
   );
@@ -1172,6 +1211,17 @@ export const App: React.FC = () => {
                 models={workspace.models}
                 activeModelId={workspace.activeModelId}
                 onSelectActiveModel={handleSelectActiveModel}
+                connectedLmModels={workspace.settings.connectedLmModels}
+                selectedLmModel={workspace.settings.selectedLmModel}
+                onSelectLmModel={handleSelectLmModel}
+                effortLevel={workspace.settings.effortLevel}
+                onChangeEffortLevel={(level) => {
+                  setLastTurnInspection(null);
+                  setWorkspace((prev) => ({
+                    ...prev,
+                    settings: { ...prev.settings, effortLevel: level },
+                  }));
+                }}
                 backendLabel={backendLabel}
                 workerStatus={workerStatus}
                 composerText={composerText}

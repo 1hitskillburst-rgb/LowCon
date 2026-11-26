@@ -1,6 +1,7 @@
 import { estimateTokensConservative } from './context';
 import { isLocalEndpoint, normalizeApiEndpoint, type DiagnosticLogger } from './privacy';
 import type {
+  EffortLevel,
   ModelProfile,
   StructuredChatMessage,
   WorkerStatus,
@@ -15,6 +16,7 @@ export interface GenerationParams {
   stopSequences: string[];
   lmStudioEndpoint?: string;
   selectedLmModel?: string;
+  reasoningEffort?: EffortLevel;
 }
 
 export interface GenerationProgress {
@@ -657,7 +659,7 @@ export class InferenceController {
     const modelName = params.selectedLmModel?.trim() || activeModel.name;
     this.logger.info(
       'inference',
-      `POST ${endpoint}/chat/completions model=${modelName} max_tokens=${params.maxTokens} messages=${params.structuredMessages.length}`,
+      `POST ${endpoint}/chat/completions model=${modelName} max_tokens=${params.maxTokens} messages=${params.structuredMessages.length}${params.reasoningEffort ? ` reasoning_effort=${params.reasoningEffort}` : ''}`,
     );
 
     const resp = await fetch('/api/local-llm/chat', {
@@ -671,6 +673,7 @@ export class InferenceController {
         top_p: params.topP,
         max_tokens: params.maxTokens,
         stop: params.stopSequences,
+        ...(params.reasoningEffort ? { reasoning_effort: params.reasoningEffort } : {}),
       }),
       signal,
     });

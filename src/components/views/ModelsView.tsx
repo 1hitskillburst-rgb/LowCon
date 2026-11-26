@@ -153,7 +153,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   };
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col bg-[var(--lc-bg)] text-[var(--lc-ink)]">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--lc-bg)] text-[var(--lc-ink)]">
       {/* Header */}
       <header className="flex shrink-0 items-center justify-between border-b border-[var(--lc-line)] px-7 py-3">
         <div className="flex items-center text-[13px]">
@@ -189,7 +189,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
       </header>
 
       {/* Body */}
-      <div className="flex-1 overflow-y-auto px-7 py-6">
+      <div className="min-h-0 flex-1 overflow-y-auto px-7 py-6">
         <div className="mx-auto max-w-[820px] space-y-5">
           <div>
             <h1 className="text-[22px] font-bold tracking-tight text-[var(--lc-ink)]">

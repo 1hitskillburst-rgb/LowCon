@@ -14,6 +14,7 @@ import { getPackedTokens } from '../../core/context';
 import { formatNumber, formatRelativeTime } from '../../core/privacy';
 import type {
   ContextSegmentKey,
+  EffortLevel,
   ModelProfile,
   Session,
   WorkerStatus,
@@ -21,11 +22,23 @@ import type {
 import { ContextStrip } from './ContextBudgetViz';
 import { MarkdownMessage } from './MarkdownMessage';
 
+const EFFORT_OPTIONS: Array<{ id: EffortLevel; label: string }> = [
+  { id: 'low', label: 'Low' },
+  { id: 'medium', label: 'Medium' },
+  { id: 'high', label: 'High' },
+  { id: 'xhigh', label: 'Extra High' },
+];
+
 interface ChatViewProps {
   session: Session;
   models: ModelProfile[];
   activeModelId: string;
   onSelectActiveModel: (modelId: string) => void;
+  connectedLmModels: string[];
+  selectedLmModel: string;
+  onSelectLmModel: (modelName: string) => void;
+  effortLevel: EffortLevel;
+  onChangeEffortLevel: (level: EffortLevel) => void;
   backendLabel: string;
   workerStatus: WorkerStatus;
   composerText: string;
@@ -52,6 +65,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   models,
   activeModelId,
   onSelectActiveModel,
+  connectedLmModels,
+  selectedLmModel,
+  onSelectLmModel,
+  effortLevel,
+  onChangeEffortLevel,
   backendLabel,
   workerStatus,
   composerText,
@@ -73,15 +91,36 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onSaveAsNote,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [savedNoteMsgId, setSavedNoteMsgId] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [summaryCreatedNotice, setSummaryCreatedNotice] = useState(false);
   const [expandedThinkingIds, setExpandedThinkingIds] = useState<Record<string, boolean>>({});
+  const [showModelEffortMenu, setShowModelEffortMenu] = useState(false);
 
   useEffect(() => {
     setSummaryCreatedNotice(false);
   }, [session.id]);
+
+  useEffect(() => {
+    if (!showModelEffortMenu) return;
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (modelMenuRef.current && !modelMenuRef.current.contains(e.target as Node)) {
+        setShowModelEffortMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [showModelEffortMenu]);
+
+  const activeModel = models.find((m) => m.id === activeModelId) ?? models[0];
+  const activeModelDisplayName =
+    activeModel?.backendType === 'lm_studio' && selectedLmModel
+      ? selectedLmModel
+      : activeModel?.name ?? 'Model';
+  const activeEffortLabel =
+    EFFORT_OPTIONS.find((e) => e.id === effortLevel)?.label ?? 'Medium';
 
   const hasValidTurns = session.messages.some(
     (m) => (m.role === 'user' || m.role === 'assistant') && !m.isError && m.content.trim().length > 0,
@@ -136,7 +175,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col bg-[var(--lc-bg)] text-[var(--lc-ink)]">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--lc-bg)] text-[var(--lc-ink)]">
       {/* Top Header Bar */}
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--lc-line)] bg-[var(--lc-bg)] px-7 py-3">
         <div className="flex items-center text-[13px]">
@@ -181,7 +220,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       </header>
 
       {/* Scrollable Transcript Column */}
-      <div className="flex-1 overflow-y-auto px-6 py-5">
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto max-w-[660px]">
           {/* Session Title Header */}
           <div className="flex items-start justify-between gap-4">
@@ -499,7 +538,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           />
 
           <div className="mt-2 flex items-center justify-between gap-2">
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -510,11 +549,127 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="inline-flex items-center gap-1 rounded-[6px] px-2 py-1 text-[12.5px] text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]"
+                aria-label="Attach local file"
+                title="Attach local file"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-[6px] text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)] hover:text-[var(--lc-surf-ink)]"
               >
                 <Paperclip className="h-3.5 w-3.5" />
-                <span>Attach local file</span>
               </button>
+
+              {/* Model & Effort Popover Selector */}
+              <div ref={modelMenuRef} className="relative">
+                <button
+                  type="button"
+                  data-testid="composer-model-effort-trigger"
+                  aria-expanded={showModelEffortMenu}
+                  onClick={() => setShowModelEffortMenu((prev) => !prev)}
+                  className="inline-flex items-center gap-1.5 rounded-[6px] px-2 py-1 text-[12.5px] font-medium text-[var(--lc-surf-ink)] hover:bg-[var(--lc-surf-hover)]"
+                >
+                  <span className="max-w-[180px] truncate">{activeModelDisplayName}</span>
+                  <span className="text-[var(--lc-surf-mute)]">{activeEffortLabel}</span>
+                  <ChevronDown className="h-3 w-3 text-[var(--lc-surf-mute)]" />
+                </button>
+
+                {showModelEffortMenu && (
+                  <div
+                    role="menu"
+                    data-testid="composer-model-effort-menu"
+                    className="absolute bottom-full left-0 z-40 mb-2 flex flex-col gap-2 sm:flex-row sm:items-end"
+                  >
+                    {/* Model list */}
+                    <div className="w-[270px] rounded-[10px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] p-1.5 text-[var(--lc-surf-ink)] shadow-xl">
+                      <div className="px-2.5 py-1 text-[11px] font-semibold text-[var(--lc-surf-mute)]">
+                        Model
+                      </div>
+                      <div className="max-h-60 overflow-y-auto space-y-0.5">
+                        {models.map((m) => {
+                          const isSelected = m.id === activeModelId;
+                          return (
+                            <button
+                              key={m.id}
+                              type="button"
+                              onClick={() => {
+                                onSelectActiveModel(m.id);
+                                setShowModelEffortMenu(false);
+                              }}
+                              className={`flex w-full items-center justify-between gap-2 rounded-[6px] px-2.5 py-1.5 text-left text-[12.5px] transition-colors ${
+                                isSelected
+                                  ? 'bg-[var(--lc-surf-hover)] font-semibold text-[var(--lc-surf-ink)]'
+                                  : 'text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]/70 hover:text-[var(--lc-surf-ink)]'
+                              }`}
+                            >
+                              <span className="truncate">{m.name}</span>
+                              {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--lc-accent)]" />}
+                            </button>
+                          );
+                        })}
+
+                        {connectedLmModels.length > 0 && (
+                          <>
+                            <div className="mt-1 border-t border-[var(--lc-line-soft)] px-2.5 pt-1.5 pb-0.5 text-[10.5px] font-semibold tracking-wide text-[var(--lc-surf-mute)] uppercase">
+                              LM Studio Server Models
+                            </div>
+                            {connectedLmModels.map((lmName) => {
+                              const isSelected =
+                                activeModel?.backendType === 'lm_studio' &&
+                                selectedLmModel === lmName;
+                              return (
+                                <button
+                                  key={lmName}
+                                  type="button"
+                                  onClick={() => {
+                                    onSelectLmModel(lmName);
+                                    setShowModelEffortMenu(false);
+                                  }}
+                                  className={`flex w-full items-center justify-between gap-2 rounded-[6px] px-2.5 py-1.5 text-left text-[12.5px] transition-colors ${
+                                    isSelected
+                                      ? 'bg-[var(--lc-surf-hover)] font-semibold text-[var(--lc-surf-ink)]'
+                                      : 'text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]/70 hover:text-[var(--lc-surf-ink)]'
+                                  }`}
+                                >
+                                  <span className="truncate">{lmName}</span>
+                                  {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--lc-accent)]" />}
+                                </button>
+                              );
+                            })}
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Thinking Effort list */}
+                    <div className="w-[175px] rounded-[10px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] p-1.5 text-[var(--lc-surf-ink)] shadow-xl">
+                      <div className="px-2.5 py-1 text-[11px] font-semibold text-[var(--lc-surf-mute)]">
+                        Thinking effort
+                      </div>
+                      <div className="space-y-0.5">
+                        {EFFORT_OPTIONS.map((opt) => {
+                          const isSelected = effortLevel === opt.id;
+                          return (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              data-testid={`effort-option-${opt.id}`}
+                              onClick={() => {
+                                onChangeEffortLevel(opt.id);
+                                setShowModelEffortMenu(false);
+                              }}
+                              className={`flex w-full items-center justify-between rounded-[6px] px-2.5 py-1.5 text-left text-[12.5px] transition-colors ${
+                                isSelected
+                                  ? 'bg-[var(--lc-surf-hover)] font-semibold text-[var(--lc-surf-ink)]'
+                                  : 'text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]/70 hover:text-[var(--lc-surf-ink)]'
+                              }`}
+                            >
+                              <span>{opt.label}</span>
+                              {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--lc-accent)]" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
 
               <button
                 type="button"
@@ -527,10 +682,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <Brain className="h-3.5 w-3.5" />
                 <span>{memoryRetrievalEnabled ? 'Memory on' : 'Memory off'}</span>
               </button>
-
-              <span className="hidden text-[11.5px] text-[var(--lc-surf-mute)] sm:inline">
-                Enter to send · Shift+Enter newline
-              </span>
             </div>
 
             {isGenerating ? (
