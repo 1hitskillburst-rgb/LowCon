@@ -6,6 +6,7 @@ import { ContextSegmentRow, VerticalContextStack } from './ContextBudgetViz';
 
 interface ContextPanelProps {
   budget: TurnContextBudget;
+  previewWarning?: string | null;
   taskGoal?: string;
   onUpdateTaskGoal: (goal: string) => void;
   memoryNotes: MemoryNote[];
@@ -19,6 +20,7 @@ interface ContextPanelProps {
 
 export const ContextPanel: React.FC<ContextPanelProps> = ({
   budget,
+  previewWarning,
   taskGoal,
   onUpdateTaskGoal,
   memoryNotes,
@@ -53,30 +55,39 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
   return (
     <aside
       aria-label="Context window and active memory"
-      className="flex h-full w-[344px] shrink-0 flex-col overflow-y-auto border-l border-[#D3D8DF] bg-[#EEF0F3] px-[22px] pt-[22px] pb-7"
+      className="flex h-full w-[344px] shrink-0 flex-col overflow-y-auto border-l border-[var(--lc-line)] bg-[var(--lc-panel)] px-[22px] pt-[22px] pb-7 text-[var(--lc-side-ink)]"
     >
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h2 className="text-[15px] font-bold text-[#161B26]">Context window</h2>
-        <span className="text-[12.5px] text-[#778091]">{limitLabel}</span>
+        <h2 className="text-[15px] font-bold text-[var(--lc-side-ink)]">Context window</h2>
+        <span className="text-[12.5px] text-[var(--lc-side-mute)]">{limitLabel}</span>
       </div>
 
       {/* Big Total Tokens Packed */}
       <div className="mt-3.5 flex flex-wrap items-baseline gap-1.5">
         <span
           data-testid="context-packed-tokens"
-          className="text-[32px] leading-none font-bold tracking-tight text-[#161B26] tabular-nums"
+          className="text-[32px] leading-none font-bold tracking-tight text-[var(--lc-side-ink)] tabular-nums"
         >
           {formatNumber(packed)}
         </span>
-        <span className="text-[13px] text-[#778091]">
+        <span className="text-[13px] text-[var(--lc-side-mute)]">
           of {formatNumber(budget.totalLimit)} tokens packed · {Math.round(pct)}%
         </span>
       </div>
 
-      <p className="mt-1.5 text-[13px] text-[#444D5C]">
+      <p className="mt-1.5 text-[13px] text-[var(--lc-side-ink2)]">
         {formatNumber(free)} still free for more history or memory.
       </p>
+
+      {previewWarning && (
+        <div
+          role="alert"
+          className="mt-2.5 rounded-[6px] border border-[var(--lc-danger)]/40 bg-[var(--lc-danger)]/10 px-2.5 py-2 text-[12px] leading-snug text-[var(--lc-danger)]"
+        >
+          {previewWarning}
+        </div>
+      )}
 
       {/* Dual 44px Vertical Stack + Row Breakdown */}
       <div className="mt-4 flex items-start gap-3">
@@ -101,22 +112,22 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
       <button
         type="button"
         onClick={onOpenPromptInspector}
-        className="mt-4 h-[38px] w-full rounded-[8px] border border-[#161B26] bg-white text-[13.5px] font-semibold text-[#161B26] transition-colors hover:bg-[#DDE1E7]"
+        className="mt-4 h-[38px] w-full rounded-[8px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] text-[13.5px] font-semibold text-[var(--lc-surf-ink)] transition-colors hover:bg-[var(--lc-surf-hover)]"
       >
         Inspect exact prompt
       </button>
 
       {/* Active Session Task Goal */}
-      <div className="mt-6 border-t border-[#D3D8DF] pt-4">
+      <div className="mt-6 border-t border-[var(--lc-line)] pt-4">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-[14px] font-bold text-[#161B26]">Active task goal</h3>
+          <h3 className="text-[14px] font-bold text-[var(--lc-side-ink)]">Active task goal</h3>
           {!isEditingGoal && (
             <div className="flex items-center gap-2">
               {taskGoal?.trim() && (
                 <button
                   type="button"
                   onClick={() => onUpdateTaskGoal('')}
-                  className="text-[11.5px] font-medium text-[#778091] hover:text-[#D9383A]"
+                  className="text-[11.5px] font-medium text-[var(--lc-side-mute)] hover:text-[var(--lc-danger)]"
                 >
                   Clear
                 </button>
@@ -127,7 +138,7 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
                   setGoalDraft(taskGoal ?? '');
                   setIsEditingGoal(true);
                 }}
-                className="text-[12px] font-semibold text-[#2A3FE0] hover:underline"
+                className="text-[12px] font-semibold text-[var(--lc-accent)] hover:underline"
               >
                 {taskGoal?.trim() ? 'Edit' : 'Set goal'}
               </button>
@@ -153,7 +164,7 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
               value={goalDraft}
               onChange={(e) => setGoalDraft(e.target.value)}
               placeholder="e.g. Keep answers under 150 words and cite local files only"
-              className="w-full rounded-[6px] border border-[#D3D8DF] bg-white px-2.5 py-1.5 text-[12.5px] text-[#161B26] placeholder:text-[#778091] focus:border-[#2A3FE0] focus:outline-none"
+              className="w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1.5 text-[12.5px] text-[var(--lc-surf-ink)] placeholder:text-[var(--lc-surf-mute)] focus:border-[var(--lc-accent)] focus:outline-none"
             />
             <div className="flex justify-end gap-1.5">
               <button
@@ -162,13 +173,13 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
                   setGoalDraft(taskGoal ?? '');
                   setIsEditingGoal(false);
                 }}
-                className="rounded-[5px] border border-[#D3D8DF] bg-white px-2.5 py-1 text-[11.5px] font-medium text-[#444D5C] hover:bg-[#DDE1E7]"
+                className="rounded-[5px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1 text-[11.5px] font-medium text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="rounded-[5px] bg-[#2A3FE0] px-2.5 py-1 text-[11.5px] font-semibold text-white hover:bg-[#2234be]"
+                className="rounded-[5px] bg-[var(--lc-accent)] px-2.5 py-1 text-[11.5px] font-semibold text-[var(--lc-accent-contrast)] hover:bg-[var(--lc-accent-hover)]"
               >
                 Save goal
               </button>
@@ -177,12 +188,12 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
         ) : taskGoal?.trim() ? (
           <p
             data-testid="active-task-goal-display"
-            className="mt-1.5 rounded-[6px] border border-[#D3D8DF] bg-white px-2.5 py-2 text-[12.5px] leading-snug text-[#161B26]"
+            className="mt-1.5 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-2 text-[12.5px] leading-snug text-[var(--lc-surf-ink)]"
           >
             {taskGoal}
           </p>
         ) : (
-          <p className="mt-1.5 text-[12.5px] italic text-[#778091]">
+          <p className="mt-1.5 text-[12.5px] italic text-[var(--lc-side-mute)]">
             No task goal set for this session.
           </p>
         )}
@@ -191,15 +202,15 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
       {/* Memory in this prompt */}
       <div className="mt-6">
         <div className="flex items-center justify-between">
-          <h3 className="text-[14px] font-bold text-[#161B26]">Memory in this prompt</h3>
-          <span className="text-[12px] text-[#778091]">
+          <h3 className="text-[14px] font-bold text-[var(--lc-side-ink)]">Memory in this prompt</h3>
+          <span className="text-[12px] text-[var(--lc-side-mute)]">
             {activeNotesInPrompt.length} of {memoryNotes.length} notes
           </span>
         </div>
 
         <div className="mt-2.5 space-y-2.5">
           {activeNotesInPrompt.length === 0 ? (
-            <p className="text-[12.5px] italic text-[#778091]">
+            <p className="text-[12.5px] italic text-[var(--lc-side-mute)]">
               No memory excerpts injected for this prompt.
             </p>
           ) : (
@@ -207,18 +218,18 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
               <div
                 key={note.id}
                 className="border-l-[3px] pl-3"
-                style={{ borderColor: note.isPinned ? '#161B26' : '#8F9CF3' }}
+                style={{ borderColor: note.isPinned ? 'var(--lc-side-ink)' : 'var(--lc-seg-mem)' }}
               >
-                <div className="text-[11.5px] text-[#778091]">
+                <div className="text-[11.5px] text-[var(--lc-side-mute)]">
                   {note.isSummary
                     ? 'Approved history summary'
                     : note.isPinned
                       ? 'Pinned project rule (always included)'
                       : 'Retrieved as relevant'}
                 </div>
-                <div className="text-[13px] font-medium text-[#161B26]">{note.title}</div>
-                <div className="line-clamp-2 text-[12px] text-[#444D5C]">{note.content}</div>
-                <div className="mt-0.5 text-[11px] text-[#778091]">{note.sourceReference}</div>
+                <div className="text-[13px] font-medium text-[var(--lc-side-ink)]">{note.title}</div>
+                <div className="line-clamp-2 text-[12px] text-[var(--lc-side-ink2)]">{note.content}</div>
+                <div className="mt-0.5 text-[11px] text-[var(--lc-side-mute)]">{note.sourceReference}</div>
               </div>
             ))
           )}
@@ -226,8 +237,8 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
       </div>
 
       {/* Memory Retrieval Toggle */}
-      <div className="mt-5 flex items-center justify-between border-t border-[#D3D8DF] pt-4">
-        <span className="text-[13px] text-[#444D5C]">Memory retrieval</span>
+      <div className="mt-5 flex items-center justify-between border-t border-[var(--lc-line)] pt-4">
+        <span className="text-[13px] text-[var(--lc-side-ink2)]">Memory retrieval</span>
         <button
           type="button"
           role="switch"
@@ -235,7 +246,7 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
           aria-label="Toggle automatic memory retrieval"
           onClick={() => onToggleMemoryRetrieval(!memoryRetrievalEnabled)}
           className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
-            memoryRetrievalEnabled ? 'bg-[#2A3FE0]' : 'bg-[#AAB2BF]'
+            memoryRetrievalEnabled ? 'bg-[var(--lc-accent)]' : 'bg-[var(--lc-seg-tpl)]'
           }`}
         >
           <span

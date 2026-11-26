@@ -1,5 +1,46 @@
 @import "tailwindcss";
 
+:root {
+  --lc-bg: #F7F8F9;
+  --lc-surface: #FFFFFF;
+  --lc-side: #E8EBEF;
+  --lc-panel: #EEF0F3;
+  --lc-accent: #2A3FE0;
+  --lc-accent-hover: #2234BE;
+  --lc-accent-contrast: #FFFFFF;
+  --lc-ink: #161B26;
+  --lc-ink2: #444D5C;
+  --lc-mute: #778091;
+  --lc-surf-ink: #161B26;
+  --lc-surf-ink2: #444D5C;
+  --lc-surf-mute: #778091;
+  --lc-surf-line: #D3D8DF;
+  --lc-surf-hover: #DDE1E7;
+  --lc-side-ink: #161B26;
+  --lc-side-ink2: #444D5C;
+  --lc-side-mute: #778091;
+  --lc-line: #D3D8DF;
+  --lc-line-soft: #E8EBEF;
+  --lc-hover: #DDE1E7;
+  --lc-hold: #C6CCD6;
+  --lc-seg-free: #EAEEF2;
+  --lc-seg-core: #161B26;
+  --lc-seg-mem: #8F9CF3;
+  --lc-seg-recent: #F2D452;
+  --lc-seg-tpl: #AAB2BF;
+  --lc-active-pill-bg: #161B26;
+  --lc-active-pill-fg: #FFFFFF;
+  --lc-code-bg: #F2F4F7;
+  --lc-code-header: #EAEEF3;
+  --lc-code-border: #D3D8DF;
+  --lc-code-text: #161B26;
+  --lc-code-mute: #57606A;
+  --lc-inline-code-bg: #EEF0F3;
+  --lc-success: #1D7A4E;
+  --lc-danger: #D9383A;
+  --lc-warn: #B45309;
+}
+
 @layer base {
   html,
   body,
@@ -7,8 +48,8 @@
     height: 100%;
     margin: 0;
     padding: 0;
-    background-color: #F7F8F9;
-    color: #161B26;
+    background-color: var(--lc-bg);
+    color: var(--lc-ink);
     font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   }
 
@@ -29,11 +70,11 @@
 .lowcon-streaming-glow {
   background: linear-gradient(
     90deg,
-    #778091 0%,
-    #778091 34%,
-    #2A3FE0 50%,
-    #778091 66%,
-    #778091 100%
+    var(--lc-mute) 0%,
+    var(--lc-mute) 34%,
+    var(--lc-accent) 50%,
+    var(--lc-mute) 66%,
+    var(--lc-mute) 100%
   );
   background-size: 200% auto;
   -webkit-background-clip: text;
@@ -49,14 +90,15 @@
   padding: 0.15rem 0;
 }
 
+/* Light theme syntax highlighting (default) */
 .hljs {
-  color: #e6edf3;
+  color: var(--lc-code-text);
   background: transparent;
 }
 
 .hljs-comment,
 .hljs-quote {
-  color: #8b949e;
+  color: #6E7781;
   font-style: italic;
 }
 
@@ -64,7 +106,7 @@
 .hljs-selector-tag,
 .hljs-subst,
 .hljs-type {
-  color: #ff7b72;
+  color: #CF222E;
 }
 
 .hljs-number,
@@ -72,41 +114,98 @@
 .hljs-variable,
 .hljs-template-variable,
 .hljs-tag .hljs-attr {
-  color: #79c0ff;
+  color: #0550AE;
 }
 
 .hljs-string,
 .hljs-doctag,
 .hljs-regexp {
-  color: #a5d6ff;
+  color: #0A3069;
 }
 
 .hljs-title,
 .hljs-section,
 .hljs-selector-id,
 .hljs-title.function_ {
-  color: #d2a8ff;
+  color: #8250DF;
 }
 
 .hljs-built_in,
 .hljs-title.class_,
 .hljs-class .hljs-title {
-  color: #ffa657;
+  color: #953800;
 }
 
 .hljs-attribute,
 .hljs-name,
 .hljs-tag,
 .hljs-property {
-  color: #7ee787;
+  color: #116329;
 }
 
 .hljs-addition {
-  color: #aff5b4;
-  background-color: rgba(46, 160, 67, 0.18);
+  color: #116329;
+  background-color: rgba(46, 160, 67, 0.14);
 }
 
 .hljs-deletion {
-  color: #ffdcd7;
+  color: #82071E;
+  background-color: rgba(248, 81, 73, 0.14);
+}
+
+/* Dark theme syntax highlighting (Gray / Black themes) */
+[data-theme-mode="dark"] .hljs-comment,
+[data-theme-mode="dark"] .hljs-quote {
+  color: #8B949E;
+}
+
+[data-theme-mode="dark"] .hljs-keyword,
+[data-theme-mode="dark"] .hljs-selector-tag,
+[data-theme-mode="dark"] .hljs-subst,
+[data-theme-mode="dark"] .hljs-type {
+  color: #FF7B72;
+}
+
+[data-theme-mode="dark"] .hljs-number,
+[data-theme-mode="dark"] .hljs-literal,
+[data-theme-mode="dark"] .hljs-variable,
+[data-theme-mode="dark"] .hljs-template-variable,
+[data-theme-mode="dark"] .hljs-tag .hljs-attr {
+  color: #79C0FF;
+}
+
+[data-theme-mode="dark"] .hljs-string,
+[data-theme-mode="dark"] .hljs-doctag,
+[data-theme-mode="dark"] .hljs-regexp {
+  color: #A5D6FF;
+}
+
+[data-theme-mode="dark"] .hljs-title,
+[data-theme-mode="dark"] .hljs-section,
+[data-theme-mode="dark"] .hljs-selector-id,
+[data-theme-mode="dark"] .hljs-title.function_ {
+  color: #D2A8FF;
+}
+
+[data-theme-mode="dark"] .hljs-built_in,
+[data-theme-mode="dark"] .hljs-title.class_,
+[data-theme-mode="dark"] .hljs-class .hljs-title {
+  color: #FFA657;
+}
+
+[data-theme-mode="dark"] .hljs-attribute,
+[data-theme-mode="dark"] .hljs-name,
+[data-theme-mode="dark"] .hljs-tag,
+[data-theme-mode="dark"] .hljs-property {
+  color: #7EE787;
+}
+
+[data-theme-mode="dark"] .hljs-addition {
+  color: #AFF5B4;
+  background-color: rgba(46, 160, 67, 0.18);
+}
+
+[data-theme-mode="dark"] .hljs-deletion {
+  color: #FFDCD7;
   background-color: rgba(248, 81, 73, 0.18);
 }

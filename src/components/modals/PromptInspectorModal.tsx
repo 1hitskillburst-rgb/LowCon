@@ -36,16 +36,16 @@ export const PromptInspectorModal: React.FC<PromptInspectorModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="prompt-inspector-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
     >
-      <div className="flex max-h-[88vh] w-full max-w-[740px] flex-col rounded-[10px] border border-[#D3D8DF] bg-white shadow-xl">
+      <div className="flex max-h-[88vh] w-full max-w-[740px] flex-col rounded-[10px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] text-[var(--lc-surf-ink)] shadow-xl">
         {/* Header */}
-        <div className="flex items-start justify-between border-b border-[#D3D8DF] px-5 py-4">
+        <div className="flex items-start justify-between border-b border-[var(--lc-surf-line)] px-5 py-4">
           <div>
-            <h2 id="prompt-inspector-title" className="text-[16px] font-bold text-[#161B26]">
+            <h2 id="prompt-inspector-title" className="text-[16px] font-bold text-[var(--lc-surf-ink)]">
               Prompt Inspector — Exact Token Breakdown
             </h2>
-            <p className="mt-0.5 text-[12.5px] text-[#778091]">
+            <p className="mt-0.5 text-[12.5px] text-[var(--lc-surf-mute)]">
               Deterministic context assembly ({inspection.templateType} · {inspection.tokenizerName})
             </p>
           </div>
@@ -53,7 +53,7 @@ export const PromptInspectorModal: React.FC<PromptInspectorModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Close prompt inspector"
-            className="rounded-[6px] p-1 text-[#778091] hover:bg-[#E8EBEF] hover:text-[#161B26]"
+            className="rounded-[6px] p-1 text-[var(--lc-surf-mute)] hover:bg-[var(--lc-surf-hover)] hover:text-[var(--lc-surf-ink)]"
           >
             <X className="h-4 w-4" />
           </button>
@@ -62,28 +62,28 @@ export const PromptInspectorModal: React.FC<PromptInspectorModalProps> = ({
         {/* Body */}
         <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
           {/* Quick Budget Stats Summary Card */}
-          <div className="grid grid-cols-4 gap-3 rounded-[6px] border border-[#D3D8DF] bg-[#EEF0F3] px-3.5 py-2.5">
+          <div className="grid grid-cols-4 gap-3 rounded-[6px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-3.5 py-2.5 text-[var(--lc-side-ink)]">
             <div>
-              <div className="text-[11px] text-[#778091]">Prompt Packed</div>
-              <div className="text-[13px] font-bold text-[#161B26]">
+              <div className="text-[11px] text-[var(--lc-side-mute)]">Prompt Packed</div>
+              <div className="text-[13px] font-bold text-[var(--lc-side-ink)]">
                 {formatNumber(inspection.totalTokens)} / {formatNumber(inspection.budgetPartition.promptBudget)}
               </div>
             </div>
             <div>
-              <div className="text-[11px] text-[#778091]">Output Reserve</div>
-              <div className="text-[13px] font-bold text-[#161B26]">
+              <div className="text-[11px] text-[var(--lc-side-mute)]">Output Reserve</div>
+              <div className="text-[13px] font-bold text-[var(--lc-side-ink)]">
                 {formatNumber(inspection.budgetPartition.outputReserve)} tokens
               </div>
             </div>
             <div>
-              <div className="text-[11px] text-[#778091]">Safety Margin</div>
-              <div className="text-[13px] font-bold text-[#161B26]">
+              <div className="text-[11px] text-[var(--lc-side-mute)]">Safety Margin</div>
+              <div className="text-[13px] font-bold text-[var(--lc-side-ink)]">
                 {formatNumber(inspection.budgetPartition.safetyMargin)} tokens
               </div>
             </div>
             <div>
-              <div className="text-[11px] text-[#778091]">Remaining Free</div>
-              <div className="text-[13px] font-bold text-[#1D7A4E]">
+              <div className="text-[11px] text-[var(--lc-side-mute)]">Remaining Free</div>
+              <div className="text-[13px] font-bold text-[var(--lc-success)]">
                 {formatNumber(inspection.remainingCapacity)} tokens
               </div>
             </div>
@@ -91,17 +91,17 @@ export const PromptInspectorModal: React.FC<PromptInspectorModalProps> = ({
 
           {/* Packed Sections */}
           <div>
-            <div className="mb-1.5 text-[11.5px] font-bold tracking-wider text-[#778091]">
+            <div className="mb-1.5 text-[11.5px] font-bold tracking-wider text-[var(--lc-surf-mute)]">
               PACKED SECTIONS
             </div>
-            <div className="divide-y divide-[#D3D8DF] rounded-[6px] border border-[#D3D8DF] bg-white px-3 py-1">
+            <div className="divide-y divide-[var(--lc-surf-line)] rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1">
               {inspection.sections.map((sec) => (
                 <div key={`${sec.segmentKey}-${sec.name}`} className="flex items-center justify-between py-1.5">
                   <div>
-                    <span className="text-[13px] font-medium text-[#161B26]">{sec.name}</span>
-                    <span className="ml-2 text-[11.5px] text-[#778091]">{sec.description}</span>
+                    <span className="text-[13px] font-medium text-[var(--lc-surf-ink)]">{sec.name}</span>
+                    <span className="ml-2 text-[11.5px] text-[var(--lc-surf-mute)]">{sec.description}</span>
                   </div>
-                  <span className="text-[13px] font-semibold text-[#444D5C] tabular-nums">
+                  <span className="text-[13px] font-semibold text-[var(--lc-surf-ink2)] tabular-nums">
                     {formatNumber(sec.tokens)} tokens
                   </span>
                 </div>
@@ -112,33 +112,33 @@ export const PromptInspectorModal: React.FC<PromptInspectorModalProps> = ({
           {/* Included vs Excluded */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <div className="mb-1.5 text-[11.5px] font-bold tracking-wider text-[#1D7A4E]">
+              <div className="mb-1.5 text-[11.5px] font-bold tracking-wider text-[var(--lc-success)]">
                 INCLUDED IN THIS PROMPT ({inspection.includedItems.length})
               </div>
-              <div className="max-h-36 space-y-1.5 overflow-y-auto rounded-[6px] border border-[#D3D8DF] bg-white p-2.5 text-[12px]">
+              <div className="max-h-36 space-y-1.5 overflow-y-auto rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] p-2.5 text-[12px]">
                 {inspection.includedItems.map((item) => (
-                  <div key={`${item.kind}-${item.id}`} className="text-[#161B26]">
-                    <span className="font-semibold text-[#1D7A4E]">✓</span> {item.label}{' '}
-                    <span className="text-[#778091]">({formatNumber(item.tokens)} tok)</span>
+                  <div key={`${item.kind}-${item.id}`} className="text-[var(--lc-surf-ink)]">
+                    <span className="font-semibold text-[var(--lc-success)]">✓</span> {item.label}{' '}
+                    <span className="text-[var(--lc-surf-mute)]">({formatNumber(item.tokens)} tok)</span>
                   </div>
                 ))}
               </div>
             </div>
 
             <div>
-              <div className="mb-1.5 text-[11.5px] font-bold tracking-wider text-[#D9383A]">
+              <div className="mb-1.5 text-[11.5px] font-bold tracking-wider text-[var(--lc-danger)]">
                 EXCLUDED CANDIDATES & REASONS ({inspection.excludedCandidates.length})
               </div>
-              <div className="max-h-36 space-y-2 overflow-y-auto rounded-[6px] border border-[#D3D8DF] bg-white p-2.5 text-[12px]">
+              <div className="max-h-36 space-y-2 overflow-y-auto rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] p-2.5 text-[12px]">
                 {inspection.excludedCandidates.length === 0 ? (
-                  <p className="italic text-[#778091]">
+                  <p className="italic text-[var(--lc-surf-mute)]">
                     No candidates trimmed — all items fit cleanly within the prompt budget.
                   </p>
                 ) : (
                   inspection.excludedCandidates.map((ex) => (
                     <div key={`${ex.kind}-${ex.id}`}>
-                      <div className="font-semibold text-[#444D5C]">✕ {ex.label}</div>
-                      <div className="pl-3 text-[11px] text-[#778091]">{ex.reason}</div>
+                      <div className="font-semibold text-[var(--lc-surf-ink2)]">✕ {ex.label}</div>
+                      <div className="pl-3 text-[11px] text-[var(--lc-surf-mute)]">{ex.reason}</div>
                     </div>
                   ))
                 )}
@@ -155,8 +155,8 @@ export const PromptInspectorModal: React.FC<PromptInspectorModalProps> = ({
                   onClick={() => setViewMode('rendered')}
                   className={`rounded-[5px] px-2.5 py-1 text-[11.5px] font-semibold ${
                     viewMode === 'rendered'
-                      ? 'bg-[#161B26] text-white'
-                      : 'bg-[#E8EBEF] text-[#444D5C]'
+                      ? 'bg-[var(--lc-active-pill-bg)] text-[var(--lc-active-pill-fg)]'
+                      : 'bg-[var(--lc-panel)] text-[var(--lc-side-ink2)]'
                   }`}
                 >
                   Rendered Template ({inspection.templateType})
@@ -166,8 +166,8 @@ export const PromptInspectorModal: React.FC<PromptInspectorModalProps> = ({
                   onClick={() => setViewMode('structured')}
                   className={`rounded-[5px] px-2.5 py-1 text-[11.5px] font-semibold ${
                     viewMode === 'structured'
-                      ? 'bg-[#161B26] text-white'
-                      : 'bg-[#E8EBEF] text-[#444D5C]'
+                      ? 'bg-[var(--lc-active-pill-bg)] text-[var(--lc-active-pill-fg)]'
+                      : 'bg-[var(--lc-panel)] text-[var(--lc-side-ink2)]'
                   }`}
                 >
                   OpenAI Chat API Messages (No Double-Wrap)
@@ -176,9 +176,9 @@ export const PromptInspectorModal: React.FC<PromptInspectorModalProps> = ({
               <button
                 type="button"
                 onClick={handleCopy}
-                className="inline-flex items-center gap-1 rounded-[6px] border border-[#D3D8DF] bg-white px-2.5 py-1 text-[12px] text-[#444D5C] hover:bg-[#E8EBEF]"
+                className="inline-flex items-center gap-1 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1 text-[12px] text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]"
               >
-                {copied ? <Check className="h-3.5 w-3.5 text-[#1D7A4E]" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? <Check className="h-3.5 w-3.5 text-[var(--lc-success)]" /> : <Copy className="h-3.5 w-3.5" />}
                 <span>{copied ? 'Copied' : 'Copy prompt'}</span>
               </button>
             </div>
@@ -187,17 +187,17 @@ export const PromptInspectorModal: React.FC<PromptInspectorModalProps> = ({
               aria-label="Exact assembled prompt payload"
               value={displayPayload}
               rows={7}
-              className="w-full rounded-[6px] border border-[#D3D8DF] bg-[#F7F8F9] p-3 font-mono text-[12px] leading-relaxed text-[#161B26] focus:outline-none"
+              className="w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-bg)] p-3 font-mono text-[12px] leading-relaxed text-[var(--lc-ink)] focus:outline-none"
             />
           </div>
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end border-t border-[#D3D8DF] px-5 py-3">
+        <div className="flex justify-end border-t border-[var(--lc-surf-line)] px-5 py-3">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-[6px] bg-[#161B26] px-4 py-1.5 text-[13px] font-semibold text-white hover:bg-[#2A3FE0]"
+            className="rounded-[6px] bg-[var(--lc-accent)] px-4 py-1.5 text-[13px] font-semibold text-[var(--lc-accent-contrast)] hover:bg-[var(--lc-accent-hover)]"
           >
             Close Inspector
           </button>

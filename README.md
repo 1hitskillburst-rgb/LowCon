@@ -2,7 +2,7 @@
 
 **A calm, private workspace for local AI models with small context windows.**
 
-Small and medium local models (2K–32K context) silently lose track of your rules and earlier decisions when chat histories grow. **LowCon** fixes that by showing you *exactly* what fits in every prompt—reserving space for the reply first, keeping pinned project rules locked in on every turn, and letting you inspect the exact prompt before and after every message.
+Small and medium local models (2K–128K configurable context) silently lose track of your rules and earlier decisions when chat histories grow. **LowCon** fixes that by showing you *exactly* what fits in every prompt—reserving space for the reply first, keeping pinned project rules locked in on every turn, and letting you inspect the exact prompt before and after every message.
 
 Everything stays on your device. LowCon runs in your browser or as a standalone desktop app (macOS, Windows, and Linux), works offline out of the box with a built-in deterministic harness, and connects directly to **LM Studio** or any local OpenAI-compatible server on `127.0.0.1`.
 
@@ -10,7 +10,8 @@ Everything stays on your device. LowCon runs in your browser or as a standalone 
 
 ## Key Features
 
-- **Visual Context Budget (No Silent Clipping)** — Reserves your reply space and safety margin up front. Watch every token bucket update live (`Core instructions`, `Pinned rules`, `Retrieved memory`, `Recent turns`, `Chat template`, `Free`, `Reply space`, and `Safety margin`). If a message and pinned rules exceed your budget, LowCon warns you clearly instead of silently cutting off your prompt.
+- **Visual Context Budget (No Silent Clipping)** — Reserves your reply space and safety margin up front. Watch every token bucket update live (`Core instructions`, `Pinned rules`, `Retrieved memory`, `Recent turns`, `Chat template`, `Free`, `Reply space`, and `Safety margin`), and configure working context caps from 2K up to 128K tokens in Settings. If a message and pinned rules exceed your budget, LowCon warns you clearly instead of silently cutting off your prompt.
+- **Minimal Theme Customization** — Switch between **White**, **Gray**, and **Black** presets in Settings or customize background, surface, sidebar, and accent colors directly. Code blocks and syntax highlighting automatically adapt to match light or dark themes.
 - **Exact Prompt Inspector** — Inspect the exact formatted prompt (`ChatML`, `Llama3`, `Llama2`, `Mistral`, `Gemma`, `Raw`) or structured OpenAI `messages[]` array sent for every turn, including what was included and why older items were trimmed.
 - **Pinned Project Rules & Local Memory** — Pin important constraints so they are *always* included on every turn regardless of how you phrase your question. Search across your full local note library using built-in BM25 + recency scoring, edit notes in place, and save useful replies directly to Memory.
 - **In-App GGUF File Inspector** — Drop any `.gguf` model file (v1, v2, or v3) into the Models tab to read its architecture, quantization, native context length, tensor count, and chat template directly from the header—without loading gigabytes of weights into RAM.

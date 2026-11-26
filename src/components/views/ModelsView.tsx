@@ -153,12 +153,12 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   };
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col bg-[#F7F8F9]">
+    <div className="flex h-full min-w-0 flex-1 flex-col bg-[var(--lc-bg)] text-[var(--lc-ink)]">
       {/* Header */}
-      <header className="flex shrink-0 items-center justify-between border-b border-[#D3D8DF] px-7 py-3">
+      <header className="flex shrink-0 items-center justify-between border-b border-[var(--lc-line)] px-7 py-3">
         <div className="flex items-center text-[13px]">
-          <span className="text-[#778091]">Workspace /</span>
-          <span className="ml-1 font-semibold text-[#161B26]">Models</span>
+          <span className="text-[var(--lc-mute)]">Workspace /</span>
+          <span className="ml-1 font-semibold text-[var(--lc-ink)]">Models</span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -172,7 +172,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="inline-flex items-center gap-1.5 rounded-[6px] border border-[#D3D8DF] bg-white px-3 py-1.5 text-[12.5px] font-medium text-[#161B26] hover:bg-[#DDE1E7]"
+            className="inline-flex items-center gap-1.5 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[12.5px] font-medium text-[var(--lc-surf-ink)] hover:bg-[var(--lc-surf-hover)]"
           >
             <FileUp className="h-3.5 w-3.5" />
             <span>Inspect .gguf Header</span>
@@ -180,7 +180,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
           <button
             type="button"
             onClick={() => setShowAddForm((prev) => !prev)}
-            className="inline-flex items-center gap-1.5 rounded-[6px] bg-[#161B26] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-[#2A3FE0]"
+            className="inline-flex items-center gap-1.5 rounded-[6px] bg-[var(--lc-accent)] px-3 py-1.5 text-[12.5px] font-semibold text-[var(--lc-accent-contrast)] hover:bg-[var(--lc-accent-hover)]"
           >
             <Plus className="h-3.5 w-3.5" />
             <span>Add Profile</span>
@@ -192,38 +192,38 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
       <div className="flex-1 overflow-y-auto px-7 py-6">
         <div className="mx-auto max-w-[820px] space-y-5">
           <div>
-            <h1 className="text-[22px] font-bold tracking-tight text-[#161B26]">
+            <h1 className="text-[22px] font-bold tracking-tight text-[var(--lc-ink)]">
               Local Model Profiles
             </h1>
-            <p className="mt-1 text-[13.5px] text-[#444D5C]">
+            <p className="mt-1 text-[13.5px] text-[var(--lc-ink2)]">
               Inspect GGUF v1/v2/v3 headers directly in-browser, configure per-model context limits
               and chat templates, and manage the live inference worker state.
             </p>
           </div>
 
           {/* Real Worker Status Bar */}
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-[#D3D8DF] bg-[#EEF0F3] px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-4 py-3 text-[var(--lc-side-ink)]">
             <div className="flex items-center gap-2.5 text-[13px]">
-              <Cpu className="h-4 w-4 text-[#161B26]" />
-              <span className="font-semibold text-[#161B26]">Inference Worker:</span>
+              <Cpu className="h-4 w-4 text-[var(--lc-side-ink)]" />
+              <span className="font-semibold text-[var(--lc-side-ink)]">Inference Worker:</span>
               {workerStatus.state === 'loaded' && (
-                <span className="text-[#1D7A4E] font-medium">
+                <span className="font-medium text-[var(--lc-success)]">
                   Loaded — {workerStatus.modelName} ({formatNumber(workerStatus.contextLimit)} ctx)
                 </span>
               )}
               {workerStatus.state === 'generating' && (
-                <span className="text-[#2A3FE0] font-medium">
+                <span className="font-medium text-[var(--lc-accent)]">
                   Generating — {workerStatus.modelName}
                 </span>
               )}
               {workerStatus.state === 'loading' && (
-                <span className="text-[#444D5C]">Loading {workerStatus.modelName}...</span>
+                <span className="text-[var(--lc-side-ink2)]">Loading {workerStatus.modelName}...</span>
               )}
               {workerStatus.state === 'unloaded' && (
-                <span className="text-[#778091]">Unloaded (no model active in worker)</span>
+                <span className="text-[var(--lc-side-mute)]">Unloaded (no model active in worker)</span>
               )}
               {workerStatus.state === 'error' && (
-                <span className="text-[#D9383A] font-medium">Error — {workerStatus.message}</span>
+                <span className="font-medium text-[var(--lc-danger)]">Error — {workerStatus.message}</span>
               )}
             </div>
 
@@ -231,7 +231,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
               <button
                 type="button"
                 onClick={onUnloadModel}
-                className="inline-flex items-center gap-1 rounded-[6px] border border-[#D3D8DF] bg-white px-2.5 py-1 text-[12px] font-medium text-[#444D5C] hover:bg-[#DDE1E7] hover:text-[#D9383A]"
+                className="inline-flex items-center gap-1 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1 text-[12px] font-medium text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)] hover:text-[var(--lc-danger)]"
               >
                 <Power className="h-3.5 w-3.5" />
                 <span>Unload Worker</span>
@@ -258,8 +258,8 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
             aria-label="Drop a .gguf file here or click to inspect its header"
             className={`flex cursor-pointer items-center justify-between gap-3 rounded-[8px] border border-dashed px-4 py-3 text-[13px] transition-colors ${
               isDraggingGguf
-                ? 'border-[#2A3FE0] bg-[#2A3FE0]/8 text-[#2A3FE0]'
-                : 'border-[#AAB2BF] bg-white text-[#444D5C] hover:border-[#2A3FE0]'
+                ? 'border-[var(--lc-accent)] bg-[var(--lc-accent)]/10 text-[var(--lc-accent)]'
+                : 'border-[var(--lc-surf-line)] bg-[var(--lc-surface)] text-[var(--lc-surf-ink2)] hover:border-[var(--lc-accent)]'
             }`}
           >
             <div className="flex items-center gap-2.5">
@@ -277,8 +277,8 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
               role={parseMessage.kind === 'err' ? 'alert' : 'status'}
               className={`flex items-start justify-between gap-3 rounded-[8px] border px-4 py-2.5 text-[13px] ${
                 parseMessage.kind === 'ok'
-                  ? 'border-[#1D7A4E]/30 bg-[#1D7A4E]/5 text-[#1D7A4E]'
-                  : 'border-[#D9383A]/30 bg-[#D9383A]/5 text-[#D9383A]'
+                  ? 'border-[var(--lc-success)]/30 bg-[var(--lc-success)]/8 text-[var(--lc-success)]'
+                  : 'border-[var(--lc-danger)]/30 bg-[var(--lc-danger)]/8 text-[var(--lc-danger)]'
               }`}
             >
               <span>{parseMessage.text}</span>
@@ -297,22 +297,22 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
           {showAddForm && (
             <form
               onSubmit={handleCreateCustomProfile}
-              className="space-y-3 rounded-[8px] border border-[#161B26] bg-white p-4"
+              className="space-y-3 rounded-[8px] border border-[var(--lc-accent)] bg-[var(--lc-surface)] p-4 text-[var(--lc-surf-ink)]"
             >
               <div className="flex items-center justify-between">
-                <h2 className="text-[14px] font-bold text-[#161B26]">Add Local Model Profile</h2>
+                <h2 className="text-[14px] font-bold text-[var(--lc-surf-ink)]">Add Local Model Profile</h2>
                 <button
                   type="button"
                   onClick={() => setShowAddForm(false)}
                   aria-label="Close add profile form"
-                  className="text-[#778091] hover:text-[#161B26]"
+                  className="text-[var(--lc-surf-mute)] hover:text-[var(--lc-surf-ink)]"
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
-                  <label htmlFor="new-model-name" className="block text-[12px] font-medium text-[#444D5C]">
+                  <label htmlFor="new-model-name" className="block text-[12px] font-medium text-[var(--lc-surf-ink2)]">
                     Profile Name
                   </label>
                   <input
@@ -322,18 +322,18 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
                     placeholder="e.g. Qwen2.5-7B-Instruct Q4_K_M"
-                    className="mt-1 w-full rounded-[6px] border border-[#D3D8DF] px-2.5 py-1.5 text-[13px] text-[#161B26] focus:border-[#2A3FE0] focus:outline-none"
+                    className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1.5 text-[13px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
                   />
                 </div>
                 <div>
-                  <label htmlFor="new-model-backend" className="block text-[12px] font-medium text-[#444D5C]">
+                  <label htmlFor="new-model-backend" className="block text-[12px] font-medium text-[var(--lc-surf-ink2)]">
                     Inference Backend
                   </label>
                   <select
                     id="new-model-backend"
                     value={newBackend}
                     onChange={(e) => setNewBackend(e.target.value as 'mock' | 'lm_studio')}
-                    className="mt-1 w-full rounded-[6px] border border-[#D3D8DF] bg-white px-2.5 py-1.5 text-[13px] text-[#161B26] focus:border-[#2A3FE0] focus:outline-none"
+                    className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1.5 text-[13px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
                   >
                     <option value="lm_studio">LM Studio / Local OpenAI Server</option>
                     <option value="mock">Offline Mock Harness</option>
@@ -341,7 +341,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                 </div>
                 {newBackend === 'lm_studio' && (
                   <div>
-                    <label htmlFor="new-model-endpoint" className="block text-[12px] font-medium text-[#444D5C]">
+                    <label htmlFor="new-model-endpoint" className="block text-[12px] font-medium text-[var(--lc-surf-ink2)]">
                       Local Loopback Endpoint
                     </label>
                     <input
@@ -349,12 +349,12 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                       type="text"
                       value={newEndpoint}
                       onChange={(e) => setNewEndpoint(e.target.value)}
-                      className="mt-1 w-full rounded-[6px] border border-[#D3D8DF] px-2.5 py-1.5 font-mono text-[12.5px] text-[#161B26] focus:border-[#2A3FE0] focus:outline-none"
+                      className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1.5 font-mono text-[12.5px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
                     />
                   </div>
                 )}
                 <div>
-                  <label htmlFor="new-model-ctx" className="block text-[12px] font-medium text-[#444D5C]">
+                  <label htmlFor="new-model-ctx" className="block text-[12px] font-medium text-[var(--lc-surf-ink2)]">
                     Native Context Limit (tokens)
                   </label>
                   <input
@@ -365,18 +365,18 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                     step={256}
                     value={newContextLimit}
                     onChange={(e) => setNewContextLimit(Number(e.target.value))}
-                    className="mt-1 w-full rounded-[6px] border border-[#D3D8DF] px-2.5 py-1.5 text-[13px] text-[#161B26] focus:border-[#2A3FE0] focus:outline-none"
+                    className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1.5 text-[13px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
                   />
                 </div>
                 <div>
-                  <label htmlFor="new-model-template" className="block text-[12px] font-medium text-[#444D5C]">
+                  <label htmlFor="new-model-template" className="block text-[12px] font-medium text-[var(--lc-surf-ink2)]">
                     Chat Template
                   </label>
                   <select
                     id="new-model-template"
                     value={newTemplate}
                     onChange={(e) => setNewTemplate(e.target.value as ChatTemplateType)}
-                    className="mt-1 w-full rounded-[6px] border border-[#D3D8DF] bg-white px-2.5 py-1.5 text-[13px] text-[#161B26] focus:border-[#2A3FE0] focus:outline-none"
+                    className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1.5 text-[13px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
                   >
                     {CHAT_TEMPLATES.map((tpl) => (
                       <option key={tpl} value={tpl}>
@@ -390,13 +390,13 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowAddForm(false)}
-                  className="rounded-[6px] border border-[#D3D8DF] bg-white px-3 py-1.5 text-[12.5px] text-[#444D5C] hover:bg-[#E8EBEF]"
+                  className="rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[12.5px] text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="rounded-[6px] bg-[#2A3FE0] px-3.5 py-1.5 text-[12.5px] font-semibold text-white hover:bg-[#2234be]"
+                  className="rounded-[6px] bg-[var(--lc-accent)] px-3.5 py-1.5 text-[12.5px] font-semibold text-[var(--lc-accent-contrast)] hover:bg-[var(--lc-accent-hover)]"
                 >
                   Save Profile
                 </button>
@@ -418,38 +418,38 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                 <section
                   key={model.id}
                   data-testid={`model-card-${model.id}`}
-                  className={`rounded-[8px] border bg-white p-4 transition-colors ${
-                    isLoadedInWorker ? 'border-[#161B26]' : 'border-[#D3D8DF]'
+                  className={`rounded-[8px] border bg-[var(--lc-surface)] p-4 text-[var(--lc-surf-ink)] transition-colors ${
+                    isLoadedInWorker ? 'border-[var(--lc-accent)]' : 'border-[var(--lc-surf-line)]'
                   }`}
                 >
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="text-[15px] font-bold text-[#161B26]">{model.name}</h2>
+                        <h2 className="text-[15px] font-bold text-[var(--lc-surf-ink)]">{model.name}</h2>
                         {isLoadedInWorker && (
                           <span
                             data-testid="worker-loaded-badge"
-                            className="inline-flex items-center gap-1 rounded-[4px] bg-[#1D7A4E]/12 px-2 py-0.5 text-[11px] font-bold tracking-wide text-[#1D7A4E]"
+                            className="inline-flex items-center gap-1 rounded-[4px] bg-[var(--lc-success)]/15 px-2 py-0.5 text-[11px] font-bold tracking-wide text-[var(--lc-success)]"
                           >
                             <CheckCircle2 className="h-3 w-3" />
                             LOADED
                           </span>
                         )}
                         {isSelectedActive && !isLoadedInWorker && (
-                          <span className="rounded-[4px] bg-[#EEF0F3] px-2 py-0.5 text-[11px] font-semibold text-[#444D5C]">
+                          <span className="rounded-[4px] bg-[var(--lc-panel)] px-2 py-0.5 text-[11px] font-semibold text-[var(--lc-side-ink2)]">
                             ACTIVE PROFILE (UNLOADED)
                           </span>
                         )}
                       </div>
 
-                      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-[#778091]">
+                      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-[var(--lc-surf-mute)]">
                         <span>Backend: {model.backendType === 'mock' ? 'Offline Mock' : 'LM Studio'}</span>
                         <span>Arch: {model.architecture}</span>
                         <span>Quant: {model.quantization}</span>
                         <span>Size: {formatBytes(model.fileSizeBytes)}</span>
                         <span>Effective ctx: {formatNumber(effectiveLimit)} tok</span>
                       </div>
-                      <div className="mt-1 truncate font-mono text-[11.5px] text-[#778091]">
+                      <div className="mt-1 truncate font-mono text-[11.5px] text-[var(--lc-surf-mute)]">
                         {model.filePath}
                       </div>
                     </div>
@@ -460,7 +460,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                           type="button"
                           onClick={onUnloadModel}
                           aria-label={`Unload ${model.name}`}
-                          className="rounded-[6px] border border-[#D3D8DF] bg-white px-3 py-1.5 text-[12.5px] font-medium text-[#444D5C] hover:bg-[#DDE1E7]"
+                          className="rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[12.5px] font-medium text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]"
                         >
                           Unload
                         </button>
@@ -472,7 +472,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                             onLoadModel(model.id);
                           }}
                           aria-label={`Load ${model.name}`}
-                          className="rounded-[6px] bg-[#2A3FE0] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-[#2234be]"
+                          className="rounded-[6px] bg-[var(--lc-accent)] px-3 py-1.5 text-[12.5px] font-semibold text-[var(--lc-accent-contrast)] hover:bg-[var(--lc-accent-hover)]"
                         >
                           Load Model
                         </button>
@@ -484,7 +484,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                           onClick={() => onRemoveModel(model.id)}
                           aria-label={`Remove ${model.name}`}
                           title="Remove model profile"
-                          className="rounded-[6px] border border-[#D3D8DF] bg-white p-1.5 text-[#778091] hover:border-[#D9383A] hover:text-[#D9383A]"
+                          className="rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] p-1.5 text-[var(--lc-surf-mute)] hover:border-[var(--lc-danger)] hover:text-[var(--lc-danger)]"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -493,16 +493,16 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                   </div>
 
                   {/* Per-Model Configuration Controls */}
-                  <div className="mt-3.5 grid grid-cols-1 gap-4 border-t border-[#E8EBEF] pt-3 sm:grid-cols-2">
+                  <div className="mt-3.5 grid grid-cols-1 gap-4 border-t border-[var(--lc-line-soft)] pt-3 sm:grid-cols-2">
                     <div>
                       <div className="flex items-center justify-between text-[12px]">
                         <label
                           htmlFor={`ctx-override-${model.id}`}
-                          className="font-medium text-[#444D5C]"
+                          className="font-medium text-[var(--lc-surf-ink2)]"
                         >
                           Model Context Cap
                         </label>
-                        <span className="font-semibold text-[#161B26] tabular-nums">
+                        <span className="font-semibold text-[var(--lc-surf-ink)] tabular-nums">
                           {formatNumber(model.contextOverride ?? model.contextLimit)} /{' '}
                           {formatNumber(model.contextLimit)} tok
                         </span>
@@ -512,19 +512,19 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                         type="range"
                         min={512}
                         max={Math.max(512, model.contextLimit)}
-                        step={256}
+                        step={512}
                         value={model.contextOverride ?? model.contextLimit}
                         onChange={(e) =>
                           onUpdateModel(model.id, { contextOverride: Number(e.target.value) })
                         }
-                        className="mt-1.5 w-full accent-[#2A3FE0]"
+                        className="mt-1.5 w-full accent-[var(--lc-accent)]"
                       />
                     </div>
 
                     <div>
                       <label
                         htmlFor={`tpl-select-${model.id}`}
-                        className="block text-[12px] font-medium text-[#444D5C]"
+                        className="block text-[12px] font-medium text-[var(--lc-surf-ink2)]"
                       >
                         Chat Template Framing
                       </label>
@@ -536,7 +536,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                             chatTemplate: e.target.value as ChatTemplateType,
                           })
                         }
-                        className="mt-1 w-full rounded-[6px] border border-[#D3D8DF] bg-white px-2.5 py-1 text-[12.5px] text-[#161B26] focus:border-[#2A3FE0] focus:outline-none"
+                        className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1 text-[12.5px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
                       >
                         {CHAT_TEMPLATES.map((tpl) => (
                           <option key={tpl} value={tpl}>

@@ -1,4 +1,5 @@
 import { DEFAULT_LM_STUDIO_ENDPOINT, type DiagnosticLogger } from './privacy';
+import { createDefaultTheme } from './theme';
 import type {
   AppSettings,
   MemoryNote,
@@ -10,6 +11,7 @@ import { decryptVaultString, encryptVaultString } from './vault';
 
 const WORKSPACE_STORAGE_KEY = 'lowcon.workspace.v1';
 const VAULT_STORAGE_KEY = 'lowcon.vault.sealed.v1';
+const DEFAULT_BUILTIN_MAX_CONTEXT = 131072;
 
 export function createUuid(): string {
   if (typeof globalThis.crypto?.randomUUID === 'function') {
@@ -31,6 +33,7 @@ export function createDefaultSettings(): AppSettings {
     selectedLmModel: '',
     connectionStatus: 'Not tested yet',
     storageNamespace: 'localStorage://lowcon.workspace.v1 (Encrypted on Vault Lock)',
+    theme: createDefaultTheme(),
   };
 }
 
@@ -43,7 +46,7 @@ export function createDefaultModels(): ModelProfile[] {
       backendType: 'mock',
       architecture: 'qwen2',
       quantization: 'Deterministic',
-      contextLimit: 8192,
+      contextLimit: DEFAULT_BUILTIN_MAX_CONTEXT,
       chatTemplate: 'ChatML',
       fileSizeBytes: 0,
       ramFootprintMb: 12,
@@ -55,11 +58,23 @@ export function createDefaultModels(): ModelProfile[] {
       backendType: 'lm_studio',
       architecture: 'openai-compatible',
       quantization: 'Server-managed',
-      contextLimit: 8192,
+      contextLimit: DEFAULT_BUILTIN_MAX_CONTEXT,
       chatTemplate: 'ChatML',
       fileSizeBytes: 0,
     },
   ];
+}
+
+function upgradeBuiltinModelLimits(models: ModelProfile[]): ModelProfile[] {
+  return models.map((m) => {
+    if (
+      (m.id === 'model_offline_mock' || m.id === 'model_lmstudio') &&
+      m.contextLimit < DEFAULT_BUILTIN_MAX_CONTEXT
+    ) {
+      return { ...m, contextLimit: DEFAULT_BUILTIN_MAX_CONTEXT };
+    }
+    return m;
+  });
 }
 
 export function createDefaultMemoryNotes(sessionId: string): MemoryNote[] {
@@ -147,8 +162,9 @@ export function loadUnsealedWorkspace(logger: DiagnosticLogger): {
     }
 
     const defaults = createDefaultWorkspace();
-    const models =
+    const rawModels =
       Array.isArray(parsed.models) && parsed.models.length > 0 ? parsed.models : defaults.models;
+    const models = upgradeBuiltinModelLimits(rawModels);
     const activeModelId =
       typeof parsed.activeModelId === 'string' && models.some((m) => m.id === parsed.activeModelId)
         ? parsed.activeModelId
@@ -170,6 +186,10 @@ export function loadUnsealedWorkspace(logger: DiagnosticLogger): {
         settings: {
           ...defaults.settings,
           ...(parsed.settings ?? {}),
+          theme: {
+            ...createDefaultTheme(),
+            ...(parsed.settings?.theme ?? {}),
+          },
         },
       },
     };
@@ -233,8 +253,23 @@ export async function unsealWorkspaceVault(
       return { ok: false, error: 'No sealed vault payload found in local storage.' };
     }
     const plaintext = await decryptVaultString(passphrase, sealed);
-    const workspace = JSON.parse(plaintext) as PersistedWorkspace;
-    globalThis.localStorage?.setItem(WORKSPACE_STORAGE_KEY, plaintext);
+    const rawWorkspace = JSON.parse(plaintext) as PersistedWorkspace;
+    const defaults = createDefaultSettings();
+    const workspace: PersistedWorkspace = {
+      ...rawWorkspace,
+      models: Array.isArray(rawWorkspace.models)
+        ? upgradeBuiltinModelLimits(rawWorkspace.models)
+        : createDefaultModels(),
+      settings: {
+        ...defaults,
+        ...(rawWorkspace.settings ?? {}),
+        theme: {
+          ...createDefaultTheme(),
+          ...(rawWorkspace.settings?.theme ?? {}),
+        },
+      },
+    };
+    globalThis.localStorage?.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(workspace));
     globalThis.localStorage?.removeItem(VAULT_STORAGE_KEY);
     logger.info('vault', 'Vault unlocked and workspace restored cleanly.');
     return { ok: true, workspace };

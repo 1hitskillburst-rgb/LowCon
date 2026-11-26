@@ -227,7 +227,7 @@ export function createLocalLlmProxyRouter(): Router {
           : 0.9;
       const maxTokens =
         typeof body.max_tokens === 'number' && Number.isFinite(body.max_tokens)
-          ? Math.min(32768, Math.max(16, Math.floor(body.max_tokens)))
+          ? Math.min(131072, Math.max(16, Math.floor(body.max_tokens)))
           : 512;
       const stop = Array.isArray(body.stop)
         ? body.stop.filter((s): s is string => typeof s === 'string' && s.length > 0).slice(0, 8)

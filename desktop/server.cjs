@@ -273,7 +273,7 @@ async function handleChatProxy(req, res) {
             : 0.9,
         max_tokens:
           typeof body.max_tokens === 'number' && Number.isFinite(body.max_tokens)
-            ? Math.min(32768, Math.max(16, Math.floor(body.max_tokens)))
+            ? Math.min(131072, Math.max(16, Math.floor(body.max_tokens)))
             : 512,
         stream,
         stop: Array.isArray(body.stop)

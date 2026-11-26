@@ -32,6 +32,7 @@ import {
   sealWorkspaceVault,
   unsealWorkspaceVault,
 } from './core/storage';
+import { applyThemeToDocument } from './core/theme';
 import {
   getEffectiveContextLimit,
   type AppSettings,
@@ -86,7 +87,8 @@ function buildLivePreviewInspection(
   memoryNotes: MemoryNote[],
   settings: AppSettings,
   composerText: string,
-): PromptInspection {
+  attachedFile: { name: string; content: string } | null,
+): { inspection: PromptInspection; previewWarning: string | null } {
   const effectiveLimit = getEffectiveContextLimit(activeModel, settings.contextLimitOverride);
   const templateType = activeModel?.chatTemplate ?? 'ChatML';
   const sessionId = session?.id;
@@ -119,7 +121,12 @@ function buildLivePreviewInspection(
       content: m.content,
     }));
 
-  const previewUserMsg = composerText.trim() || '(Draft message preview — type in composer to inspect exact turn tokens)';
+  const rawDraft = composerText.trim();
+  const previewUserMsg = attachedFile
+    ? rawDraft
+      ? `${rawDraft}\n\n[Attached local file: ${attachedFile.name}]\n${attachedFile.content}`
+      : `[Attached local file: ${attachedFile.name}]\n${attachedFile.content}`
+    : rawDraft;
 
   const candidates: AssemblyCandidates = {
     coreInstruction: CORE_SYSTEM_INSTRUCTION,
@@ -148,17 +155,18 @@ function buildLivePreviewInspection(
     outputReservePct: settings.outputReservePct,
     safetyMarginPct: settings.safetyMarginPct,
     templateType,
+    allowEmptyUserMessage: true,
   });
 
   if (result.ok) {
-    return result.inspection;
+    return { inspection: result.inspection, previewWarning: null };
   }
 
   // Fallback inspection solely for read-only idle preview if user shrinks slider below pinned rules
   const fallback = assembleContext(
     {
       coreInstruction: CORE_SYSTEM_INSTRUCTION,
-      currentUserMessage: '(Budget warning: mandatory content exceeds current prompt budget)',
+      currentUserMessage: '',
       pinnedFacts: [],
       retrievedMemories: [],
       conversationTurns: [],
@@ -169,10 +177,11 @@ function buildLivePreviewInspection(
       outputReservePct: settings.outputReservePct,
       safetyMarginPct: settings.safetyMarginPct,
       templateType,
+      allowEmptyUserMessage: true,
     },
   );
   if (fallback.ok) {
-    return fallback.inspection;
+    return { inspection: fallback.inspection, previewWarning: result.message };
   }
   throw new Error(fallback.message);
 }
@@ -225,7 +234,11 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Subscribe to diagnostic logger updates
+  // Subscribe to diagnostic logger updates and apply active theme variables
+  useEffect(() => {
+    applyThemeToDocument(workspace.settings.theme);
+  }, [workspace.settings.theme]);
+
   useEffect(() => {
     logger.setLevel(workspace.settings.diagnosticLevel);
   }, [logger, workspace.settings.diagnosticLevel]);
@@ -297,14 +310,16 @@ export const App: React.FC = () => {
   }, [workspace, vaultLocked, logger]);
 
   // Compute live preview inspection when composer/memory/settings change so ContextPanel & Inspector are NEVER stale/fake
-  const activeInspection = useMemo(() => {
+  const { inspection: activeInspection, previewWarning } = useMemo(() => {
     if (
       lastTurnInspection &&
       !composerText.trim() &&
+      !attachedFile &&
       activeSession &&
-      activeSession.messages.length > 0
+      activeSession.messages.length > 0 &&
+      generatingSessionId === activeSession.id
     ) {
-      return lastTurnInspection;
+      return { inspection: lastTurnInspection, previewWarning: null };
     }
     return buildLivePreviewInspection(
       activeSession,
@@ -312,11 +327,14 @@ export const App: React.FC = () => {
       workspace.memoryNotes,
       workspace.settings,
       composerText,
+      attachedFile,
     );
   }, [
     lastTurnInspection,
     composerText,
+    attachedFile,
     activeSession,
+    generatingSessionId,
     activeModel,
     workspace.memoryNotes,
     workspace.settings,
@@ -641,6 +659,7 @@ export const App: React.FC = () => {
         }),
       }));
       setLiveTokensPerSecond(null);
+      setLastTurnInspection(null);
       setGeneratingSessionId((curr) => (curr === targetSessionId ? null : curr));
     };
 
@@ -900,6 +919,7 @@ export const App: React.FC = () => {
         createdAt: now,
         updatedAt: now,
       };
+      setLastTurnInspection(null);
       setWorkspace((prev) => ({
         ...prev,
         memoryNotes: [newNote, ...prev.memoryNotes],
@@ -1108,7 +1128,7 @@ export const App: React.FC = () => {
     activeModel?.backendType === 'lm_studio' ? 'LM Studio (Loopback)' : 'Offline Mock';
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#F7F8F9] text-[#161B26]">
+    <div className="flex h-screen w-screen overflow-hidden bg-[var(--lc-bg)] text-[var(--lc-ink)]">
       {/* Left Navigation Sidebar */}
       <SidebarNav
         currentTab={currentTab}
@@ -1127,17 +1147,17 @@ export const App: React.FC = () => {
           <div
             role="alert"
             data-testid="system-error-banner"
-            className="flex shrink-0 items-center justify-between gap-3 border-b border-[#D9383A]/30 bg-[#D9383A]/10 px-6 py-2.5 text-[13px] text-[#991B1B]"
+            className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--lc-danger)]/35 bg-[var(--lc-danger)]/10 px-6 py-2.5 text-[13px] text-[var(--lc-danger)]"
           >
             <div className="flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 shrink-0 text-[#D9383A]" />
+              <AlertTriangle className="h-4 w-4 shrink-0 text-[var(--lc-danger)]" />
               <span>{bannerError}</span>
             </div>
             <button
               type="button"
               onClick={() => setBannerError(null)}
               aria-label="Dismiss error banner"
-              className="rounded p-0.5 text-[#991B1B] hover:bg-[#D9383A]/15"
+              className="rounded p-0.5 text-[var(--lc-danger)] hover:bg-[var(--lc-danger)]/15"
             >
               <X className="h-4 w-4" />
             </button>
@@ -1189,6 +1209,7 @@ export const App: React.FC = () => {
 
               <ContextPanel
                 budget={activeTurnBudget}
+                previewWarning={previewWarning}
                 taskGoal={activeSession.taskGoal}
                 onUpdateTaskGoal={handleUpdateTaskGoal}
                 memoryNotes={workspace.memoryNotes}
@@ -1271,6 +1292,7 @@ export const App: React.FC = () => {
           {currentTab === 'settings' && (
             <SettingsView
               settings={workspace.settings}
+              activeModel={activeModel}
               diagnosticEntries={diagnosticEntries}
               isTestingConnection={isTestingConnection}
               onUpdateSettings={(patch) => {

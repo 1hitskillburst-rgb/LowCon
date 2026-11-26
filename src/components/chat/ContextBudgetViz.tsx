@@ -2,6 +2,17 @@ import React from 'react';
 import { formatNumber } from '../../core/privacy';
 import type { ContextSegment, ContextSegmentKey, TurnContextBudget } from '../../core/types';
 
+const SEGMENT_CSS_VARS: Record<ContextSegmentKey, string> = {
+  core: 'var(--lc-seg-core, #161B26)',
+  task: 'var(--lc-accent, #2A3FE0)',
+  mem: 'var(--lc-seg-mem, #8F9CF3)',
+  recent: 'var(--lc-seg-recent, #F2D452)',
+  tpl: 'var(--lc-seg-tpl, #AAB2BF)',
+  free: 'var(--lc-seg-free, #EAEEF2)',
+  out: 'var(--lc-hold, #C6CCD6)',
+  safe: 'var(--lc-hold, #C6CCD6)',
+};
+
 interface StripProps {
   budget: TurnContextBudget;
   hoveredKey: ContextSegmentKey | null;
@@ -27,13 +38,13 @@ export const ContextStrip: React.FC<StripProps> = ({ budget, hoveredKey, onHover
             key={`${seg.key}-${seg.name}`}
             style={{
               width: `${pct}%`,
-              backgroundColor: seg.isFree ? 'transparent' : seg.color,
+              backgroundColor: seg.isFree ? 'transparent' : SEGMENT_CSS_VARS[seg.key] || seg.color,
               opacity: isDimmed ? 0.3 : 1,
             }}
             onMouseEnter={() => onHoverChange(seg.key)}
             title={`${seg.name}: ${formatNumber(seg.tokens)} tokens (${((seg.tokens / total) * 100).toFixed(1)}%) — ${seg.description}`}
             className={`h-full rounded-[2px] transition-opacity ${
-              seg.isFree ? 'border border-[#AAB2BF]' : ''
+              seg.isFree ? 'border border-[var(--lc-seg-tpl)]' : ''
             }`}
           />
         );
@@ -72,13 +83,13 @@ export const VerticalContextStack: React.FC<VerticalStackProps> = ({
             style={{
               flexGrow: pct,
               minHeight: '6px',
-              backgroundColor: seg.isFree ? 'transparent' : seg.color,
+              backgroundColor: seg.isFree ? 'transparent' : SEGMENT_CSS_VARS[seg.key] || seg.color,
               opacity: isDimmed ? 0.25 : 1,
             }}
             onMouseEnter={() => onHoverChange(seg.key)}
             title={`${seg.name}: ${formatNumber(seg.tokens)} tokens — ${seg.description}`}
             className={`w-full rounded-[3px] transition-opacity ${
-              seg.isFree ? 'border-[1.5px] border-[#AAB2BF]' : ''
+              seg.isFree ? 'border-[1.5px] border-[var(--lc-seg-tpl)]' : ''
             }`}
           />
         );
@@ -102,30 +113,30 @@ export const ContextSegmentRow: React.FC<RowProps> = ({
     <div
       onMouseEnter={() => onHoverChange(segment.key)}
       onMouseLeave={() => onHoverChange(null)}
-      className={`flex items-center justify-between gap-2 border-b border-[#D3D8DF] px-1.5 py-1.5 transition-colors ${
-        isHovered ? 'rounded-[4px] bg-white/80' : ''
+      className={`flex items-center justify-between gap-2 border-b border-[var(--lc-line)] px-1.5 py-1.5 transition-colors ${
+        isHovered ? 'rounded-[4px] bg-[var(--lc-hover)]' : ''
       }`}
     >
       <div className="flex min-w-0 items-start gap-2">
         <span
           aria-hidden="true"
           style={{
-            backgroundColor: segment.isFree ? 'transparent' : segment.color,
+            backgroundColor: segment.isFree ? 'transparent' : SEGMENT_CSS_VARS[segment.key] || segment.color,
           }}
           className={`mt-1 h-2 w-2 shrink-0 rounded-[1px] ${
-            segment.isFree ? 'border border-[#AAB2BF]' : ''
+            segment.isFree ? 'border border-[var(--lc-seg-tpl)]' : ''
           }`}
         />
         <div className="min-w-0">
-          <div className="truncate text-[12.5px] font-semibold text-[#161B26]">
+          <div className="truncate text-[12.5px] font-semibold text-[var(--lc-side-ink)]">
             {segment.name}
           </div>
-          <div className="truncate text-[11px] text-[#778091]">{segment.description}</div>
+          <div className="truncate text-[11px] text-[var(--lc-side-mute)]">{segment.description}</div>
         </div>
       </div>
       <span
         className={`shrink-0 text-[12.5px] font-semibold tabular-nums ${
-          segment.isFree ? 'text-[#1D7A4E]' : 'text-[#444D5C]'
+          segment.isFree ? 'text-[var(--lc-success)]' : 'text-[var(--lc-side-ink2)]'
         }`}
       >
         {formatNumber(segment.tokens)}

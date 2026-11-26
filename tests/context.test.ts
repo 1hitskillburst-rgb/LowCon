@@ -5,11 +5,14 @@ import {
   buildTurnContextBudget,
   calculateBudgetPartition,
   estimateTokensConservative,
+  getFreeTokens,
   getPackedTokens,
 } from '../src/core/context';
+import { createDefaultModels } from '../src/core/storage';
+import { getEffectiveContextLimit } from '../src/core/types';
 
-test('budget partition enforces prompt + output + safety <= limit across 2K..32K', () => {
-  for (const limit of [2048, 4096, 8192, 16384, 32768]) {
+test('budget partition enforces prompt + output + safety <= limit across 2K..128K', () => {
+  for (const limit of [2048, 4096, 8192, 16384, 32768, 65536, 131072]) {
     const res = calculateBudgetPartition(limit, 20, 5);
     assert.equal(res.ok, true);
     if (res.ok) {
@@ -19,6 +22,57 @@ test('budget partition enforces prompt + output + safety <= limit across 2K..32K
       );
       assert.equal(res.partition.modelLimit, limit);
     }
+  }
+});
+
+test('built-in models allow Settings context cap above 8K up to 128K', () => {
+  const models = createDefaultModels();
+  for (const model of models) {
+    assert.equal(getEffectiveContextLimit(model, 8192), 8192);
+    assert.equal(getEffectiveContextLimit(model, 32768), 32768);
+    assert.equal(getEffectiveContextLimit(model, 131072), 131072);
+  }
+});
+
+test('idle live preview reconciles segment sum with totalTokens and free + held = modelLimit', () => {
+  const res = assembleContext(
+    {
+      coreInstruction: 'You are LowCon.',
+      currentUserMessage: '',
+      pinnedFacts: [
+        { id: 'p1', title: 'Rule 1', content: 'Be brief.' },
+        { id: 'p2', title: 'Rule 2', content: 'Stay local.' },
+      ],
+      taskState: { goal: 'Verify math' },
+      retrievedMemories: [
+        { id: 'm1', title: 'Note', excerpt: 'Short excerpt.', relevanceScore: 0.9, isPinned: false },
+      ],
+      conversationTurns: [
+        { id: 't1', role: 'user', content: 'Hello' },
+        { id: 't2', role: 'assistant', content: 'Hi there.' },
+      ],
+      summaries: [],
+    },
+    {
+      modelContextLimit: 16384,
+      outputReservePct: 20,
+      safetyMarginPct: 5,
+      templateType: 'ChatML',
+      allowEmptyUserMessage: true,
+    },
+  );
+
+  assert.equal(res.ok, true);
+  if (res.ok) {
+    const budget = buildTurnContextBudget(res.inspection);
+    const packed = getPackedTokens(budget);
+    const free = getFreeTokens(budget);
+    const held = budget.segments
+      .filter((s) => s.isHeld)
+      .reduce((sum, s) => sum + s.tokens, 0);
+
+    assert.equal(packed, res.inspection.totalTokens);
+    assert.equal(packed + free + held, budget.totalLimit);
   }
 });
 

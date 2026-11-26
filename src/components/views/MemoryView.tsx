@@ -131,12 +131,12 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
   ];
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col bg-[#F7F8F9]">
+    <div className="flex h-full min-w-0 flex-1 flex-col bg-[var(--lc-bg)] text-[var(--lc-ink)]">
       {/* Header */}
-      <header className="flex shrink-0 items-center justify-between border-b border-[#D3D8DF] px-7 py-3">
+      <header className="flex shrink-0 items-center justify-between border-b border-[var(--lc-line)] px-7 py-3">
         <div className="flex items-center text-[13px]">
-          <span className="text-[#778091]">Workspace /</span>
-          <span className="ml-1 font-semibold text-[#161B26]">Memory</span>
+          <span className="text-[var(--lc-mute)]">Workspace /</span>
+          <span className="ml-1 font-semibold text-[var(--lc-ink)]">Memory</span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -147,7 +147,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                 onGenerateSessionSummary();
                 setFilter('summaries');
               }}
-              className="inline-flex items-center gap-1.5 rounded-[6px] border border-[#D3D8DF] bg-white px-3 py-1.5 text-[12.5px] font-medium text-[#161B26] hover:bg-[#DDE1E7]"
+              className="inline-flex items-center gap-1.5 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[12.5px] font-medium text-[var(--lc-surf-ink)] hover:bg-[var(--lc-surf-hover)]"
             >
               <FileText className="h-3.5 w-3.5" />
               <span>Summarize Active Chat</span>
@@ -156,7 +156,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
           <button
             type="button"
             onClick={() => setShowCreateModal(true)}
-            className="inline-flex items-center gap-1.5 rounded-[6px] bg-[#2A3FE0] px-3.5 py-1.5 text-[12.5px] font-semibold text-white hover:bg-[#2234be]"
+            className="inline-flex items-center gap-1.5 rounded-[6px] bg-[var(--lc-accent)] px-3.5 py-1.5 text-[12.5px] font-semibold text-[var(--lc-accent-contrast)] hover:bg-[var(--lc-accent-hover)]"
           >
             <Plus className="h-3.5 w-3.5" />
             <span>New Note</span>
@@ -168,10 +168,10 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
       <div className="flex-1 overflow-y-auto px-7 py-6">
         <div className="mx-auto max-w-[820px] space-y-5">
           <div>
-            <h1 className="text-[22px] font-bold tracking-tight text-[#161B26]">
+            <h1 className="text-[22px] font-bold tracking-tight text-[var(--lc-ink)]">
               Local Memory & Pinned Project Rules
             </h1>
-            <p className="mt-1 text-[13.5px] text-[#444D5C]">
+            <p className="mt-1 text-[13.5px] text-[var(--lc-ink2)]">
               Pinned rules are injected unconditionally into every prompt regardless of wording.
               Unpinned notes are retrieved across your entire library using BM25 + recency scoring.
             </p>
@@ -180,7 +180,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
           {/* Search & Filters */}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="relative flex-1">
-              <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[#778091]" />
+              <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[var(--lc-surf-mute)]" />
               <label htmlFor="memory-search-input" className="sr-only">
                 Search memory notes
               </label>
@@ -190,7 +190,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search across all local memory notes (BM25 full-text)..."
-                className="w-full rounded-[8px] border border-[#D3D8DF] bg-white py-2 pr-3 pl-9 text-[13.5px] text-[#161B26] placeholder:text-[#778091] focus:border-[#2A3FE0] focus:outline-none"
+                className="w-full rounded-[8px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] py-2 pr-3 pl-9 text-[13.5px] text-[var(--lc-surf-ink)] placeholder:text-[var(--lc-surf-mute)] focus:border-[var(--lc-accent)] focus:outline-none"
               />
             </div>
 
@@ -204,8 +204,8 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                     onClick={() => setFilter(chip.id)}
                     className={`rounded-[6px] px-2.5 py-1.5 text-[12px] font-medium transition-colors ${
                       active
-                        ? 'bg-[#161B26] text-white'
-                        : 'border border-[#D3D8DF] bg-white text-[#444D5C] hover:bg-[#DDE1E7]'
+                        ? 'bg-[var(--lc-active-pill-bg)] text-[var(--lc-active-pill-fg)]'
+                        : 'border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]'
                     }`}
                   >
                     {chip.label}
@@ -218,7 +218,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
           {/* Notes List */}
           <div className="space-y-3">
             {filteredNotes.length === 0 ? (
-              <div className="rounded-[8px] border border-[#D3D8DF] bg-white px-5 py-8 text-center text-[13.5px] text-[#778091]">
+              <div className="rounded-[8px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-5 py-8 text-center text-[13.5px] text-[var(--lc-surf-mute)]">
                 No memory notes match the current filter or search query.
               </div>
             ) : (
@@ -229,43 +229,43 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                   <article
                     key={note.id}
                     data-testid={`memory-note-${note.id}`}
-                    className={`rounded-[8px] border bg-white p-4 ${
+                    className={`rounded-[8px] border bg-[var(--lc-surface)] p-4 text-[var(--lc-surf-ink)] ${
                       note.isDisabled
-                        ? 'border-[#D3D8DF] opacity-60'
+                        ? 'border-[var(--lc-surf-line)] opacity-60'
                         : note.isPinned
-                          ? 'border-[#161B26]'
-                          : 'border-[#D3D8DF]'
+                          ? 'border-[var(--lc-accent)]'
+                          : 'border-[var(--lc-surf-line)]'
                     }`}
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <h2 className="text-[14.5px] font-bold text-[#161B26]">{note.title}</h2>
+                          <h2 className="text-[14.5px] font-bold text-[var(--lc-surf-ink)]">{note.title}</h2>
                           {note.isPinned && (
-                            <span className="rounded-[4px] bg-[#161B26] px-1.5 py-0.5 text-[10.5px] font-semibold text-white">
+                            <span className="rounded-[4px] bg-[var(--lc-active-pill-bg)] px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--lc-active-pill-fg)]">
                               PINNED RULE
                             </span>
                           )}
                           {isInPrompt && (
-                            <span className="rounded-[4px] bg-[#2A3FE0]/12 px-1.5 py-0.5 text-[10.5px] font-semibold text-[#2A3FE0]">
+                            <span className="rounded-[4px] bg-[var(--lc-accent)]/15 px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--lc-accent)]">
                               IN ACTIVE PROMPT
                             </span>
                           )}
                           {note.isSummary && (
-                            <span className="rounded-[4px] bg-[#EEF0F3] px-1.5 py-0.5 text-[10.5px] font-semibold text-[#444D5C]">
+                            <span className="rounded-[4px] bg-[var(--lc-panel)] px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--lc-side-ink2)]">
                               {note.userApproved ? 'APPROVED SUMMARY' : 'UNAPPROVED SUMMARY'}
                             </span>
                           )}
                           {note.isDisabled && (
-                            <span className="rounded-[4px] bg-[#E8EBEF] px-1.5 py-0.5 text-[10.5px] font-semibold text-[#778091]">
+                            <span className="rounded-[4px] bg-[var(--lc-hover)] px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--lc-side-mute)]">
                               DISABLED
                             </span>
                           )}
                         </div>
-                        <p className="mt-1.5 text-[13.5px] leading-relaxed whitespace-pre-wrap text-[#1D2330]">
+                        <p className="mt-1.5 text-[13.5px] leading-relaxed whitespace-pre-wrap text-[var(--lc-surf-ink2)]">
                           {note.content}
                         </p>
-                        <div className="mt-2 flex flex-wrap gap-x-3 text-[11.5px] text-[#778091]">
+                        <div className="mt-2 flex flex-wrap gap-x-3 text-[11.5px] text-[var(--lc-surf-mute)]">
                           <span>Source: {note.sourceReference}</span>
                           <span>Updated {formatRelativeTime(note.updatedAt)}</span>
                         </div>
@@ -278,7 +278,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                             type="button"
                             onClick={() => onUpdateNote(note.id, { userApproved: true })}
                             aria-label={`Approve summary ${note.title}`}
-                            className="inline-flex items-center gap-1 rounded-[6px] border border-[#1D7A4E] bg-[#1D7A4E]/10 px-2.5 py-1 text-[12px] font-semibold text-[#1D7A4E] hover:bg-[#1D7A4E]/20"
+                            className="inline-flex items-center gap-1 rounded-[6px] border border-[var(--lc-success)] bg-[var(--lc-success)]/10 px-2.5 py-1 text-[12px] font-semibold text-[var(--lc-success)] hover:bg-[var(--lc-success)]/20"
                           >
                             <CheckCircle2 className="h-3.5 w-3.5" />
                             <span>Approve</span>
@@ -291,8 +291,8 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                           aria-label={`${note.isPinned ? 'Unpin' : 'Pin'} ${note.title}`}
                           className={`inline-flex items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[12px] font-medium ${
                             note.isPinned
-                              ? 'border-[#161B26] bg-[#161B26] text-white'
-                              : 'border-[#D3D8DF] bg-white text-[#444D5C] hover:bg-[#DDE1E7]'
+                              ? 'border-[var(--lc-accent)] bg-[var(--lc-accent)] text-[var(--lc-accent-contrast)]'
+                              : 'border-[var(--lc-surf-line)] bg-[var(--lc-surface)] text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]'
                           }`}
                         >
                           <Pin className="h-3 w-3" />
@@ -303,7 +303,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                           type="button"
                           onClick={() => onUpdateNote(note.id, { isDisabled: !note.isDisabled })}
                           aria-label={`${note.isDisabled ? 'Enable' : 'Disable'} ${note.title}`}
-                          className="inline-flex items-center gap-1 rounded-[6px] border border-[#D3D8DF] bg-white px-2.5 py-1 text-[12px] text-[#444D5C] hover:bg-[#DDE1E7]"
+                          className="inline-flex items-center gap-1 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1 text-[12px] text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]"
                         >
                           {note.isDisabled ? (
                             <Eye className="h-3 w-3" />
@@ -325,7 +325,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                             })
                           }
                           aria-label={`Edit ${note.title}`}
-                          className="inline-flex items-center gap-1 rounded-[6px] border border-[#D3D8DF] bg-white px-2.5 py-1 text-[12px] font-medium text-[#161B26] hover:bg-[#DDE1E7]"
+                          className="inline-flex items-center gap-1 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1 text-[12px] font-medium text-[var(--lc-surf-ink)] hover:bg-[var(--lc-surf-hover)]"
                         >
                           <Edit3 className="h-3 w-3" />
                           <span>Edit</span>
@@ -335,7 +335,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                           type="button"
                           onClick={() => onDeleteNote(note.id)}
                           aria-label={`Delete ${note.title}`}
-                          className="inline-flex items-center gap-1 rounded-[6px] border border-[#D3D8DF] bg-white px-2 py-1 text-[12px] text-[#778091] hover:border-[#D9383A] hover:text-[#D9383A]"
+                          className="inline-flex items-center gap-1 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2 py-1 text-[12px] text-[var(--lc-surf-mute)] hover:border-[var(--lc-danger)] hover:text-[var(--lc-danger)]"
                         >
                           <Trash2 className="h-3 w-3" />
                         </button>
@@ -355,28 +355,28 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
           role="dialog"
           aria-modal="true"
           aria-labelledby="create-note-title"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
         >
           <form
             onSubmit={handleCreateSubmit}
-            className="w-full max-w-[520px] rounded-[10px] border border-[#D3D8DF] bg-white shadow-xl"
+            className="w-full max-w-[520px] rounded-[10px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] text-[var(--lc-surf-ink)] shadow-xl"
           >
-            <div className="flex items-center justify-between border-b border-[#D3D8DF] px-5 py-3.5">
-              <h2 id="create-note-title" className="text-[15px] font-bold text-[#161B26]">
+            <div className="flex items-center justify-between border-b border-[var(--lc-surf-line)] px-5 py-3.5">
+              <h2 id="create-note-title" className="text-[15px] font-bold text-[var(--lc-surf-ink)]">
                 Create Memory Note
               </h2>
               <button
                 type="button"
                 onClick={() => setShowCreateModal(false)}
                 aria-label="Close create note dialog"
-                className="rounded p-1 text-[#778091] hover:bg-[#E8EBEF] hover:text-[#161B26]"
+                className="rounded p-1 text-[var(--lc-surf-mute)] hover:bg-[var(--lc-surf-hover)] hover:text-[var(--lc-surf-ink)]"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
             <div className="space-y-3.5 px-5 py-4">
               <div>
-                <label htmlFor="create-note-title-input" className="block text-[12px] font-semibold text-[#444D5C]">
+                <label htmlFor="create-note-title-input" className="block text-[12px] font-semibold text-[var(--lc-surf-ink2)]">
                   Title
                 </label>
                 <input
@@ -386,11 +386,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
                   placeholder="e.g. Strict TypeScript output format"
-                  className="mt-1 w-full rounded-[6px] border border-[#D3D8DF] px-3 py-1.5 text-[13.5px] text-[#161B26] focus:border-[#2A3FE0] focus:outline-none"
+                  className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[13.5px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
                 />
               </div>
               <div>
-                <label htmlFor="create-note-content-input" className="block text-[12px] font-semibold text-[#444D5C]">
+                <label htmlFor="create-note-content-input" className="block text-[12px] font-semibold text-[var(--lc-surf-ink2)]">
                   Content
                 </label>
                 <textarea
@@ -400,11 +400,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                   value={newContent}
                   onChange={(e) => setNewContent(e.target.value)}
                   placeholder="Write concise, factual constraints or project decisions..."
-                  className="mt-1 w-full rounded-[6px] border border-[#D3D8DF] px-3 py-2 text-[13.5px] text-[#161B26] focus:border-[#2A3FE0] focus:outline-none"
+                  className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-2 text-[13.5px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
                 />
               </div>
               <div>
-                <label htmlFor="create-note-source-input" className="block text-[12px] font-semibold text-[#444D5C]">
+                <label htmlFor="create-note-source-input" className="block text-[12px] font-semibold text-[var(--lc-surf-ink2)]">
                   Source Reference
                 </label>
                 <input
@@ -412,39 +412,39 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                   type="text"
                   value={newSource}
                   onChange={(e) => setNewSource(e.target.value)}
-                  className="mt-1 w-full rounded-[6px] border border-[#D3D8DF] px-3 py-1.5 text-[13px] text-[#161B26] focus:border-[#2A3FE0] focus:outline-none"
+                  className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[13px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
                 />
               </div>
-              <label className="flex items-center gap-2 text-[13px] text-[#161B26]">
+              <label className="flex items-center gap-2 text-[13px] text-[var(--lc-surf-ink)]">
                 <input
                   type="checkbox"
                   checked={newPinned}
                   onChange={(e) => setNewPinned(e.target.checked)}
-                  className="h-4 w-4 accent-[#2A3FE0]"
+                  className="h-4 w-4 accent-[var(--lc-accent)]"
                 />
                 <span>Pin as project rule (always included in every prompt)</span>
               </label>
-              <label className="flex items-center gap-2 text-[13px] text-[#161B26]">
+              <label className="flex items-center gap-2 text-[13px] text-[var(--lc-surf-ink)]">
                 <input
                   type="checkbox"
                   checked={newIsSummary}
                   onChange={(e) => setNewIsSummary(e.target.checked)}
-                  className="h-4 w-4 accent-[#2A3FE0]"
+                  className="h-4 w-4 accent-[var(--lc-accent)]"
                 />
                 <span>Create as conversation summary (requires approval before prompt injection)</span>
               </label>
             </div>
-            <div className="flex justify-end gap-2 border-t border-[#D3D8DF] px-5 py-3">
+            <div className="flex justify-end gap-2 border-t border-[var(--lc-surf-line)] px-5 py-3">
               <button
                 type="button"
                 onClick={() => setShowCreateModal(false)}
-                className="rounded-[6px] border border-[#D3D8DF] bg-white px-3.5 py-1.5 text-[13px] text-[#444D5C] hover:bg-[#E8EBEF]"
+                className="rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3.5 py-1.5 text-[13px] text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="rounded-[6px] bg-[#2A3FE0] px-4 py-1.5 text-[13px] font-semibold text-white hover:bg-[#2234be]"
+                className="rounded-[6px] bg-[var(--lc-accent)] px-4 py-1.5 text-[13px] font-semibold text-[var(--lc-accent-contrast)] hover:bg-[var(--lc-accent-hover)]"
               >
                 Save Note
               </button>
@@ -459,28 +459,28 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
           role="dialog"
           aria-modal="true"
           aria-labelledby="edit-note-title"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
         >
           <form
             onSubmit={handleEditSubmit}
-            className="w-full max-w-[520px] rounded-[10px] border border-[#D3D8DF] bg-white shadow-xl"
+            className="w-full max-w-[520px] rounded-[10px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] text-[var(--lc-surf-ink)] shadow-xl"
           >
-            <div className="flex items-center justify-between border-b border-[#D3D8DF] px-5 py-3.5">
-              <h2 id="edit-note-title" className="text-[15px] font-bold text-[#161B26]">
+            <div className="flex items-center justify-between border-b border-[var(--lc-surf-line)] px-5 py-3.5">
+              <h2 id="edit-note-title" className="text-[15px] font-bold text-[var(--lc-surf-ink)]">
                 Edit Memory Note
               </h2>
               <button
                 type="button"
                 onClick={() => setEditingNote(null)}
                 aria-label="Close edit note dialog"
-                className="rounded p-1 text-[#778091] hover:bg-[#E8EBEF] hover:text-[#161B26]"
+                className="rounded p-1 text-[var(--lc-surf-mute)] hover:bg-[var(--lc-surf-hover)] hover:text-[var(--lc-surf-ink)]"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
             <div className="space-y-3.5 px-5 py-4">
               <div>
-                <label htmlFor="edit-note-title-input" className="block text-[12px] font-semibold text-[#444D5C]">
+                <label htmlFor="edit-note-title-input" className="block text-[12px] font-semibold text-[var(--lc-surf-ink2)]">
                   Title
                 </label>
                 <input
@@ -491,11 +491,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                   onChange={(e) =>
                     setEditingNote((prev) => (prev ? { ...prev, title: e.target.value } : null))
                   }
-                  className="mt-1 w-full rounded-[6px] border border-[#D3D8DF] px-3 py-1.5 text-[13.5px] text-[#161B26] focus:border-[#2A3FE0] focus:outline-none"
+                  className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[13.5px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
                 />
               </div>
               <div>
-                <label htmlFor="edit-note-content-input" className="block text-[12px] font-semibold text-[#444D5C]">
+                <label htmlFor="edit-note-content-input" className="block text-[12px] font-semibold text-[var(--lc-surf-ink2)]">
                   Content
                 </label>
                 <textarea
@@ -506,11 +506,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                   onChange={(e) =>
                     setEditingNote((prev) => (prev ? { ...prev, content: e.target.value } : null))
                   }
-                  className="mt-1 w-full rounded-[6px] border border-[#D3D8DF] px-3 py-2 text-[13.5px] text-[#161B26] focus:border-[#2A3FE0] focus:outline-none"
+                  className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-2 text-[13.5px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
                 />
               </div>
               <div>
-                <label htmlFor="edit-note-source-input" className="block text-[12px] font-semibold text-[#444D5C]">
+                <label htmlFor="edit-note-source-input" className="block text-[12px] font-semibold text-[var(--lc-surf-ink2)]">
                   Source Reference
                 </label>
                 <input
@@ -522,32 +522,32 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                       prev ? { ...prev, sourceReference: e.target.value } : null,
                     )
                   }
-                  className="mt-1 w-full rounded-[6px] border border-[#D3D8DF] px-3 py-1.5 text-[13px] text-[#161B26] focus:border-[#2A3FE0] focus:outline-none"
+                  className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[13px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
                 />
               </div>
-              <label className="flex items-center gap-2 text-[13px] text-[#161B26]">
+              <label className="flex items-center gap-2 text-[13px] text-[var(--lc-surf-ink)]">
                 <input
                   type="checkbox"
                   checked={editingNote.isPinned}
                   onChange={(e) =>
                     setEditingNote((prev) => (prev ? { ...prev, isPinned: e.target.checked } : null))
                   }
-                  className="h-4 w-4 accent-[#2A3FE0]"
+                  className="h-4 w-4 accent-[var(--lc-accent)]"
                 />
                 <span>Pin as project rule (always included in every prompt)</span>
               </label>
             </div>
-            <div className="flex justify-end gap-2 border-t border-[#D3D8DF] px-5 py-3">
+            <div className="flex justify-end gap-2 border-t border-[var(--lc-surf-line)] px-5 py-3">
               <button
                 type="button"
                 onClick={() => setEditingNote(null)}
-                className="rounded-[6px] border border-[#D3D8DF] bg-white px-3.5 py-1.5 text-[13px] text-[#444D5C] hover:bg-[#E8EBEF]"
+                className="rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3.5 py-1.5 text-[13px] text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="rounded-[6px] bg-[#2A3FE0] px-4 py-1.5 text-[13px] font-semibold text-white hover:bg-[#2234be]"
+                className="rounded-[6px] bg-[var(--lc-accent)] px-4 py-1.5 text-[13px] font-semibold text-[var(--lc-accent-contrast)] hover:bg-[var(--lc-accent-hover)]"
               >
                 Save Changes
               </button>

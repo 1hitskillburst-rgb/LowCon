@@ -65,6 +65,7 @@ export interface AssemblyOptions {
   outputReservePct: number;
   safetyMarginPct: number;
   templateType: ChatTemplateType;
+  allowEmptyUserMessage?: boolean;
 }
 
 export type AssemblyResult =
@@ -411,7 +412,7 @@ export function assembleContext(
   const partition = budgetRes.partition;
   const promptBudget = partition.promptBudget;
 
-  if (!candidates.currentUserMessage.trim()) {
+  if (!candidates.currentUserMessage.trim() && !options.allowEmptyUserMessage) {
     return { ok: false, code: 'EMPTY_USER_MESSAGE', message: 'Cannot assemble context for an empty user message.' };
   }
 
@@ -728,13 +729,16 @@ export function assembleContext(
   // Conversation turns + current user message -> 'recent' segment
   const turnsBlock = workingTurns.map((t) => t.content).join('\n');
   const turnsTokens = workingTurns.length > 0 ? estimateTokensConservative(turnsBlock) : 0;
-  const userTokens = estimateTokensConservative(candidates.currentUserMessage);
+  const hasCurrentUserMsg = candidates.currentUserMessage.trim().length > 0;
+  const userTokens = hasCurrentUserMsg ? estimateTokensConservative(candidates.currentUserMessage) : 0;
   const recentTotal = turnsTokens + userTokens;
   sections.push({
     segmentKey: 'recent',
     name: 'Recent turns & prompt',
     tokens: recentTotal,
-    description: `${workingTurns.length} prior turn${workingTurns.length === 1 ? '' : 's'} + current message`,
+    description: hasCurrentUserMsg
+      ? `${workingTurns.length} prior turn${workingTurns.length === 1 ? '' : 's'} + current message`
+      : `${workingTurns.length} conversation turn${workingTurns.length === 1 ? '' : 's'} in context`,
   });
   for (const t of workingTurns) {
     includedItems.push({
@@ -744,15 +748,37 @@ export function assembleContext(
       tokens: estimateTokensConservative(t.content),
     });
   }
-  includedItems.push({
-    id: 'current_user_message',
-    kind: 'current_user_message',
-    label: 'Current user message (unclipped)',
-    tokens: userTokens,
-  });
+  if (hasCurrentUserMsg) {
+    includedItems.push({
+      id: 'current_user_message',
+      kind: 'current_user_message',
+      label: 'Current user message (unclipped)',
+      tokens: userTokens,
+    });
+  }
+
+  // Reconcile per-section rounding so sum(sections) === currentTokens === getPackedTokens(budget)
+  let contentSum = sections.reduce((sum, s) => sum + s.tokens, 0);
+  if (contentSum > currentTokens) {
+    let excess = contentSum - currentTokens;
+    // Trim 1 token at a time from the largest sections (never dropping non-empty sections below 1)
+    while (excess > 0) {
+      let largestIdx = -1;
+      let largestTokens = 1;
+      for (let i = 0; i < sections.length; i++) {
+        if (sections[i].tokens > largestTokens) {
+          largestTokens = sections[i].tokens;
+          largestIdx = i;
+        }
+      }
+      if (largestIdx === -1) break;
+      sections[largestIdx].tokens -= 1;
+      excess -= 1;
+    }
+    contentSum = sections.reduce((sum, s) => sum + s.tokens, 0);
+  }
 
   // Template syntax overhead -> 'tpl' segment
-  const contentSum = sections.reduce((sum, s) => sum + s.tokens, 0);
   const templateOverhead = Math.max(0, currentTokens - contentSum);
   sections.push({
     segmentKey: 'tpl',
@@ -761,7 +787,8 @@ export function assembleContext(
     description: `${options.templateType} framing tokens`,
   });
 
-  const remainingCapacity = Math.max(0, promptBudget - currentTokens);
+  const packedTotal = sections.reduce((sum, s) => sum + s.tokens, 0);
+  const remainingCapacity = Math.max(0, promptBudget - packedTotal);
   const includedMemoryIds = [
     ...pinnedFacts.map((f) => f.id),
     ...workingMemories.map((m) => m.id),
@@ -773,7 +800,7 @@ export function assembleContext(
     inspection: {
       exactRenderedPrompt: rendered.exactRenderedPrompt,
       structuredMessages: rendered.structuredMessages,
-      totalTokens: currentTokens,
+      totalTokens: packedTotal,
       isExactCount: false,
       tokenizerName: 'Conservative Token Estimator (heuristic + 15% cushion)',
       templateType: options.templateType,

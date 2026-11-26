@@ -152,6 +152,16 @@ export interface ModelProfile {
   ramFootprintMb?: number;
 }
 
+export type ThemePresetId = 'white' | 'gray' | 'black' | 'custom';
+
+export interface ThemeSettings {
+  preset: ThemePresetId;
+  bg: string;
+  surface: string;
+  sidebar: string;
+  accent: string;
+}
+
 export interface AppSettings {
   outputReservePct: number;
   safetyMarginPct: number;
@@ -164,6 +174,7 @@ export interface AppSettings {
   selectedLmModel: string;
   connectionStatus: string;
   storageNamespace: string;
+  theme?: ThemeSettings;
 }
 
 export type WorkerStatus =

@@ -104,10 +104,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
   const workerDotColor =
     workerStatus.state === 'loaded' || workerStatus.state === 'generating'
-      ? '#1D7A4E'
+      ? 'var(--lc-success)'
       : workerStatus.state === 'error'
-        ? '#D9383A'
-        : '#778091';
+        ? 'var(--lc-danger)'
+        : 'var(--lc-mute)';
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     setFileError(null);
@@ -136,17 +136,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col bg-[#F7F8F9]">
+    <div className="flex h-full min-w-0 flex-1 flex-col bg-[var(--lc-bg)] text-[var(--lc-ink)]">
       {/* Top Header Bar */}
-      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[#D3D8DF] bg-[#F7F8F9] px-7 py-3">
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--lc-line)] bg-[var(--lc-bg)] px-7 py-3">
         <div className="flex items-center text-[13px]">
-          <span className="text-[#778091]">Workspace /</span>
-          <span className="ml-1 font-semibold text-[#161B26]">Chat</span>
+          <span className="text-[var(--lc-mute)]">Workspace /</span>
+          <span className="ml-1 font-semibold text-[var(--lc-ink)]">Chat</span>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
           {/* Real Worker Readiness Status */}
-          <div className="flex items-center gap-1.5 text-[12px] text-[#444D5C]">
+          <div className="flex items-center gap-1.5 text-[12px] text-[var(--lc-ink2)]">
             <span
               aria-hidden="true"
               style={{ backgroundColor: workerDotColor }}
@@ -156,8 +156,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
 
           {/* Active Backend Badge */}
-          <div className="flex items-center gap-1.5 rounded-[6px] border border-[#D3D8DF] bg-[#EEF0F3] px-2 py-1 text-[11.5px] font-semibold text-[#444D5C]">
-            <span aria-hidden="true" className="h-[6px] w-[6px] rounded-full bg-[#1D7A4E]" />
+          <div className="flex items-center gap-1.5 rounded-[6px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-2 py-1 text-[11.5px] font-semibold text-[var(--lc-side-ink2)]">
+            <span aria-hidden="true" className="h-[6px] w-[6px] rounded-full bg-[var(--lc-success)]" />
             <span>{backendLabel}</span>
           </div>
 
@@ -169,7 +169,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             id="chat-active-model-select"
             value={activeModelId}
             onChange={(e) => onSelectActiveModel(e.target.value)}
-            className="max-w-[320px] rounded-[6px] border border-[#D3D8DF] bg-white px-2.5 py-1 text-[12.5px] font-semibold text-[#161B26] focus:border-[#2A3FE0] focus:outline-none"
+            className="max-w-[320px] rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1 text-[12.5px] font-semibold text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
           >
             {models.map((m) => (
               <option key={m.id} value={m.id}>
@@ -186,12 +186,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {/* Session Title Header */}
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
-              <h1 className="text-[24px] leading-snug font-bold tracking-tight text-[#161B26]">
+              <h1 className="text-[24px] leading-snug font-bold tracking-tight text-[var(--lc-ink)]">
                 {session.title}
               </h1>
-              <p className="mt-0.5 text-[13px] text-[#778091]">{session.subtitle}</p>
+              <p className="mt-0.5 text-[13px] text-[var(--lc-mute)]">{session.subtitle}</p>
               {session.taskGoal?.trim() && (
-                <div className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-[6px] border border-[#2A3FE0]/25 bg-[#2A3FE0]/8 px-2.5 py-1 text-[12px] text-[#2A3FE0]">
+                <div className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-[6px] border border-[var(--lc-accent)]/25 bg-[var(--lc-accent)]/10 px-2.5 py-1 text-[12px] text-[var(--lc-accent)]">
                   <span className="shrink-0 font-semibold">Task goal:</span>
                   <span className="truncate">{session.taskGoal}</span>
                 </div>
@@ -207,7 +207,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       setSummaryCreatedNotice(true);
                     }
                   }}
-                  className="inline-flex items-center gap-1.5 rounded-[6px] border border-[#D3D8DF] bg-white px-3 py-1.5 text-[13px] text-[#444D5C] transition-colors hover:bg-[#DDE1E7] hover:text-[#161B26] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[13px] text-[var(--lc-surf-ink2)] transition-colors hover:bg-[var(--lc-surf-hover)] hover:text-[var(--lc-surf-ink)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <FileText className="h-3.5 w-3.5" />
                   <span>Summarize chat</span>
@@ -216,7 +216,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <button
                 type="button"
                 onClick={onNewSession}
-                className="shrink-0 rounded-[6px] border border-[#D3D8DF] bg-white px-3 py-1.5 text-[13px] text-[#444D5C] transition-colors hover:bg-[#DDE1E7] hover:text-[#161B26]"
+                className="shrink-0 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[13px] text-[var(--lc-surf-ink2)] transition-colors hover:bg-[var(--lc-surf-hover)] hover:text-[var(--lc-surf-ink)]"
               >
                 New session
               </button>
@@ -226,7 +226,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {summaryCreatedNotice && (
             <div
               role="status"
-              className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[8px] border border-[#1D7A4E]/30 bg-[#1D7A4E]/8 px-3.5 py-2 text-[12.5px] text-[#1D7A4E]"
+              className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[8px] border border-[var(--lc-success)]/30 bg-[var(--lc-success)]/10 px-3.5 py-2 text-[12.5px] text-[var(--lc-success)]"
             >
               <span>
                 Draft summary saved (unapproved). Approve it in Memory → Summaries to include it in prompts.
@@ -235,7 +235,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <button
                   type="button"
                   onClick={onReviewSummaries}
-                  className="rounded-[5px] bg-[#1D7A4E] px-2.5 py-1 text-[12px] font-semibold text-white hover:bg-[#16603d]"
+                  className="rounded-[5px] bg-[var(--lc-success)] px-2.5 py-1 text-[12px] font-semibold text-white hover:opacity-90"
                 >
                   Review &amp; Approve
                 </button>
@@ -254,11 +254,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {/* Conversation Stream */}
           <div className="mt-7 space-y-6">
             {session.messages.length === 0 ? (
-              <div className="rounded-[10px] border border-[#D3D8DF] bg-white px-5 py-6">
-                <div className="text-[14px] font-semibold text-[#161B26]">
+              <div className="rounded-[10px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-5 py-6 text-[var(--lc-surf-ink)]">
+                <div className="text-[14px] font-semibold text-[var(--lc-surf-ink)]">
                   Deterministic low-context session ready
                 </div>
-                <p className="mt-1.5 text-[13.5px] leading-relaxed text-[#444D5C]">
+                <p className="mt-1.5 text-[13.5px] leading-relaxed text-[var(--lc-surf-ink2)]">
                   Every turn computes prompt tokens, reserves reply space and safety margin first,
                   injects pinned project rules unconditionally, and never silently clips your
                   message.
@@ -272,7 +272,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       key={promptSample}
                       type="button"
                       onClick={() => onComposerTextChange(promptSample)}
-                      className="rounded-[6px] border border-[#D3D8DF] bg-[#F7F8F9] px-3 py-1.5 text-left text-[12.5px] text-[#444D5C] transition-colors hover:bg-[#DDE1E7] hover:text-[#161B26]"
+                      className="rounded-[6px] border border-[var(--lc-line)] bg-[var(--lc-bg)] px-3 py-1.5 text-left text-[12.5px] text-[var(--lc-ink2)] transition-colors hover:bg-[var(--lc-hover)] hover:text-[var(--lc-ink)]"
                     >
                       {promptSample}
                     </button>
@@ -299,8 +299,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 return (
                   <article key={msg.id} className="space-y-1.5">
                     <div className="flex flex-wrap items-baseline gap-2">
-                      <span className="text-[13px] font-bold text-[#161B26]">{msg.authorName}</span>
-                      <span className="text-[12px] text-[#778091]">
+                      <span className="text-[13px] font-bold text-[var(--lc-ink)]">{msg.authorName}</span>
+                      <span className="text-[12px] text-[var(--lc-mute)]">
                         {formatRelativeTime(msg.createdAt)}
                         {msg.modelInfo ? ` · ${msg.modelInfo}` : ''}
                         {msg.tokensPerSecond && msg.tokensPerSecond > 0
@@ -310,13 +310,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     </div>
 
                     {msg.role === 'user' ? (
-                      <div className="border-l-[3px] border-[#F2D452] py-0.5 pl-4 text-[15px] leading-relaxed whitespace-pre-wrap text-[#161B26]">
+                      <div className="border-l-[3px] border-[#F2D452] py-0.5 pl-4 text-[15px] leading-relaxed whitespace-pre-wrap text-[var(--lc-ink)]">
                         {msg.content}
                       </div>
                     ) : (
                       <div className="space-y-3 pt-0.5">
                         {hasThinking && (
-                          <div className="rounded-[8px] border border-[#D3D8DF] bg-[#EEF0F3]/75">
+                          <div className="rounded-[8px] border border-[var(--lc-line)] bg-[var(--lc-panel)]/80">
                             <button
                               type="button"
                               aria-expanded={isThinkingExpanded}
@@ -327,7 +327,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                   [msg.id]: !prev[msg.id],
                                 }))
                               }
-                              className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[12.5px] font-medium text-[#444D5C] hover:text-[#161B26]"
+                              className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[12.5px] font-medium text-[var(--lc-side-ink2)] hover:text-[var(--lc-side-ink)]"
                             >
                               <span className="inline-flex items-center gap-1.5">
                                 {isThinkingExpanded ? (
@@ -339,14 +339,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                   {thinkingLabel}
                                 </span>
                               </span>
-                              <span className="text-[11px] text-[#778091]">
+                              <span className="text-[11px] text-[var(--lc-side-mute)]">
                                 {isThinkingExpanded ? 'Hide' : 'Show'}
                               </span>
                             </button>
                             {isThinkingExpanded && (
                               <div
                                 data-testid={`thinking-content-${msg.id}`}
-                                className="max-h-72 overflow-y-auto border-t border-[#D3D8DF] px-3 py-2.5"
+                                className="max-h-72 overflow-y-auto border-t border-[var(--lc-line)] px-3 py-2.5"
                               >
                                 <MarkdownMessage content={msg.thinkingContent ?? ''} compact />
                               </div>
@@ -356,7 +356,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
                         {hasVisibleContent ? (
                           msg.isError ? (
-                            <div className="rounded-[6px] border border-[#D9383A]/30 bg-[#D9383A]/5 px-3.5 py-2.5 text-[13.5px] leading-relaxed whitespace-pre-wrap text-[#D9383A]">
+                            <div className="rounded-[6px] border border-[var(--lc-danger)]/35 bg-[var(--lc-danger)]/8 px-3.5 py-2.5 text-[13.5px] leading-relaxed whitespace-pre-wrap text-[var(--lc-danger)]">
                               {msg.content}
                             </div>
                           ) : (
@@ -372,7 +372,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         ) : (
                           <div
                             data-testid="empty-response-notice"
-                            className="rounded-[6px] border border-[#D3D8DF] bg-[#EEF0F3] px-3.5 py-2.5 text-[13px] text-[#444D5C]"
+                            className="rounded-[6px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-3.5 py-2.5 text-[13px] text-[var(--lc-side-ink2)]"
                           >
                             {msg.stopReason === 'max_tokens' && hasThinking
                               ? `Output reply reserve (${outputReserveTokens ?? 'current'} tokens) was reached during thinking before visible answer text started. Increase Output Reply Reserve in Settings or inspect the Thought process above.`
@@ -381,7 +381,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         )}
 
                         {msg.aside && (
-                          <div className="border-l-[2px] border-[#AAB2BF] pl-3.5 text-[13px] italic text-[#444D5C]">
+                          <div className="border-l-[2px] border-[var(--lc-seg-tpl)] pl-3.5 text-[13px] italic text-[var(--lc-ink2)]">
                             {msg.aside}
                           </div>
                         )}
@@ -396,10 +396,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                 setCopiedId(msg.id);
                                 setTimeout(() => setCopiedId(null), 1400);
                               }}
-                              className="inline-flex items-center gap-1 rounded-[5px] px-2 py-1 text-[12px] text-[#778091] hover:bg-[#E8EBEF] hover:text-[#161B26]"
+                              className="inline-flex items-center gap-1 rounded-[5px] px-2 py-1 text-[12px] text-[var(--lc-mute)] hover:bg-[var(--lc-hover)] hover:text-[var(--lc-ink)]"
                             >
                               {copiedId === msg.id ? (
-                                <Check className="h-3.5 w-3.5 text-[#1D7A4E]" />
+                                <Check className="h-3.5 w-3.5 text-[var(--lc-success)]" />
                               ) : (
                                 <Copy className="h-3.5 w-3.5" />
                               )}
@@ -410,7 +410,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                               <button
                                 type="button"
                                 onClick={() => onOpenSources(msg.sources)}
-                                className="rounded-[5px] px-2 py-1 text-[12px] text-[#778091] hover:bg-[#E8EBEF] hover:text-[#161B26]"
+                                className="rounded-[5px] px-2 py-1 text-[12px] text-[var(--lc-mute)] hover:bg-[var(--lc-hover)] hover:text-[var(--lc-ink)]"
                               >
                                 View sources ({msg.sources.length})
                               </button>
@@ -423,7 +423,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                 setSavedNoteMsgId(msg.id);
                                 setTimeout(() => setSavedNoteMsgId(null), 1800);
                               }}
-                              className="rounded-[5px] px-2 py-1 text-[12px] text-[#778091] hover:bg-[#E8EBEF] hover:text-[#161B26]"
+                              className="rounded-[5px] px-2 py-1 text-[12px] text-[var(--lc-mute)] hover:bg-[var(--lc-hover)] hover:text-[var(--lc-ink)]"
                             >
                               {savedNoteMsgId === msg.id ? 'Saved to Memory ✓' : 'Save as note'}
                             </button>
@@ -434,10 +434,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         {msg.turnBudget && (
                           <div className="pt-2">
                             <div className="mb-1.5 flex items-center justify-between text-[12px]">
-                              <span className="font-semibold text-[#161B26]">
+                              <span className="font-semibold text-[var(--lc-ink)]">
                                 Context used for this reply
                               </span>
-                              <span className="text-[#778091] tabular-nums">
+                              <span className="text-[var(--lc-mute)] tabular-nums">
                                 {formatNumber(getPackedTokens(msg.turnBudget))} of{' '}
                                 {formatNumber(msg.turnBudget.totalLimit)} tokens
                               </span>
@@ -461,9 +461,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
       {/* Bottom Composer Card */}
       <div className="shrink-0 px-6 pb-4 pt-2">
-        <div className="mx-auto max-w-[660px] rounded-[12px] border border-[#161B26] bg-white px-4 py-3 shadow-xs">
+        <div className="mx-auto max-w-[660px] rounded-[12px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-4 py-3 text-[var(--lc-surf-ink)] shadow-xs focus-within:border-[var(--lc-accent)]">
           {attachedFile && (
-            <div className="mb-2 flex items-center justify-between rounded-[6px] border border-[#D3D8DF] bg-[#EEF0F3] px-2.5 py-1 text-[12px] text-[#161B26]">
+            <div className="mb-2 flex items-center justify-between rounded-[6px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-2.5 py-1 text-[12px] text-[var(--lc-side-ink)]">
               <span className="truncate">
                 Attached local file: <strong>{attachedFile.name}</strong> (
                 {formatNumber(attachedFile.content.length)} chars)
@@ -472,7 +472,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 type="button"
                 onClick={() => onAttachFile(null)}
                 aria-label="Remove attached file"
-                className="ml-2 text-[#778091] hover:text-[#D9383A]"
+                className="ml-2 text-[var(--lc-side-mute)] hover:text-[var(--lc-danger)]"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -480,7 +480,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           )}
 
           {fileError && (
-            <div className="mb-2 text-[12px] text-[#D9383A]" role="alert">
+            <div className="mb-2 text-[12px] text-[var(--lc-danger)]" role="alert">
               {fileError}
             </div>
           )}
@@ -495,7 +495,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             onKeyDown={handleKeyDown}
             rows={2}
             placeholder="Message local model. Nothing leaves this device."
-            className="w-full resize-none border-0 bg-transparent text-[14.5px] leading-relaxed text-[#161B26] placeholder:text-[#778091] focus:outline-none"
+            className="w-full resize-none border-0 bg-transparent text-[14.5px] leading-relaxed text-[var(--lc-surf-ink)] placeholder:text-[var(--lc-surf-mute)] focus:outline-none"
           />
 
           <div className="mt-2 flex items-center justify-between gap-2">
@@ -510,7 +510,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="inline-flex items-center gap-1 rounded-[6px] px-2 py-1 text-[12.5px] text-[#444D5C] hover:bg-[#E8EBEF]"
+                className="inline-flex items-center gap-1 rounded-[6px] px-2 py-1 text-[12.5px] text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]"
               >
                 <Paperclip className="h-3.5 w-3.5" />
                 <span>Attach local file</span>
@@ -520,15 +520,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 type="button"
                 onClick={() => onToggleMemoryRetrieval(!memoryRetrievalEnabled)}
                 aria-pressed={memoryRetrievalEnabled}
-                className={`inline-flex items-center gap-1 rounded-[6px] px-2 py-1 text-[12.5px] font-medium hover:bg-[#E8EBEF] ${
-                  memoryRetrievalEnabled ? 'text-[#2A3FE0]' : 'text-[#778091]'
+                className={`inline-flex items-center gap-1 rounded-[6px] px-2 py-1 text-[12.5px] font-medium hover:bg-[var(--lc-surf-hover)] ${
+                  memoryRetrievalEnabled ? 'text-[var(--lc-accent)]' : 'text-[var(--lc-surf-mute)]'
                 }`}
               >
                 <Brain className="h-3.5 w-3.5" />
                 <span>{memoryRetrievalEnabled ? 'Memory on' : 'Memory off'}</span>
               </button>
 
-              <span className="hidden text-[11.5px] text-[#778091] sm:inline">
+              <span className="hidden text-[11.5px] text-[var(--lc-surf-mute)] sm:inline">
                 Enter to send · Shift+Enter newline
               </span>
             </div>
@@ -537,7 +537,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <button
                 type="button"
                 onClick={onStopGeneration}
-                className="inline-flex items-center gap-1.5 rounded-[8px] bg-[#D9383A] px-3.5 py-1.5 text-[13px] font-semibold text-white hover:bg-[#b82d2f]"
+                className="inline-flex items-center gap-1.5 rounded-[8px] bg-[var(--lc-danger)] px-3.5 py-1.5 text-[13px] font-semibold text-white hover:opacity-90"
               >
                 <Square className="h-3 w-3 fill-current" />
                 <span>Stop</span>
@@ -547,7 +547,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 type="button"
                 onClick={onSendMessage}
                 disabled={!composerText.trim()}
-                className="rounded-[8px] bg-[#2A3FE0] px-4 py-1.5 text-[13px] font-semibold text-white transition-colors hover:bg-[#2234be] disabled:cursor-not-allowed disabled:opacity-45"
+                className="rounded-[8px] bg-[var(--lc-accent)] px-4 py-1.5 text-[13px] font-semibold text-[var(--lc-accent-contrast)] transition-colors hover:bg-[var(--lc-accent-hover)] disabled:cursor-not-allowed disabled:opacity-45"
               >
                 Send
               </button>

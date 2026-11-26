@@ -96,14 +96,14 @@ const CodeBlockView: React.FC<{ lang: string; code: string; closed: boolean; com
   const { html, detectedLang } = useMemo(() => highlightCodeHtml(code, lang), [code, lang]);
 
   return (
-    <div className="my-2 overflow-hidden rounded-[8px] border border-[#2B3343] bg-[#161B26] text-[#E6EDF3]">
-      <div className="flex items-center justify-between gap-2 border-b border-[#2B3343] bg-[#1F2634] px-3 py-1.5">
+    <div className="my-2 overflow-hidden rounded-[8px] border border-[var(--lc-code-border)] bg-[var(--lc-code-bg)] text-[var(--lc-code-text)]">
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--lc-code-border)] bg-[var(--lc-code-header)] px-3 py-1.5">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[11.5px] font-semibold tracking-wide text-[#B6C2D4] uppercase">
+          <span className="font-mono text-[11.5px] font-semibold tracking-wide text-[var(--lc-code-mute)] uppercase">
             {detectedLang}
           </span>
           {!closed && (
-            <span className="rounded bg-[#2A3FE0]/25 px-1.5 py-0.5 text-[10px] font-medium text-[#9DB1FF]">
+            <span className="rounded bg-[var(--lc-accent)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--lc-accent)]">
               streaming
             </span>
           )}
@@ -115,11 +115,11 @@ const CodeBlockView: React.FC<{ lang: string; code: string; closed: boolean; com
             setCopied(true);
             setTimeout(() => setCopied(false), 1400);
           }}
-          className="inline-flex items-center gap-1 rounded-[5px] px-2 py-0.5 text-[11.5px] text-[#B6C2D4] transition-colors hover:bg-[#2C3547] hover:text-white"
+          className="inline-flex items-center gap-1 rounded-[5px] px-2 py-0.5 text-[11.5px] text-[var(--lc-code-mute)] transition-colors hover:bg-[var(--lc-hover)] hover:text-[var(--lc-code-text)]"
         >
           {copied ? (
             <>
-              <Check className="h-3 w-3 text-[#4ADE80]" />
+              <Check className="h-3 w-3 text-[var(--lc-success)]" />
               <span>Copied</span>
             </>
           ) : (
@@ -153,7 +153,7 @@ function renderInlineTokens(tokens: InlineToken[], keyPrefix: string): React.Rea
         return (
           <code
             key={key}
-            className="rounded-[4px] border border-[#D3D8DF] bg-[#EEF0F3] px-1.5 py-[1px] font-mono text-[0.88em] text-[#161B26]"
+            className="rounded-[4px] border border-[var(--lc-line)] bg-[var(--lc-inline-code-bg)] px-1.5 py-[1px] font-mono text-[0.88em] text-[var(--lc-ink)]"
           >
             {token.code}
           </code>
@@ -168,7 +168,7 @@ function renderInlineTokens(tokens: InlineToken[], keyPrefix: string): React.Rea
         );
       case 'bold':
         return (
-          <strong key={key} className="font-semibold text-[#161B26]">
+          <strong key={key} className="font-semibold text-[var(--lc-ink)]">
             {renderInlineTokens(token.children, key)}
           </strong>
         );
@@ -180,13 +180,13 @@ function renderInlineTokens(tokens: InlineToken[], keyPrefix: string): React.Rea
         );
       case 'bold_italic':
         return (
-          <strong key={key} className="font-semibold italic text-[#161B26]">
+          <strong key={key} className="font-semibold italic text-[var(--lc-ink)]">
             {renderInlineTokens(token.children, key)}
           </strong>
         );
       case 'strike':
         return (
-          <del key={key} className="text-[#778091] line-through">
+          <del key={key} className="text-[var(--lc-mute)] line-through">
             {renderInlineTokens(token.children, key)}
           </del>
         );
@@ -194,7 +194,7 @@ function renderInlineTokens(tokens: InlineToken[], keyPrefix: string): React.Rea
         return (
           <kbd
             key={key}
-            className="rounded-[4px] border border-[#C3CAD4] bg-[#F7F8F9] px-1.5 py-0.5 font-mono text-[0.82em] font-semibold text-[#161B26] shadow-[0_1px_0_#C3CAD4]"
+            className="rounded-[4px] border border-[var(--lc-line)] bg-[var(--lc-bg)] px-1.5 py-0.5 font-mono text-[0.82em] font-semibold text-[var(--lc-ink)] shadow-[0_1px_0_var(--lc-line)]"
           >
             {token.text}
           </kbd>
@@ -206,7 +206,7 @@ function renderInlineTokens(tokens: InlineToken[], keyPrefix: string): React.Rea
             href={token.href}
             target="_blank"
             rel="noopener noreferrer"
-            className="font-medium text-[#2A3FE0] underline decoration-[#2A3FE0]/40 underline-offset-2 hover:decoration-[#2A3FE0]"
+            className="font-medium text-[var(--lc-accent)] underline decoration-[var(--lc-accent)]/40 underline-offset-2 hover:decoration-[var(--lc-accent)]"
           >
             {renderInlineTokens(token.label, key)}
           </a>
@@ -220,12 +220,12 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode {
 }
 
 const HEADING_CLASSES: Record<1 | 2 | 3 | 4 | 5 | 6, string> = {
-  1: 'mt-3 mb-1.5 text-[21px] font-bold tracking-tight text-[#161B26]',
-  2: 'mt-3 mb-1.5 text-[18px] font-bold tracking-tight text-[#161B26]',
-  3: 'mt-2.5 mb-1 text-[16px] font-semibold text-[#161B26]',
-  4: 'mt-2 mb-1 text-[15px] font-semibold text-[#161B26]',
-  5: 'mt-2 mb-1 text-[14px] font-semibold text-[#444D5C]',
-  6: 'mt-2 mb-1 text-[13px] font-semibold uppercase tracking-wide text-[#444D5C]',
+  1: 'mt-3 mb-1.5 text-[21px] font-bold tracking-tight text-[var(--lc-ink)]',
+  2: 'mt-3 mb-1.5 text-[18px] font-bold tracking-tight text-[var(--lc-ink)]',
+  3: 'mt-2.5 mb-1 text-[16px] font-semibold text-[var(--lc-ink)]',
+  4: 'mt-2 mb-1 text-[15px] font-semibold text-[var(--lc-ink)]',
+  5: 'mt-2 mb-1 text-[14px] font-semibold text-[var(--lc-ink2)]',
+  6: 'mt-2 mb-1 text-[13px] font-semibold uppercase tracking-wide text-[var(--lc-ink2)]',
 };
 
 const ALIGN_CLASS: Record<'left' | 'center' | 'right', string> = {
@@ -296,17 +296,17 @@ function renderBlocks(blocks: MarkdownBlock[], keyPrefix: string, compact?: bool
           <div
             key={key}
             data-testid="math-block"
-            className="my-2 overflow-x-auto rounded-[8px] border border-[#E1E5EC] bg-white px-3.5 py-2.5 text-center"
+            className="my-2 overflow-x-auto rounded-[8px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3.5 py-2.5 text-center text-[var(--lc-surf-ink)]"
             dangerouslySetInnerHTML={{ __html: renderKatexHtml(block.expr, true) }}
           />
         );
       case 'hr':
-        return <hr key={key} className="my-3 border-t border-[#D3D8DF]" />;
+        return <hr key={key} className="my-3 border-t border-[var(--lc-line)]" />;
       case 'blockquote':
         return (
           <blockquote
             key={key}
-            className="my-2 space-y-1.5 border-l-[3px] border-[#C3CAD4] pl-3.5 text-[#444D5C]"
+            className="my-2 space-y-1.5 border-l-[3px] border-[var(--lc-line)] pl-3.5 text-[var(--lc-ink2)]"
           >
             {renderBlocks(block.blocks, key, compact)}
           </blockquote>
@@ -322,7 +322,7 @@ function renderBlocks(blocks: MarkdownBlock[], keyPrefix: string, compact?: bool
               {style.icon}
               <span>{block.title}</span>
             </div>
-            <div className="space-y-1.5 text-[14px] text-[#1D2330]">
+            <div className="space-y-1.5 text-[14px] text-[var(--lc-ink)]">
               {renderBlocks(block.blocks, key, compact)}
             </div>
           </div>
@@ -330,16 +330,16 @@ function renderBlocks(blocks: MarkdownBlock[], keyPrefix: string, compact?: bool
       }
       case 'table':
         return (
-          <div key={key} className="my-2 overflow-x-auto rounded-[8px] border border-[#D3D8DF] bg-white">
+          <div key={key} className="my-2 overflow-x-auto rounded-[8px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)]">
             <table className="w-full border-collapse text-left text-[13.5px]">
-              <thead className="border-b border-[#D3D8DF] bg-[#F2F4F7]">
+              <thead className="border-b border-[var(--lc-surf-line)] bg-[var(--lc-panel)]">
                 <tr>
                   {block.headers.map((header, hIdx) => {
                     const align = block.alignments[hIdx];
                     return (
                       <th
                         key={`${key}-th-${hIdx}`}
-                        className={`px-3 py-2 font-semibold text-[#161B26] ${
+                        className={`px-3 py-2 font-semibold text-[var(--lc-side-ink)] ${
                           align ? ALIGN_CLASS[align] : 'text-left'
                         }`}
                       >
@@ -349,15 +349,15 @@ function renderBlocks(blocks: MarkdownBlock[], keyPrefix: string, compact?: bool
                   })}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#E6E9EF]">
+              <tbody className="divide-y divide-[var(--lc-line-soft)]">
                 {block.rows.map((row, rIdx) => (
-                  <tr key={`${key}-tr-${rIdx}`} className="hover:bg-[#F8F9FB]">
+                  <tr key={`${key}-tr-${rIdx}`} className="hover:bg-[var(--lc-surf-hover)]/45">
                     {row.map((cell, cIdx) => {
                       const align = block.alignments[cIdx];
                       return (
                         <td
                           key={`${key}-td-${rIdx}-${cIdx}`}
-                          className={`px-3 py-2 text-[#1D2330] ${
+                          className={`px-3 py-2 text-[var(--lc-surf-ink)] ${
                             align ? ALIGN_CLASS[align] : 'text-left'
                           }`}
                         >
@@ -377,12 +377,12 @@ function renderBlocks(blocks: MarkdownBlock[], keyPrefix: string, compact?: bool
         return (
           <details
             key={key}
-            className="my-2 rounded-[8px] border border-[#D3D8DF] bg-[#F7F8F9] px-3.5 py-2"
+            className="my-2 rounded-[8px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3.5 py-2 text-[var(--lc-surf-ink)]"
           >
-            <summary className="cursor-pointer text-[13.5px] font-semibold text-[#161B26]">
+            <summary className="cursor-pointer text-[13.5px] font-semibold text-[var(--lc-surf-ink)]">
               {renderInline(block.summary, `${key}-summary`)}
             </summary>
-            <div className="mt-2 space-y-2 border-t border-[#E1E5EC] pt-2 text-[14px]">
+            <div className="mt-2 space-y-2 border-t border-[var(--lc-line-soft)] pt-2 text-[14px]">
               {renderBlocks(block.blocks, `${key}-body`, compact)}
             </div>
           </details>
@@ -405,8 +405,8 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, compa
       data-testid={compact ? 'markdown-compact' : 'markdown-message'}
       className={
         compact
-          ? 'space-y-2 text-[12.5px] leading-relaxed break-words text-[#444D5C]'
-          : 'space-y-2.5 text-[15.5px] leading-relaxed break-words text-[#1D2330]'
+          ? 'space-y-2 text-[12.5px] leading-relaxed break-words text-[var(--lc-ink2)]'
+          : 'space-y-2.5 text-[15.5px] leading-relaxed break-words text-[var(--lc-ink)]'
       }
     >
       {renderBlocks(blocks, 'md', compact)}
