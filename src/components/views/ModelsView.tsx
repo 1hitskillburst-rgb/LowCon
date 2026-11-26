@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
-import { CheckCircle2, Cpu, FileUp, Plus, Power, Trash2, X } from 'lucide-react';
+import { CheckCircle2, Cpu, Edit3, FileUp, Plus, Power, Trash2, X } from 'lucide-react';
 import { parseGgufHeader } from '../../core/gguf';
+import { formatCleanModelName } from '../../core/modelNames';
 import { formatNumber } from '../../core/privacy';
 import { createUuid } from '../../core/storage';
 import type { ChatTemplateType, ModelProfile, WorkerStatus } from '../../core/types';
@@ -53,6 +54,8 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   const [newBackend, setNewBackend] = useState<'mock' | 'lm_studio'>('lm_studio');
   const [newContextLimit, setNewContextLimit] = useState(8192);
   const [newTemplate, setNewTemplate] = useState<ChatTemplateType>('ChatML');
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
 
   const loadedModelId =
     workerStatus.state === 'loaded' || workerStatus.state === 'generating'
@@ -75,9 +78,10 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
       const buffer = await headerSlice.arrayBuffer();
       const parsed = parseGgufHeader(buffer, file.size, file.name);
 
+      const cleanName = formatCleanModelName(parsed.name) || parsed.name;
       const profile: ModelProfile = {
         id: `gguf_${createUuid().slice(0, 8)}`,
-        name: `${parsed.name} (${parsed.quantization})`,
+        name: `${cleanName} (${parsed.quantization})`,
         filePath: resolvedDefaultEndpoint,
         backendType: 'lm_studio',
         architecture: parsed.architecture,
@@ -425,7 +429,56 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="text-[15px] font-bold text-[var(--lc-surf-ink)]">{model.name}</h2>
+                        {renamingId === model.id ? (
+                          <form
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              if (renameDraft.trim()) {
+                                onUpdateModel(model.id, { name: renameDraft.trim() });
+                              }
+                              setRenamingId(null);
+                            }}
+                            className="flex items-center gap-1.5"
+                          >
+                            <input
+                              type="text"
+                              autoFocus
+                              value={renameDraft}
+                              onChange={(e) => setRenameDraft(e.target.value)}
+                              aria-label="Rename model profile"
+                              className="rounded-[6px] border border-[var(--lc-accent)] bg-[var(--lc-surface)] px-2.5 py-1 text-[13.5px] font-semibold text-[var(--lc-surf-ink)] focus:outline-none"
+                            />
+                            <button
+                              type="submit"
+                              className="rounded-[5px] bg-[var(--lc-accent)] px-2 py-1 text-[11.5px] font-semibold text-[var(--lc-accent-contrast)]"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setRenamingId(null)}
+                              className="rounded-[5px] border border-[var(--lc-surf-line)] px-2 py-1 text-[11.5px] text-[var(--lc-surf-ink2)]"
+                            >
+                              Cancel
+                            </button>
+                          </form>
+                        ) : (
+                          <>
+                            <h2 className="text-[15px] font-bold text-[var(--lc-surf-ink)]">{model.name}</h2>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRenamingId(model.id);
+                                setRenameDraft(model.name);
+                              }}
+                              aria-label={`Rename ${model.name}`}
+                              title="Rename profile"
+                              className="rounded p-1 text-[var(--lc-surf-mute)] hover:bg-[var(--lc-surf-hover)] hover:text-[var(--lc-surf-ink)]"
+                            >
+                              <Edit3 className="h-3 w-3" />
+                            </button>
+                          </>
+                        )}
                         {isLoadedInWorker && (
                           <span
                             data-testid="worker-loaded-badge"

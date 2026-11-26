@@ -29,6 +29,7 @@ import {
   retrieveMemoryNotes,
 } from './core/memory';
 import { DiagnosticLogger, safeTruncateChars } from './core/privacy';
+import { resolveModelDisplayName } from './core/modelNames';
 import {
   createDefaultWorkspace,
   createUuid,
@@ -664,7 +665,7 @@ export const App: React.FC = () => {
     const assistantMsgId = createUuid();
     const modelDisplayLabel =
       activeModel.backendType === 'lm_studio' && workspace.settings.selectedLmModel
-        ? `${workspace.settings.selectedLmModel} · ${activeModel.chatTemplate}`
+        ? `${resolveModelDisplayName(workspace.settings.selectedLmModel, workspace.settings.modelDisplayAliases)} · ${activeModel.chatTemplate}`
         : `${activeModel.name} · ${activeModel.chatTemplate}`;
 
     const userMessage: ChatMessage = {
@@ -1617,6 +1618,7 @@ export const App: React.FC = () => {
                 onSelectActiveModel={handleSelectActiveModel}
                 connectedLmModels={workspace.settings.connectedLmModels}
                 selectedLmModel={workspace.settings.selectedLmModel}
+                modelDisplayAliases={workspace.settings.modelDisplayAliases}
                 onSelectLmModel={handleSelectLmModel}
                 effortLevel={workspace.settings.effortLevel}
                 chatWidth={workspace.settings.chatWidth ?? 'default'}

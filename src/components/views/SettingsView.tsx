@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Lock, Palette, RefreshCw, ShieldCheck, Sparkles, Terminal, Trash2 } from 'lucide-react';
 import { calculateBudgetPartition } from '../../core/context';
+import { formatCleanModelName, resolveModelDisplayName } from '../../core/modelNames';
 import { formatNumber } from '../../core/privacy';
 import { DEFAULT_PROMPT_EFFORT_PROMPTS } from '../../core/storage';
 import { createDefaultTheme, THEME_PRESETS } from '../../core/theme';
@@ -360,25 +361,75 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
 
               {settings.connectedLmModels.length > 0 && (
-                <div>
-                  <label
-                    htmlFor="lm-model-select"
-                    className="block text-[12px] font-semibold text-[var(--lc-surf-ink2)]"
-                  >
-                    Selected Server Model
-                  </label>
-                  <select
-                    id="lm-model-select"
-                    value={settings.selectedLmModel}
-                    onChange={(e) => onSelectLmModel(e.target.value)}
-                    className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[13px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
-                  >
-                    {settings.connectedLmModels.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
+                <div className="space-y-3">
+                  <div>
+                    <label
+                      htmlFor="lm-model-select"
+                      className="block text-[12px] font-semibold text-[var(--lc-surf-ink2)]"
+                    >
+                      Selected Server Model
+                    </label>
+                    <select
+                      id="lm-model-select"
+                      value={settings.selectedLmModel}
+                      onChange={(e) => onSelectLmModel(e.target.value)}
+                      className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[13px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
+                    >
+                      {settings.connectedLmModels.map((m) => {
+                        const cleanName = resolveModelDisplayName(m, settings.modelDisplayAliases);
+                        return (
+                          <option key={m} value={m}>
+                            {cleanName !== m ? `${cleanName} (${m})` : m}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+
+                  {settings.selectedLmModel && (
+                    <div>
+                      <label
+                        htmlFor="lm-model-alias-input"
+                        className="block text-[12px] font-semibold text-[var(--lc-surf-ink2)]"
+                      >
+                        Display Name in LowCon (optional override for{' '}
+                        <code className="font-mono text-[11px]">{settings.selectedLmModel}</code>)
+                      </label>
+                      <div className="mt-1 flex flex-wrap gap-2">
+                        <input
+                          id="lm-model-alias-input"
+                          data-testid="lm-model-alias-input"
+                          type="text"
+                          value={settings.modelDisplayAliases?.[settings.selectedLmModel] ?? ''}
+                          placeholder={formatCleanModelName(settings.selectedLmModel)}
+                          onChange={(e) => {
+                            const nextAliases = { ...(settings.modelDisplayAliases ?? {}) };
+                            const val = e.target.value;
+                            if (val.trim()) {
+                              nextAliases[settings.selectedLmModel] = val;
+                            } else {
+                              delete nextAliases[settings.selectedLmModel];
+                            }
+                            onUpdateSettings({ modelDisplayAliases: nextAliases });
+                          }}
+                          className="min-w-[220px] flex-1 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[13px] text-[var(--lc-surf-ink)] placeholder:text-[var(--lc-surf-mute)] focus:border-[var(--lc-accent)] focus:outline-none"
+                        />
+                        {settings.modelDisplayAliases?.[settings.selectedLmModel] && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextAliases = { ...(settings.modelDisplayAliases ?? {}) };
+                              delete nextAliases[settings.selectedLmModel];
+                              onUpdateSettings({ modelDisplayAliases: nextAliases });
+                            }}
+                            className="rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[12px] font-medium text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]"
+                          >
+                            Reset to Auto
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

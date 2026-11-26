@@ -41,6 +41,7 @@ export function createDefaultSettings(): AppSettings {
     activeBackendType: 'mock',
     connectedLmModels: [],
     selectedLmModel: '',
+    modelDisplayAliases: {},
     connectionStatus: 'Not tested yet',
     storageNamespace: 'localStorage://lowcon.workspace.v1 (Encrypted on Vault Lock)',
     theme: createDefaultTheme(),
@@ -200,6 +201,9 @@ export function loadUnsealedWorkspace(logger: DiagnosticLogger): {
         settings: {
           ...defaults.settings,
           ...(parsed.settings ?? {}),
+          modelDisplayAliases: {
+            ...(parsed.settings?.modelDisplayAliases ?? {}),
+          },
           theme: {
             ...createDefaultTheme(),
             ...(parsed.settings?.theme ?? {}),
@@ -281,6 +285,9 @@ export async function unsealWorkspaceVault(
       settings: {
         ...defaults,
         ...(rawWorkspace.settings ?? {}),
+        modelDisplayAliases: {
+          ...(rawWorkspace.settings?.modelDisplayAliases ?? {}),
+        },
         theme: {
           ...createDefaultTheme(),
           ...(rawWorkspace.settings?.theme ?? {}),

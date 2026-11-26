@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { detectArtifactPreviewKind, type ArtifactPreviewKind } from '../../core/artifactPreview';
 import { getPackedTokens } from '../../core/context';
+import { resolveModelDisplayName } from '../../core/modelNames';
 import { formatNumber, formatRelativeTime } from '../../core/privacy';
 import { getTpsColorVar } from '../../core/theme';
 import { shouldIndexAttachedFile } from '../../core/tier1Tools';
@@ -125,6 +126,7 @@ interface ChatViewProps {
   onSelectActiveModel: (modelId: string) => void;
   connectedLmModels: string[];
   selectedLmModel: string;
+  modelDisplayAliases?: Record<string, string>;
   onSelectLmModel: (modelName: string) => void;
   effortLevel: EffortLevel;
   chatWidth?: ChatWidthPreset;
@@ -159,6 +161,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onSelectActiveModel,
   connectedLmModels,
   selectedLmModel,
+  modelDisplayAliases,
   onSelectLmModel,
   effortLevel,
   chatWidth = 'default',
@@ -255,7 +258,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const activeModel = models.find((m) => m.id === activeModelId) ?? models[0];
   const activeModelDisplayName =
     activeModel?.backendType === 'lm_studio' && selectedLmModel
-      ? selectedLmModel
+      ? resolveModelDisplayName(selectedLmModel, modelDisplayAliases)
       : activeModel?.name ?? 'Model';
   const activeEffortLabel =
     EFFORT_OPTIONS.find((e) => e.id === effortLevel)?.label ?? 'Medium';
@@ -895,10 +898,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
                               const isSelected =
                                 activeModel?.backendType === 'lm_studio' &&
                                 selectedLmModel === lmName;
+                              const cleanLabel = resolveModelDisplayName(lmName, modelDisplayAliases);
                               return (
                                 <button
                                   key={lmName}
                                   type="button"
+                                  title={lmName}
                                   onClick={() => {
                                     onSelectLmModel(lmName);
                                     setShowModelEffortMenu(false);
@@ -909,7 +914,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                       : 'text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]/70 hover:text-[var(--lc-surf-ink)]'
                                   }`}
                                 >
-                                  <span className="truncate">{lmName}</span>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="truncate">{cleanLabel}</div>
+                                    {cleanLabel !== lmName && (
+                                      <div className="truncate font-mono text-[10.5px] text-[var(--lc-surf-mute)]">
+                                        {lmName}
+                                      </div>
+                                    )}
+                                  </div>
                                   {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--lc-accent)]" />}
                                 </button>
                               );

@@ -221,6 +221,7 @@ export interface AppSettings {
   activeBackendType: BackendType;
   connectedLmModels: string[];
   selectedLmModel: string;
+  modelDisplayAliases?: Record<string, string>;
   connectionStatus: string;
   storageNamespace: string;
   theme?: ThemeSettings;
