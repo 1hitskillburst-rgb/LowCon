@@ -66,11 +66,18 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
 
   const includedSet = useMemo(() => new Set(includedMemoryIds), [includedMemoryIds]);
 
+  const isNoteInActivePrompt = useMemo(
+    () => (note: MemoryNote) =>
+      !note.isDisabled &&
+      (includedSet.has(note.id) ||
+        (note.isPinned && !note.isSummary && (!note.sessionId || note.sessionId === activeSessionId))),
+    [includedSet, activeSessionId],
+  );
+
   const filteredNotes = useMemo(() => {
-    // Runs BM25 FTS over ALL notes (no arbitrary 50-item truncation)
+    // Runs BM25 FTS over ALL notes in the library (no session hiding or 50-item cap)
     const scored = retrieveMemoryNotes(notes, {
       query: searchQuery.trim() || undefined,
-      sessionId: activeSessionId,
       includeDisabled: true,
       limit: notes.length,
     });
@@ -79,13 +86,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
       .map((s) => ({ note: s.note, score: s.finalScore }))
       .filter(({ note }) => {
         if (filter === 'pinned') return note.isPinned;
-        if (filter === 'in_prompt') {
-          return !note.isDisabled && (includedSet.has(note.id) || (note.isPinned && !note.isSummary));
-        }
+        if (filter === 'in_prompt') return isNoteInActivePrompt(note);
         if (filter === 'summaries') return note.isSummary;
         return true;
       });
-  }, [notes, searchQuery, activeSessionId, filter, includedSet]);
+  }, [notes, searchQuery, filter, isNoteInActivePrompt]);
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -125,7 +130,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
     { id: 'pinned', label: `Pinned (${notes.filter((n) => n.isPinned).length})` },
     {
       id: 'in_prompt',
-      label: `In Active Prompt (${notes.filter((n) => !n.isDisabled && (includedSet.has(n.id) || (n.isPinned && !n.isSummary))).length})`,
+      label: `In Active Prompt (${notes.filter(isNoteInActivePrompt).length})`,
     },
     { id: 'summaries', label: `Summaries (${notes.filter((n) => n.isSummary).length})` },
   ];

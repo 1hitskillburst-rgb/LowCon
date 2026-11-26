@@ -511,8 +511,28 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     </div>
 
                     {msg.role === 'user' ? (
-                      <div className="border-l-[3px] border-[#F2D452] py-0.5 pl-4 text-[15px] leading-relaxed whitespace-pre-wrap text-[var(--lc-ink)]">
-                        {msg.content}
+                      <div className="space-y-2 border-l-[3px] border-[#F2D452] py-0.5 pl-4 text-[15px] leading-relaxed text-[var(--lc-ink)]">
+                        {msg.attachedFiles && msg.attachedFiles.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5">
+                            {msg.attachedFiles.map((att) => (
+                              <span
+                                key={`${msg.id}-att-${att.name}`}
+                                className="inline-flex items-center gap-1.5 rounded-[6px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-2.5 py-1 text-[12px] text-[var(--lc-side-ink)]"
+                              >
+                                <Paperclip className="h-3 w-3 shrink-0 text-[var(--lc-mute)]" />
+                                <span className="font-medium">{att.name}</span>
+                                <span className="text-[var(--lc-side-mute)]">
+                                  ({countLines(att.content)} lines)
+                                </span>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        <div className="whitespace-pre-wrap">
+                          {msg.attachedFiles && msg.attachedFiles.length > 0
+                            ? msg.content.replace(/\n\n\[Attached local file[\s\S]*$/, '')
+                            : msg.content}
+                        </div>
                       </div>
                     ) : (
                       <div className="space-y-3 pt-0.5">

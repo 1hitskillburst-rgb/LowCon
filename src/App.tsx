@@ -118,7 +118,14 @@ function mapSessionHistoryTurns(messages: ChatMessage[]): ConversationTurnCandid
     .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.isError && m.content.trim())
     .map((m) => {
       let content = m.content;
-      if (m.role === 'assistant' && m.generatedFiles && m.generatedFiles.length > 0) {
+      if (
+        m.role === 'user' &&
+        m.attachedFiles &&
+        m.attachedFiles.length > 0 &&
+        !content.includes('[Attached local file')
+      ) {
+        content = formatUserMessageWithAttachment(content, m.attachedFiles[0]);
+      } else if (m.role === 'assistant' && m.generatedFiles && m.generatedFiles.length > 0) {
         const fileSummary = m.generatedFiles
           .map((f) => `${f.filename} (${f.language}, ${countLines(f.content)} lines)`)
           .join(', ');
@@ -665,7 +672,7 @@ export const App: React.FC = () => {
       role: 'user',
       authorName: 'You',
       createdAt: now,
-      content: userContent,
+      content: rawInput,
       ...(currentAttachedFile ? { attachedFiles: [currentAttachedFile] } : {}),
       sources: [],
     };
