@@ -2,40 +2,30 @@ import type { GeneratedFileArtifact, ToolDefinition } from './types';
 
 export const CREATE_FILE_TOOL_NAME = 'create_file';
 
-export const TOOL_CALL_POLICY_INSTRUCTION = `[File Creation Tool Policy]
-You have access to the \`${CREATE_FILE_TOOL_NAME}\` tool to create downloadable, previewable code or text files.
-- ONLY call \`${CREATE_FILE_TOOL_NAME}\` when the user asks to create, generate, write, or save a complete standalone file, script, program, or module (for example: "generate a Rust file...", "write a Python script...", "create config.yaml").
-- Do NOT call \`${CREATE_FILE_TOOL_NAME}\` for short code examples, snippets, quick syntax demonstrations, single functions/commands, or inline explanations. Use normal markdown code blocks for examples and snippets.
-- CRITICAL: When you DO call \`${CREATE_FILE_TOOL_NAME}\`, NEVER paste, repeat, or echo the file's code in a markdown code block in your text response. The file is already attached as an interactive preview card for the user. Reply only with concise prose explaining the implementation and optional 1–3 line CLI run/test commands.`;
+export const TOOL_CALL_POLICY_INSTRUCTION = `[File Creation Policy]
+Use \`${CREATE_FILE_TOOL_NAME}\` ONLY when asked to write a standalone file, script, module, or config—never for short inline examples/snippets. When calling \`${CREATE_FILE_TOOL_NAME}\`, NEVER echo the file code in chat; summarize briefly with optional 1–3 line run commands.`;
+
+export function buildToolPolicyInstruction(additionalPolicy?: string): string {
+  const extra = additionalPolicy?.trim();
+  return extra ? `${TOOL_CALL_POLICY_INSTRUCTION}\n\n${extra}` : TOOL_CALL_POLICY_INSTRUCTION;
+}
 
 export const CREATE_FILE_TOOL_DEFINITION: ToolDefinition = {
   type: 'function',
   function: {
     name: CREATE_FILE_TOOL_NAME,
     description:
-      'Create a standalone code or text file and attach it as a previewable card at the end of the response. Use ONLY for full-file requests (scripts, programs, modules, config files), NOT for short code snippets or inline examples.',
+      'Create a standalone previewable file card (scripts, modules, configs, reports). Do not use for short inline snippets.',
     parameters: {
       type: 'object',
       properties: {
         filename: {
           type: 'string',
-          description:
-            'File name with extension, e.g. "recursive_linked_list.rs" or "server.py". Must be a plain file name or relative path without ".." segments.',
+          description: 'Filename with extension, e.g. "app.ts" (no ".." segments).',
         },
-        title: {
-          type: 'string',
-          description:
-            'Short human-readable title shown on the file card, e.g. "Recursive linked list".',
-        },
-        language: {
-          type: 'string',
-          description:
-            'Programming language or format identifier, e.g. "rust", "typescript", "python".',
-        },
-        content: {
-          type: 'string',
-          description: 'Complete contents of the file.',
-        },
+        title: { type: 'string' },
+        language: { type: 'string' },
+        content: { type: 'string' },
       },
       required: ['filename', 'content'],
       additionalProperties: false,
@@ -69,9 +59,14 @@ const EXT_TO_LANGUAGE: Record<string, string> = {
   yml: 'yaml',
   toml: 'toml',
   xml: 'xml',
+  svg: 'svg',
   html: 'html',
+  htm: 'html',
   css: 'css',
+  csv: 'csv',
+  tsv: 'tsv',
   md: 'markdown',
+  markdown: 'markdown',
   txt: 'text',
 };
 
@@ -97,8 +92,11 @@ const LANGUAGE_TO_EXT: Record<string, string> = {
   yaml: 'yaml',
   toml: 'toml',
   xml: 'xml',
+  svg: 'svg',
   html: 'html',
   css: 'css',
+  csv: 'csv',
+  tsv: 'tsv',
   markdown: 'md',
   text: 'txt',
 };

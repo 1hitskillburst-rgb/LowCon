@@ -40,16 +40,33 @@ import {
 } from './core/storage';
 import { applyThemeToDocument } from './core/theme';
 import {
+  ALL_FILE_AND_TIER1_TOOLS,
+  buildToolPolicyForTools,
+  CALCULATE_TOOL_NAME,
+  EDIT_FILE_TOOL_NAME,
+  executeCalculateTool,
+  executeEditFileTool,
+  executeReadAttachedChunkTool,
+  executeSaveMemoryNoteTool,
+  executeSearchMemoryTool,
+  formatAttachedFileForPrompt,
+  getToolPendingActivityLabel,
+  READ_ATTACHED_CHUNK_TOOL_NAME,
+  SAVE_MEMORY_TOOL_NAME,
+  SEARCH_MEMORY_TOOL_NAME,
+  selectToolsForPromptBudget,
+} from './core/tier1Tools';
+import {
   countLines,
-  CREATE_FILE_TOOL_DEFINITION,
   CREATE_FILE_TOOL_NAME,
   DuplicateFileCodeFilter,
   executeCreateFileTool,
-  TOOL_CALL_POLICY_INSTRUCTION,
+  parseToolArgumentsJson,
 } from './core/tools';
 import {
   getEffectiveContextLimit,
   type AppSettings,
+  type AttachedFileAttachment,
   type BackendType,
   type ChatMessage,
   type ContextSegmentKey,
@@ -62,6 +79,7 @@ import {
   type PromptInspection,
   type Session,
   type ToolCallRecord,
+  type ToolDefinition,
   type WorkerStatus,
 } from './core/types';
 
@@ -70,8 +88,12 @@ const MAX_TOOL_ROUNDS = 4;
 const CORE_SYSTEM_INSTRUCTION =
   'You are LowCon, a private, deterministic assistant running on this device. Respect all pinned project rules, cite local memory when relevant, and keep responses accurate and concise.';
 
-function buildEffectiveCoreInstruction(settings: AppSettings): string {
-  const base = `${CORE_SYSTEM_INSTRUCTION}\n\n${TOOL_CALL_POLICY_INSTRUCTION}`;
+function buildEffectiveCoreInstruction(
+  settings: AppSettings,
+  activeTools: ToolDefinition[],
+): string {
+  const toolPolicy = buildToolPolicyForTools(activeTools);
+  const base = toolPolicy ? `${CORE_SYSTEM_INSTRUCTION}\n\n${toolPolicy}` : CORE_SYSTEM_INSTRUCTION;
   if (!settings.promptEffortEnabled) {
     return base;
   }
@@ -80,6 +102,15 @@ function buildEffectiveCoreInstruction(settings: AppSettings): string {
     return base;
   }
   return `${base}\n\n[Reasoning Effort: ${settings.effortLevel.toUpperCase()}]\n${effortPrompt}`;
+}
+
+function formatUserMessageWithAttachment(
+  rawText: string,
+  attachedFile: AttachedFileAttachment | null,
+): string {
+  if (!attachedFile) return rawText;
+  const { promptBlock } = formatAttachedFileForPrompt(attachedFile);
+  return rawText ? `${rawText}\n\n${promptBlock}` : promptBlock;
 }
 
 function mapSessionHistoryTurns(messages: ChatMessage[]): ConversationTurnCandidate[] {
@@ -164,14 +195,18 @@ function buildLivePreviewInspection(
   const historyTurns = mapSessionHistoryTurns(session?.messages ?? []);
 
   const rawDraft = composerText.trim();
-  const previewUserMsg = attachedFile
-    ? rawDraft
-      ? `${rawDraft}\n\n[Attached local file: ${attachedFile.name}]\n${attachedFile.content}`
-      : `[Attached local file: ${attachedFile.name}]\n${attachedFile.content}`
-    : rawDraft;
+  const previewUserMsg = formatUserMessageWithAttachment(rawDraft, attachedFile);
+
+  const hasAttachments =
+    Boolean(attachedFile) || Boolean(session?.messages.some((m) => (m.attachedFiles?.length ?? 0) > 0));
+  const hasGeneratedFiles = Boolean(session?.messages.some((m) => (m.generatedFiles?.length ?? 0) > 0));
+  const selectedTools = selectToolsForPromptBudget(effectiveLimit, {
+    hasAttachments,
+    hasGeneratedFiles,
+  });
 
   const candidates: AssemblyCandidates = {
-    coreInstruction: buildEffectiveCoreInstruction(settings),
+    coreInstruction: buildEffectiveCoreInstruction(settings, selectedTools),
     currentUserMessage: previewUserMsg,
     pinnedFacts: pinnedNotes.map((n) => ({
       id: n.id,
@@ -190,7 +225,7 @@ function buildLivePreviewInspection(
     })),
     conversationTurns: historyTurns,
     summaries,
-    tools: [CREATE_FILE_TOOL_DEFINITION],
+    ...(selectedTools.length > 0 ? { tools: selectedTools } : {}),
   };
 
   const result = assembleContext(candidates, {
@@ -514,9 +549,8 @@ export const App: React.FC = () => {
 
     setBannerError(null);
 
-    const userContent = attachedFile
-      ? `${rawInput}\n\n[Attached local file: ${attachedFile.name}]\n${attachedFile.content}`
-      : rawInput;
+    const currentAttachedFile = attachedFile;
+    const userContent = formatUserMessageWithAttachment(rawInput, currentAttachedFile);
 
     const targetSessionId = activeSession.id;
     const effectiveLimit = getEffectiveContextLimit(
@@ -554,9 +588,15 @@ export const App: React.FC = () => {
 
     const summaryCandidates = buildSummaryCandidates(workspace.memoryNotes, targetSessionId);
     const historyTurns = mapSessionHistoryTurns(activeSession.messages);
+    const selectedTools = selectToolsForPromptBudget(effectiveLimit, {
+      hasAttachments:
+        Boolean(currentAttachedFile) ||
+        activeSession.messages.some((m) => (m.attachedFiles?.length ?? 0) > 0),
+      hasGeneratedFiles: activeSession.messages.some((m) => (m.generatedFiles?.length ?? 0) > 0),
+    });
 
     const baseAssemblyCandidates = {
-      coreInstruction: buildEffectiveCoreInstruction(workspace.settings),
+      coreInstruction: buildEffectiveCoreInstruction(workspace.settings, selectedTools),
       pinnedFacts: pinnedNotes.map((n) => ({
         id: n.id,
         title: n.title,
@@ -573,7 +613,7 @@ export const App: React.FC = () => {
         isPinned: false,
       })),
       summaries: summaryCandidates,
-      tools: [CREATE_FILE_TOOL_DEFINITION],
+      ...(selectedTools.length > 0 ? { tools: selectedTools } : {}),
     };
 
     // 4. Deterministic budget-first context assembly with user's exact reserve % & model template
@@ -626,6 +666,7 @@ export const App: React.FC = () => {
       authorName: 'You',
       createdAt: now,
       content: userContent,
+      ...(currentAttachedFile ? { attachedFiles: [currentAttachedFile] } : {}),
       sources: [],
     };
 
@@ -681,6 +722,35 @@ export const App: React.FC = () => {
     let dripStopped = false;
     const collectedFiles: GeneratedFileArtifact[] = [];
     const toolActivityLabels: string[] = [];
+    const sessionAttachedFiles: AttachedFileAttachment[] = [
+      ...activeSession.messages.flatMap((m) => m.attachedFiles ?? []),
+      ...(currentAttachedFile ? [currentAttachedFile] : []),
+    ];
+    let sessionMemoryNotes = [...workspace.memoryNotes];
+
+    const getSessionGeneratedFiles = (): GeneratedFileArtifact[] => {
+      const byFilename = new Map<string, GeneratedFileArtifact>();
+      for (const msg of activeSession.messages) {
+        for (const file of msg.generatedFiles ?? []) {
+          byFilename.set(file.filename.toLowerCase(), file);
+        }
+      }
+      for (const file of collectedFiles) {
+        byFilename.set(file.filename.toLowerCase(), file);
+      }
+      return Array.from(byFilename.values());
+    };
+
+    const upsertCollectedFile = (artifact: GeneratedFileArtifact) => {
+      const existingIdx = collectedFiles.findIndex(
+        (f) => f.id === artifact.id || f.filename.toLowerCase() === artifact.filename.toLowerCase(),
+      );
+      if (existingIdx !== -1) {
+        collectedFiles[existingIdx] = artifact;
+      } else {
+        collectedFiles.push(artifact);
+      }
+    };
 
     const updateAssistantMessage = (updater: (m: ChatMessage) => ChatMessage) => {
       setWorkspace((prev) => ({
@@ -703,9 +773,10 @@ export const App: React.FC = () => {
           : undefined;
       updateAssistantMessage((m) => {
         const cleaned = m.content.replace(/\n{3,}/g, '\n\n').trim();
+        const fileActionVerb = collectedFiles.every((f) => f.isEdited) ? 'Updated' : 'Created';
         const fallbackSummary =
           !cleaned && collectedFiles.length > 0
-            ? `Created ${collectedFiles.map((f) => `\`${f.filename}\``).join(', ')}. Open the file card below to preview, copy, or download.`
+            ? `${fileActionVerb} ${collectedFiles.map((f) => `\`${f.filename}\``).join(', ')}. Open the file card below to preview, copy, or download.`
             : cleaned;
         return {
           ...m,
@@ -837,8 +908,7 @@ export const App: React.FC = () => {
             },
             onToolCallDetected: (toolName) => {
               if (dripStopped) return;
-              const label =
-                toolName === CREATE_FILE_TOOL_NAME ? 'Writing file...' : `Running ${toolName}...`;
+              const label = getToolPendingActivityLabel(toolName);
               updateAssistantMessage((m) => ({
                 ...m,
                 toolActivity: [...toolActivityLabels, label],
@@ -969,7 +1039,7 @@ export const App: React.FC = () => {
         if (tc.function.name === CREATE_FILE_TOOL_NAME) {
           const exec = executeCreateFileTool(tc.function.arguments, createUuid);
           if (exec.ok) {
-            collectedFiles.push(exec.artifact);
+            upsertCollectedFile(exec.artifact);
             toolActivityLabels.push(`Created ${exec.artifact.filename}`);
             logger.info(
               'chat',
@@ -999,10 +1069,157 @@ export const App: React.FC = () => {
             name: tc.function.name,
             content: exec.toolResultJson,
           });
+        } else if (tc.function.name === EDIT_FILE_TOOL_NAME) {
+          const exec = executeEditFileTool(tc.function.arguments, getSessionGeneratedFiles());
+          if (exec.ok) {
+            const sourceArtifactId = exec.artifact.id;
+            const inTurnMatch = collectedFiles.find(
+              (f) => f.filename.toLowerCase() === exec.artifact.filename.toLowerCase(),
+            );
+            const updatedArtifact: GeneratedFileArtifact = {
+              ...exec.artifact,
+              id: inTurnMatch ? inTurnMatch.id : `file_${createUuid().slice(0, 8)}`,
+              updatedAt: Date.now(),
+              isEdited: true,
+            };
+            upsertCollectedFile(updatedArtifact);
+            setPreviewFile((curr) =>
+              curr &&
+              curr.sessionId === targetSessionId &&
+              (curr.file.id === sourceArtifactId || curr.file.id === updatedArtifact.id)
+                ? { ...curr, file: updatedArtifact }
+                : curr,
+            );
+            toolActivityLabels.push(
+              `Updated ${updatedArtifact.filename} (${exec.linesChanged} ${exec.linesChanged === 1 ? 'line' : 'lines'})`,
+            );
+            logger.info(
+              'chat',
+              `Tool edit_file updated '${updatedArtifact.filename}' (${exec.linesChanged} line(s) changed)`,
+            );
+            const parsedArgs = parseToolArgumentsJson(tc.function.arguments);
+            compactCallsForBudget.push({
+              ...tc,
+              function: {
+                name: tc.function.name,
+                arguments: JSON.stringify({
+                  filename:
+                    typeof parsedArgs?.filename === 'string'
+                      ? parsedArgs.filename
+                      : updatedArtifact.filename,
+                  summary: '[edit payload omitted to fit context budget]',
+                }),
+              },
+            });
+          } else {
+            toolActivityLabels.push(`Failed edit_file: ${exec.error}`);
+            logger.warn('chat', `Tool edit_file error: ${exec.error}`);
+            compactCallsForBudget.push(tc);
+          }
+          inTurnToolTurns.push({
+            id: `tool_res_${tc.id}`,
+            role: 'tool',
+            toolCallId: tc.id,
+            name: tc.function.name,
+            content: exec.toolResultJson,
+          });
+        } else if (tc.function.name === CALCULATE_TOOL_NAME) {
+          const exec = executeCalculateTool(tc.function.arguments);
+          if (exec.ok) {
+            toolActivityLabels.push(`Calculated: ${safeTruncateChars(exec.formatted, 48)}`);
+            logger.info('chat', `Tool calculate (${exec.mode}) -> ${exec.formatted}`);
+          } else {
+            toolActivityLabels.push(`Failed calculate: ${exec.error}`);
+            logger.warn('chat', `Tool calculate error: ${exec.error}`);
+          }
+          compactCallsForBudget.push(tc);
+          inTurnToolTurns.push({
+            id: `tool_res_${tc.id}`,
+            role: 'tool',
+            toolCallId: tc.id,
+            name: tc.function.name,
+            content: exec.toolResultJson,
+          });
+        } else if (tc.function.name === READ_ATTACHED_CHUNK_TOOL_NAME) {
+          const exec = executeReadAttachedChunkTool(tc.function.arguments, sessionAttachedFiles);
+          if (exec.ok) {
+            toolActivityLabels.push(
+              `Read ${exec.filename} L${exec.startLine}-${exec.endLine}`,
+            );
+            logger.info(
+              'chat',
+              `Tool read_attached_chunk read '${exec.filename}' L${exec.startLine}-${exec.endLine}/${exec.totalLines}`,
+            );
+          } else {
+            toolActivityLabels.push(`Failed read_attached_chunk: ${exec.error}`);
+            logger.warn('chat', `Tool read_attached_chunk error: ${exec.error}`);
+          }
+          compactCallsForBudget.push(tc);
+          inTurnToolTurns.push({
+            id: `tool_res_${tc.id}`,
+            role: 'tool',
+            toolCallId: tc.id,
+            name: tc.function.name,
+            content: exec.toolResultJson,
+          });
+        } else if (tc.function.name === SEARCH_MEMORY_TOOL_NAME) {
+          const exec = executeSearchMemoryTool(
+            tc.function.arguments,
+            sessionMemoryNotes,
+            targetSessionId,
+          );
+          if (exec.ok) {
+            toolActivityLabels.push(
+              `Searched memory (${exec.count} ${exec.count === 1 ? 'hit' : 'hits'})`,
+            );
+            logger.info('memory', `Tool search_memory matched ${exec.count} note(s)`);
+          } else {
+            toolActivityLabels.push(`Failed search_memory: ${exec.error}`);
+            logger.warn('memory', `Tool search_memory error: ${exec.error}`);
+          }
+          compactCallsForBudget.push(tc);
+          inTurnToolTurns.push({
+            id: `tool_res_${tc.id}`,
+            role: 'tool',
+            toolCallId: tc.id,
+            name: tc.function.name,
+            content: exec.toolResultJson,
+          });
+        } else if (tc.function.name === SAVE_MEMORY_TOOL_NAME) {
+          const exec = executeSaveMemoryNoteTool(
+            tc.function.arguments,
+            createUuid,
+            activeSession.title,
+            targetSessionId,
+          );
+          if (exec.ok) {
+            sessionMemoryNotes = [exec.note, ...sessionMemoryNotes];
+            setWorkspace((prev) => ({
+              ...prev,
+              memoryNotes: [exec.note, ...prev.memoryNotes],
+            }));
+            toolActivityLabels.push(`Saved note: ${safeTruncateChars(exec.note.title, 40)}`);
+            logger.info(
+              'memory',
+              `Tool save_memory_note created '${exec.note.title}' (pinned=${exec.note.isPinned})`,
+            );
+          } else {
+            toolActivityLabels.push(`Failed save_memory_note: ${exec.error}`);
+            logger.warn('memory', `Tool save_memory_note error: ${exec.error}`);
+          }
+          compactCallsForBudget.push(tc);
+          inTurnToolTurns.push({
+            id: `tool_res_${tc.id}`,
+            role: 'tool',
+            toolCallId: tc.id,
+            name: tc.function.name,
+            content: exec.toolResultJson,
+          });
         } else {
+          const availableList = ALL_FILE_AND_TIER1_TOOLS.map((t) => t.function.name).join(', ');
           const errJson = JSON.stringify({
             status: 'error',
-            error: `Unsupported tool '${tc.function.name}'. Only '${CREATE_FILE_TOOL_NAME}' is available.`,
+            error: `Unsupported tool '${tc.function.name}'. Available tools: ${availableList}.`,
           });
           compactCallsForBudget.push(tc);
           inTurnToolTurns.push({

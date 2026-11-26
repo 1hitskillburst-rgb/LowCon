@@ -1,7 +1,19 @@
 import { retrieveMemoryNotes } from './memory';
 import { safeTruncateChars } from './privacy';
-import { countLines, CREATE_FILE_TOOL_DEFINITION, parseToolArgumentsJson } from './tools';
-import type { GeneratedFileArtifact, MemoryNote, ToolDefinition } from './types';
+import {
+  buildToolPolicyInstruction,
+  countLines,
+  CREATE_FILE_TOOL_DEFINITION,
+  CREATE_FILE_TOOL_NAME,
+  parseToolArgumentsJson,
+  TOOL_CALL_POLICY_INSTRUCTION,
+} from './tools';
+import type {
+  AttachedFileAttachment,
+  GeneratedFileArtifact,
+  MemoryNote,
+  ToolDefinition,
+} from './types';
 
 export const CALCULATE_TOOL_NAME = 'calculate';
 export const EDIT_FILE_TOOL_NAME = 'edit_file';
@@ -10,6 +22,8 @@ export const SEARCH_MEMORY_TOOL_NAME = 'search_memory';
 export const SAVE_MEMORY_TOOL_NAME = 'save_memory_note';
 
 export const MAX_ATTACHED_CHUNK_LINES = 120;
+export const ATTACHED_FILE_INDEX_LINE_THRESHOLD = 80;
+export const ATTACHED_FILE_INDEX_CHAR_THRESHOLD = 2500;
 const MAX_SEARCH_MEMORY_LIMIT = 8;
 const DEFAULT_SEARCH_MEMORY_LIMIT = 5;
 const MAX_MATH_EXPRESSION_LENGTH = 2000;
@@ -21,10 +35,7 @@ const MAX_SAVED_NOTE_CONTENT_CHARS = 800;
 
 export type CalculateMode = 'math' | 'json_validate' | 'regex_test' | 'date_diff';
 
-export interface AttachedFileInput {
-  name: string;
-  content: string;
-}
+export type AttachedFileInput = AttachedFileAttachment;
 
 export type CalculateToolResult =
   | {
@@ -120,43 +131,20 @@ export const CALCULATE_TOOL_DEFINITION: ToolDefinition = {
   type: 'function',
   function: {
     name: CALCULATE_TOOL_NAME,
-    description:
-      'Safely run deterministic math calculations, JSON syntax validation, regex testing, or date differences without guessing.',
+    description: 'Run deterministic math, JSON validation, regex test, or date_diff.',
     parameters: {
       type: 'object',
       properties: {
         mode: {
           type: 'string',
           enum: ['math', 'json_validate', 'regex_test', 'date_diff'],
-          description:
-            'Operation mode (defaults to "math"). Use "math" for arithmetic/functions, "json_validate" to check JSON, "regex_test" to test a regex, or "date_diff" to compute elapsed time between two dates.',
         },
-        expression: {
-          type: 'string',
-          description:
-            'Math expression for mode="math", e.g. "round(sqrt(144) * pi, 2)" or "2 ** 10". Supports +, -, *, /, %, **, ^, parentheses, constants (pi, e), and functions (sqrt, abs, round, floor, ceil, min, max, pow, log, ln, sin, cos, tan).',
-        },
-        input: {
-          type: 'string',
-          description:
-            'Input string to parse (for mode="json_validate") or test against a pattern (for mode="regex_test").',
-        },
-        pattern: {
-          type: 'string',
-          description: 'Regular expression pattern (without enclosing slashes) for mode="regex_test".',
-        },
-        flags: {
-          type: 'string',
-          description: 'Optional regex flags such as "gi" or "m" for mode="regex_test".',
-        },
-        start_date: {
-          type: 'string',
-          description: 'Start ISO date or timestamp (e.g. "2026-01-01" or "2026-01-01T12:00:00Z") for mode="date_diff".',
-        },
-        end_date: {
-          type: 'string',
-          description: 'End ISO date or timestamp for mode="date_diff".',
-        },
+        expression: { type: 'string' },
+        input: { type: 'string' },
+        pattern: { type: 'string' },
+        flags: { type: 'string' },
+        start_date: { type: 'string' },
+        end_date: { type: 'string' },
       },
       additionalProperties: false,
     },
@@ -168,76 +156,32 @@ export const EDIT_FILE_TOOL_DEFINITION: ToolDefinition = {
   function: {
     name: EDIT_FILE_TOOL_NAME,
     description:
-      'Modify an existing generated file in the current session without rewriting the entire file. Supports line-range replacements (start_line, end_line, replacement) or exact text replacements (old_text, new_text), as a single edit or an edits array.',
+      'Edit an existing session file via edits[] or top-level (start_line, end_line, replacement) or (old_text, new_text).',
     parameters: {
       type: 'object',
       properties: {
-        filename: {
-          type: 'string',
-          description: 'Filename of an existing generated file in this session.',
-        },
+        filename: { type: 'string' },
         edits: {
           type: 'array',
-          description: 'List of targeted edit operations to apply.',
           items: {
             type: 'object',
             properties: {
-              start_line: {
-                type: 'integer',
-                minimum: 1,
-                description: '1-indexed start line for line-range replacement.',
-              },
-              end_line: {
-                type: 'integer',
-                minimum: 1,
-                description: '1-indexed inclusive end line (defaults to start_line).',
-              },
-              replacement: {
-                type: 'string',
-                description: 'Replacement lines for the line range (empty string deletes the range).',
-              },
-              old_text: {
-                type: 'string',
-                description: 'Exact existing text snippet to replace.',
-              },
-              new_text: {
-                type: 'string',
-                description: 'Replacement text for old_text.',
-              },
-              replace_all: {
-                type: 'boolean',
-                description: 'Replace all occurrences of old_text instead of requiring a unique match.',
-              },
+              start_line: { type: 'integer', minimum: 1 },
+              end_line: { type: 'integer', minimum: 1 },
+              replacement: { type: 'string' },
+              old_text: { type: 'string' },
+              new_text: { type: 'string' },
+              replace_all: { type: 'boolean' },
             },
             additionalProperties: false,
           },
         },
-        start_line: {
-          type: 'integer',
-          minimum: 1,
-          description: '1-indexed start line for a single line-range edit.',
-        },
-        end_line: {
-          type: 'integer',
-          minimum: 1,
-          description: '1-indexed inclusive end line for a single line-range edit.',
-        },
-        replacement: {
-          type: 'string',
-          description: 'Replacement content for a single line-range edit.',
-        },
-        old_text: {
-          type: 'string',
-          description: 'Exact existing text for a single exact-text edit.',
-        },
-        new_text: {
-          type: 'string',
-          description: 'Replacement text for a single exact-text edit.',
-        },
-        replace_all: {
-          type: 'boolean',
-          description: 'Replace all occurrences of old_text for a single exact-text edit.',
-        },
+        start_line: { type: 'integer', minimum: 1 },
+        end_line: { type: 'integer', minimum: 1 },
+        replacement: { type: 'string' },
+        old_text: { type: 'string' },
+        new_text: { type: 'string' },
+        replace_all: { type: 'boolean' },
       },
       required: ['filename'],
       additionalProperties: false,
@@ -249,25 +193,13 @@ export const READ_ATTACHED_CHUNK_TOOL_DEFINITION: ToolDefinition = {
   type: 'function',
   function: {
     name: READ_ATTACHED_CHUNK_TOOL_NAME,
-    description:
-      `Read a numbered line range (up to ${MAX_ATTACHED_CHUNK_LINES} lines per call) from a user-attached file. Use this instead of asking the user to re-paste large files.`,
+    description: `Read 1-indexed lines (max ${MAX_ATTACHED_CHUNK_LINES}) from an attached file.`,
     parameters: {
       type: 'object',
       properties: {
-        filename: {
-          type: 'string',
-          description: 'Name of the attached file to read (optional when only 1 file is attached).',
-        },
-        start_line: {
-          type: 'integer',
-          minimum: 1,
-          description: '1-indexed line number to start reading from (default 1).',
-        },
-        end_line: {
-          type: 'integer',
-          minimum: 1,
-          description: `1-indexed inclusive end line (capped at ${MAX_ATTACHED_CHUNK_LINES} lines per read).`,
-        },
+        filename: { type: 'string' },
+        start_line: { type: 'integer', minimum: 1 },
+        end_line: { type: 'integer', minimum: 1 },
       },
       additionalProperties: false,
     },
@@ -278,25 +210,13 @@ export const SEARCH_MEMORY_TOOL_DEFINITION: ToolDefinition = {
   type: 'function',
   function: {
     name: SEARCH_MEMORY_TOOL_NAME,
-    description:
-      'Search saved local memory notes and approved session summaries using keyword relevance.',
+    description: 'Search local memory notes and approved summaries.',
     parameters: {
       type: 'object',
       properties: {
-        query: {
-          type: 'string',
-          description: 'Search keywords or topic to match against saved memory notes.',
-        },
-        limit: {
-          type: 'integer',
-          minimum: 1,
-          maximum: MAX_SEARCH_MEMORY_LIMIT,
-          description: `Maximum notes to return (1-${MAX_SEARCH_MEMORY_LIMIT}, default ${DEFAULT_SEARCH_MEMORY_LIMIT}).`,
-        },
-        pinned_only: {
-          type: 'boolean',
-          description: 'When true, restrict results to pinned rules/notes.',
-        },
+        query: { type: 'string' },
+        limit: { type: 'integer', minimum: 1, maximum: MAX_SEARCH_MEMORY_LIMIT },
+        pinned_only: { type: 'boolean' },
       },
       required: ['query'],
       additionalProperties: false,
@@ -308,23 +228,13 @@ export const SAVE_MEMORY_TOOL_DEFINITION: ToolDefinition = {
   type: 'function',
   function: {
     name: SAVE_MEMORY_TOOL_NAME,
-    description:
-      'Save a concise, durable fact, preference, or project decision to local memory so future turns can recall it.',
+    description: 'Save a concise durable fact, preference, or rule to local memory.',
     parameters: {
       type: 'object',
       properties: {
-        title: {
-          type: 'string',
-          description: 'Short descriptive title for the memory note.',
-        },
-        content: {
-          type: 'string',
-          description: 'Concise factual note body to remember.',
-        },
-        is_pinned: {
-          type: 'boolean',
-          description: 'Set true only for persistent project rules that should always remain in prompt context.',
-        },
+        title: { type: 'string' },
+        content: { type: 'string' },
+        is_pinned: { type: 'boolean' },
       },
       required: ['title', 'content'],
       additionalProperties: false,
@@ -345,12 +255,116 @@ export const ALL_FILE_AND_TIER1_TOOLS: ToolDefinition[] = [
   ...TIER1_TOOL_DEFINITIONS,
 ];
 
-export const TIER1_TOOL_POLICY_INSTRUCTION = `[Tier 1 Tool Policy]
-- \`${CALCULATE_TOOL_NAME}\`: Use for exact math, JSON validation, regex testing, or date differences instead of doing mental arithmetic or guessing.
-- \`${EDIT_FILE_TOOL_NAME}\`: Use to update an existing session file via line-range or exact-text edits instead of rewriting the whole file with \`create_file\`. Never paste the full updated file in your chat reply.
-- \`${READ_ATTACHED_CHUNK_TOOL_NAME}\`: Attached large files show a compact outline first; call this tool to read specific line ranges (max ${MAX_ATTACHED_CHUNK_LINES} lines per read) before answering questions about unseen lines.
-- \`${SEARCH_MEMORY_TOOL_NAME}\`: Use when you need prior facts, decisions, or summaries not already included in the active prompt.
-- \`${SAVE_MEMORY_TOOL_NAME}\`: Save only durable user preferences, constraints, or project decisions (never trivial chatter).`;
+export const TIER1_TOOL_POLICY_INSTRUCTION = `[Tier 1 Tools]
+- \`${CALCULATE_TOOL_NAME}\`: Exact math, json_validate, regex_test, or date_diff.
+- \`${EDIT_FILE_TOOL_NAME}\`: Patch existing session files; never echo the full file.
+- \`${READ_ATTACHED_CHUNK_TOOL_NAME}\`: Read indexed attached files in <=${MAX_ATTACHED_CHUNK_LINES}-line chunks.
+- \`${SEARCH_MEMORY_TOOL_NAME}\` / \`${SAVE_MEMORY_TOOL_NAME}\`: Recall prior facts or save durable rules/decisions.`;
+
+export const FULL_TOOL_CALL_POLICY_INSTRUCTION = buildToolPolicyInstruction(
+  TIER1_TOOL_POLICY_INSTRUCTION,
+);
+
+const TIER1_POLICY_BULLETS: Record<string, string> = {
+  [CALCULATE_TOOL_NAME]: `- \`${CALCULATE_TOOL_NAME}\`: Exact math, json_validate, regex_test, or date_diff.`,
+  [EDIT_FILE_TOOL_NAME]: `- \`${EDIT_FILE_TOOL_NAME}\`: Patch existing session files; never echo the full file.`,
+  [READ_ATTACHED_CHUNK_TOOL_NAME]: `- \`${READ_ATTACHED_CHUNK_TOOL_NAME}\`: Read indexed attached files in <=${MAX_ATTACHED_CHUNK_LINES}-line chunks.`,
+  [SEARCH_MEMORY_TOOL_NAME]: `- \`${SEARCH_MEMORY_TOOL_NAME}\`: Search saved local memory notes.`,
+  [SAVE_MEMORY_TOOL_NAME]: `- \`${SAVE_MEMORY_TOOL_NAME}\`: Save durable facts, preferences, or rules.`,
+};
+
+export function buildToolPolicyForTools(tools: ToolDefinition[]): string {
+  if (tools.length === 0) return '';
+  const names = new Set(tools.map((t) => t.function.name));
+  const sections: string[] = [];
+  if (names.has(CREATE_FILE_TOOL_NAME)) {
+    sections.push(TOOL_CALL_POLICY_INSTRUCTION);
+  }
+  const tier1Bullets = Object.entries(TIER1_POLICY_BULLETS)
+    .filter(([name]) => names.has(name))
+    .map(([, bullet]) => bullet);
+  if (tier1Bullets.length > 0) {
+    sections.push(`[Tier 1 Tools]\n${tier1Bullets.join('\n')}`);
+  }
+  return sections.join('\n\n');
+}
+
+export function selectToolsForPromptBudget(
+  modelContextLimit: number,
+  options: { hasAttachments: boolean; hasGeneratedFiles: boolean } = {
+    hasAttachments: false,
+    hasGeneratedFiles: false,
+  },
+): ToolDefinition[] {
+  if (modelContextLimit >= 4096) {
+    return ALL_FILE_AND_TIER1_TOOLS;
+  }
+  if (modelContextLimit < 1536) {
+    return [];
+  }
+  // On ultra-low ~2K context windows, keep a lean contextual tool subset so
+  // pinned notes + indexed attachments + active tools always fit inside promptBudget.
+  if (options.hasAttachments && options.hasGeneratedFiles) {
+    return [READ_ATTACHED_CHUNK_TOOL_DEFINITION, EDIT_FILE_TOOL_DEFINITION];
+  }
+  if (options.hasAttachments) {
+    return [
+      READ_ATTACHED_CHUNK_TOOL_DEFINITION,
+      CALCULATE_TOOL_DEFINITION,
+      CREATE_FILE_TOOL_DEFINITION,
+    ];
+  }
+  if (options.hasGeneratedFiles) {
+    return [EDIT_FILE_TOOL_DEFINITION, CALCULATE_TOOL_DEFINITION];
+  }
+  return [
+    CREATE_FILE_TOOL_DEFINITION,
+    CALCULATE_TOOL_DEFINITION,
+    SEARCH_MEMORY_TOOL_DEFINITION,
+  ];
+}
+
+export function getToolPendingActivityLabel(toolName: string): string {
+  switch (toolName) {
+    case CREATE_FILE_TOOL_NAME:
+      return 'Writing file...';
+    case EDIT_FILE_TOOL_NAME:
+      return 'Editing file...';
+    case CALCULATE_TOOL_NAME:
+      return 'Calculating...';
+    case READ_ATTACHED_CHUNK_TOOL_NAME:
+      return 'Reading attached file...';
+    case SEARCH_MEMORY_TOOL_NAME:
+      return 'Searching local memory...';
+    case SAVE_MEMORY_TOOL_NAME:
+      return 'Saving memory note...';
+    default:
+      return `Running ${toolName}...`;
+  }
+}
+
+export function shouldIndexAttachedFile(content: string): boolean {
+  return (
+    countLines(content) > ATTACHED_FILE_INDEX_LINE_THRESHOLD ||
+    content.length > ATTACHED_FILE_INDEX_CHAR_THRESHOLD
+  );
+}
+
+export function formatAttachedFileForPrompt(file: AttachedFileInput): {
+  promptBlock: string;
+  isIndexed: boolean;
+} {
+  if (shouldIndexAttachedFile(file.content)) {
+    return {
+      isIndexed: true,
+      promptBlock: `[Attached local file index — use ${READ_ATTACHED_CHUNK_TOOL_NAME} to read line ranges]\n${buildAttachedFileIndex(file.name, file.content)}`,
+    };
+  }
+  return {
+    isIndexed: false,
+    promptBlock: `[Attached local file: ${file.name}]\n${file.content}`,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // 1. Safe deterministic `calculate` evaluator (pure recursive-descent parser)

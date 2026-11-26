@@ -1,5 +1,12 @@
 import { estimateTokensConservative } from './context';
 import { isLocalEndpoint, normalizeApiEndpoint, type DiagnosticLogger } from './privacy';
+import {
+  CALCULATE_TOOL_NAME,
+  EDIT_FILE_TOOL_NAME,
+  READ_ATTACHED_CHUNK_TOOL_NAME,
+  SAVE_MEMORY_TOOL_NAME,
+  SEARCH_MEMORY_TOOL_NAME,
+} from './tier1Tools';
 import { CREATE_FILE_TOOL_NAME, parseToolArgumentsJson } from './tools';
 import type {
   EffortLevel,
@@ -538,6 +545,68 @@ export function generateDeterministicMockReply(
   const lastMsg = messages[messages.length - 1];
   if (lastMsg?.role === 'tool') {
     const parsed = parseToolArgumentsJson(lastMsg.content ?? '');
+    if (parsed?.status === 'error') {
+      const errMsg = typeof parsed.error === 'string' ? parsed.error : 'Unknown tool error.';
+      return `The \`${lastMsg.name ?? 'tool'}\` tool reported an error: ${errMsg}`;
+    }
+
+    if (lastMsg.name === CALCULATE_TOOL_NAME) {
+      const formatted =
+        typeof parsed?.formatted === 'string'
+          ? parsed.formatted
+          : JSON.stringify(parsed?.result ?? '');
+      return `Deterministic calculation result: **${formatted}**`;
+    }
+
+    if (lastMsg.name === EDIT_FILE_TOOL_NAME) {
+      const filename = typeof parsed?.filename === 'string' ? parsed.filename : 'file';
+      const linesChanged = typeof parsed?.linesChanged === 'number' ? parsed.linesChanged : 0;
+      const totalLines = typeof parsed?.totalLines === 'number' ? parsed.totalLines : 0;
+      const previewDiff = typeof parsed?.previewDiff === 'string' ? parsed.previewDiff : '';
+      const diffSection = previewDiff ? `\n\n\`\`\`diff\n${previewDiff}\n\`\`\`` : '';
+      return `Updated \`${filename}\` (${linesChanged} line(s) changed, ${totalLines} total lines).${diffSection}\n\nOpen the updated file card below to review the changes.`;
+    }
+
+    if (lastMsg.name === READ_ATTACHED_CHUNK_TOOL_NAME) {
+      const filename = typeof parsed?.filename === 'string' ? parsed.filename : 'attached file';
+      const startLine = typeof parsed?.start_line === 'number' ? parsed.start_line : 1;
+      const endLine = typeof parsed?.end_line === 'number' ? parsed.end_line : startLine;
+      const totalLines = typeof parsed?.total_lines === 'number' ? parsed.total_lines : endLine;
+      const hasMore = parsed?.has_more === true;
+      const chunkContent = typeof parsed?.content === 'string' ? parsed.content : '';
+      const previewLines = chunkContent.split('\n').slice(0, 8).join('\n');
+      const snippetBlock = previewLines ? `\n\n\`\`\`text\n${previewLines}\n\`\`\`` : '';
+      return `Read \`${filename}\` lines ${startLine}–${endLine} of ${totalLines}${hasMore ? ' (more lines remain)' : ''}.${snippetBlock}`;
+    }
+
+    if (lastMsg.name === SEARCH_MEMORY_TOOL_NAME) {
+      const query = typeof parsed?.query === 'string' ? parsed.query : '';
+      const count = typeof parsed?.count === 'number' ? parsed.count : 0;
+      const results = Array.isArray(parsed?.results)
+        ? (parsed.results as Array<Record<string, unknown>>)
+        : [];
+      if (count === 0 || results.length === 0) {
+        return `Searched local memory${query ? ` for "${query}"` : ''} and found no matching approved notes.`;
+      }
+      const bullets = results
+        .slice(0, 5)
+        .map((r) => {
+          const title = typeof r.title === 'string' ? r.title : 'Note';
+          const content = typeof r.content === 'string' ? r.content : '';
+          return `- **${title}**: ${content}`;
+        })
+        .join('\n');
+      return `Found ${count} matching local memory note${count === 1 ? '' : 's'}${query ? ` for "${query}"` : ''}:\n\n${bullets}`;
+    }
+
+    if (lastMsg.name === SAVE_MEMORY_TOOL_NAME) {
+      const title = typeof parsed?.title === 'string' ? parsed.title : 'Saved note';
+      const isPinned = parsed?.isPinned === true;
+      const sourceRef =
+        typeof parsed?.sourceReference === 'string' ? parsed.sourceReference : 'Saved via AI tool';
+      return `Saved memory note **"${title}"**${isPinned ? ' (pinned to persistent context)' : ''} — ${sourceRef}.`;
+    }
+
     const filename = typeof parsed?.filename === 'string' ? parsed.filename : 'generated_file';
     const lines = typeof parsed?.lines === 'number' ? parsed.lines : undefined;
     const language = typeof parsed?.language === 'string' ? parsed.language : 'code';
@@ -583,14 +652,293 @@ export function generateDeterministicMockReply(
   return base;
 }
 
-function detectMockFileGenerationRequest(
+function makeMockToolCall(name: string, args: Record<string, unknown>): ToolCallRecord {
+  return {
+    id: `call_mock_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+    type: 'function',
+    function: {
+      name,
+      arguments: JSON.stringify(args),
+    },
+  };
+}
+
+function findGeneratedFilesInMessages(messages: StructuredChatMessage[]): string[] {
+  const filenames: string[] = [];
+  const pushUnique = (name: string) => {
+    const cleaned = name.trim();
+    if (!cleaned) return;
+    const idx = filenames.indexOf(cleaned);
+    if (idx !== -1) filenames.splice(idx, 1);
+    filenames.push(cleaned);
+  };
+
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        if (tc.function.name === CREATE_FILE_TOOL_NAME || tc.function.name === EDIT_FILE_TOOL_NAME) {
+          const parsed = parseToolArgumentsJson(tc.function.arguments);
+          if (typeof parsed?.filename === 'string') {
+            pushUnique(parsed.filename);
+          }
+        }
+      }
+    }
+    if (msg.role === 'assistant' && typeof msg.content === 'string') {
+      const attachedMatches = msg.content.matchAll(/\[Attached generated files:\s*([^\]]+)\]/g);
+      for (const match of attachedMatches) {
+        for (const entry of match[1].split(',')) {
+          const name = entry.trim().replace(/\s*\([^)]*\)\s*$/, '').trim();
+          if (name) pushUnique(name);
+        }
+      }
+    }
+    if (msg.role === 'tool' && typeof msg.content === 'string') {
+      const parsed = parseToolArgumentsJson(msg.content);
+      if (typeof parsed?.filename === 'string' && parsed.status === 'ok') {
+        pushUnique(parsed.filename);
+      }
+    }
+  }
+
+  return filenames;
+}
+
+function buildMockCommentLineForFilename(filename: string): string {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.py') || lower.endsWith('.sh') || lower.endsWith('.yaml') || lower.endsWith('.yml')) {
+    return '# Updated via LowCon edit_file tool';
+  }
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) {
+    return '# Updated Markdown Report';
+  }
+  if (lower.endsWith('.html') || lower.endsWith('.htm') || lower.endsWith('.svg') || lower.endsWith('.xml')) {
+    return '<!-- Updated via LowCon edit_file tool -->';
+  }
+  if (lower.endsWith('.rs')) {
+    return '//! Updated via LowCon edit_file tool';
+  }
+  return '// Updated via LowCon edit_file tool';
+}
+
+function extractMathExpressionForMock(instruction: string): string | null {
+  const backticked = /`([^`]+)`/.exec(instruction);
+  if (backticked?.[1]?.trim()) {
+    return backticked[1].trim();
+  }
+  const stripped = instruction
+    .replace(
+      /^(?:please\s+)?(?:use\s+calculate(?:\s+tool)?\s*(?:to|on|for|:)?\s*|calculate\s*|compute\s*|evaluate\s*|solve\s*|what\s+is\s*)/i,
+      '',
+    )
+    .replace(/[?.!\s]+$/, '')
+    .trim();
+  if (!stripped) return null;
+  const exprMatch = /[A-Za-z0-9_+\-*/%^().,\s]+/.exec(stripped);
+  const candidate = (exprMatch ? exprMatch[0] : stripped).trim();
+  return candidate.length > 0 ? candidate : null;
+}
+
+function detectMockToolCallRequest(
   messages: StructuredChatMessage[],
+  tools?: ToolDefinition[],
 ): ToolCallRecord | null {
+  if (!tools || tools.length === 0) return null;
   const lastMsg = messages[messages.length - 1];
   if (!lastMsg || lastMsg.role === 'tool') return null;
 
+  const availableNames = new Set(tools.map((t) => t.function.name));
   const lastUser = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
-  const lower = lastUser.toLowerCase();
+  const attachIdx = lastUser.search(/\n*\[Attached local file/i);
+  const userInstruction = (attachIdx >= 0 ? lastUser.slice(0, attachIdx) : lastUser).trim();
+  const attachmentSection = attachIdx >= 0 ? lastUser.slice(attachIdx) : '';
+  const lower = userInstruction.toLowerCase();
+
+  // 1. save_memory_note
+  if (
+    availableNames.has(SAVE_MEMORY_TOOL_NAME) &&
+    /\b(save_memory_note|save (?:a |this )?(?:memory )?note|remember that|pin (?:this )?(?:rule|note)(?: to memory)?|save (?:this )?to memory)\b/i.test(
+      userInstruction,
+    )
+  ) {
+    const isPinned = /\b(pin|pinned|always keep|project rule)\b/i.test(userInstruction);
+    const cleanedBody = userInstruction
+      .replace(
+        /^(?:please\s+)?(?:call\s+save_memory_note\s*(?:with|for|:)?\s*|save (?:a |this )?(?:memory )?note(?:\s+(?:saying|that|about|:))?\s*|remember that\s*|pin (?:this )?(?:rule|note)(?: to memory)?(?:\s*:|\s+that)?\s*|save (?:this )?to memory(?:\s*:|\s+that)?\s*)/i,
+        '',
+      )
+      .trim();
+    const content = cleanedBody || userInstruction.trim() || 'Saved project note';
+    const title = content.split(/[:.\n]/)[0]?.trim().slice(0, 48) || 'Saved memory note';
+    return makeMockToolCall(SAVE_MEMORY_TOOL_NAME, {
+      title,
+      content,
+      is_pinned: isPinned,
+    });
+  }
+
+  // 2. search_memory
+  if (
+    availableNames.has(SEARCH_MEMORY_TOOL_NAME) &&
+    /\b(search_memory|search (?:local )?memory|search (?:my )?notes|check memory|look up in memory|recall from memory|find memory notes?)\b/i.test(
+      userInstruction,
+    )
+  ) {
+    const cleanedQuery = userInstruction
+      .replace(
+        /^(?:please\s+)?(?:call\s+search_memory\s*(?:for|with|:)?\s*|search (?:local )?memory(?:\s+(?:for|about))?\s*|search (?:my )?notes(?:\s+(?:for|about))?\s*|check memory(?:\s+(?:for|about))?\s*|look up in memory(?:\s+(?:for|about))?\s*|recall from memory(?:\s+(?:for|about))?\s*|find memory notes?(?:\s+(?:for|about))?\s*)/i,
+        '',
+      )
+      .replace(/[?.!]+$/, '')
+      .trim();
+    const pinnedOnly = /\bpinned\b/i.test(userInstruction) && !cleanedQuery;
+    return makeMockToolCall(SEARCH_MEMORY_TOOL_NAME, {
+      query: cleanedQuery || 'memory',
+      limit: 5,
+      ...(pinnedOnly ? { pinned_only: true } : {}),
+    });
+  }
+
+  // 3. explicit read_attached_chunk command / line range
+  const explicitFilenameMatch = /\b([a-z0-9_./-]+\.(?:rs|ts|tsx|js|jsx|py|go|cpp|c|html|htm|css|json|sh|yaml|yml|md|markdown|csv|tsv|svg|txt))\b/i.exec(
+    userInstruction,
+  );
+  const isIndexedAttachment =
+    /\[Attached local file \(?index/i.test(attachmentSection) ||
+    /Use read_attached_chunk\(/i.test(attachmentSection);
+  const wantsExplicitReadChunk =
+    /\b(read_attached_chunk|read chunk|read lines?|inspect lines?|show lines?)\b/i.test(
+      userInstruction,
+    ) ||
+    (isIndexedAttachment && /\blines?\s*\d+(?:\s*(?:-|to|through)\s*\d+)?/i.test(userInstruction));
+
+  const buildReadAttachedChunkCall = (): ToolCallRecord => {
+    const filenameMatch =
+      /filename="([^"]+)"/i.exec(attachmentSection) ??
+      /Attached file:\s*([^\s(]+)/i.exec(attachmentSection) ??
+      explicitFilenameMatch;
+    const lineRangeMatch = /\blines?\s*(\d+)(?:\s*(?:-|to|through)\s*(\d+))?/i.exec(userInstruction);
+    const startLine = lineRangeMatch ? Math.max(1, Number(lineRangeMatch[1])) : 1;
+    const endLine = lineRangeMatch?.[2]
+      ? Math.max(startLine, Number(lineRangeMatch[2]))
+      : startLine + 39;
+    return makeMockToolCall(READ_ATTACHED_CHUNK_TOOL_NAME, {
+      ...(filenameMatch?.[1] ? { filename: filenameMatch[1] } : {}),
+      start_line: startLine,
+      end_line: endLine,
+    });
+  };
+
+  if (availableNames.has(READ_ATTACHED_CHUNK_TOOL_NAME) && wantsExplicitReadChunk) {
+    return buildReadAttachedChunkCall();
+  }
+
+  // 4. calculate (math, json_validate, regex_test, date_diff)
+  if (availableNames.has(CALCULATE_TOOL_NAME)) {
+    if (/\b(json_validate|validate json|check json|verify json)\b/i.test(userInstruction)) {
+      const objStart = userInstruction.indexOf('{');
+      const arrStart = userInstruction.indexOf('[');
+      let jsonInput = '{}';
+      if (objStart !== -1 && (arrStart === -1 || objStart < arrStart)) {
+        const objEnd = userInstruction.lastIndexOf('}');
+        if (objEnd > objStart) jsonInput = userInstruction.slice(objStart, objEnd + 1);
+      } else if (arrStart !== -1) {
+        const arrEnd = userInstruction.lastIndexOf(']');
+        if (arrEnd > arrStart) jsonInput = userInstruction.slice(arrStart, arrEnd + 1);
+      }
+      return makeMockToolCall(CALCULATE_TOOL_NAME, { mode: 'json_validate', input: jsonInput });
+    }
+
+    if (/\b(regex_test|test regex|match regex)\b/i.test(userInstruction)) {
+      const quoted = [...userInstruction.matchAll(/[`"']([^`"']+)[`"']/g)].map((m) => m[1]);
+      return makeMockToolCall(CALCULATE_TOOL_NAME, {
+        mode: 'regex_test',
+        pattern: quoted[0] ?? '\\d+',
+        input: quoted[1] ?? userInstruction,
+        flags: 'g',
+      });
+    }
+
+    if (/\b(date_diff|days between|difference between|how many days)\b/i.test(userInstruction)) {
+      const dates = userInstruction.match(/\d{4}-\d{2}-\d{2}(?:T[0-9:.+-Z]+)?/g) ?? [];
+      if (dates.length >= 2) {
+        return makeMockToolCall(CALCULATE_TOOL_NAME, {
+          mode: 'date_diff',
+          start_date: dates[0],
+          end_date: dates[1],
+        });
+      }
+    }
+
+    const looksLikeFileIntent =
+      /\b(create|generate|write|build|make|save|edit|modify|update|patch)\b.*\b(file|script|module|program|\.[a-z0-9]{1,6})\b/i.test(
+        userInstruction,
+      );
+    const sanitizedForMathCheck = userInstruction
+      .replace(/\blines?\s*\d+(?:\s*[-–]\s*\d+)?/gi, ' ')
+      .replace(/\b\d{4}-\d{2}-\d{2}\b/g, ' ');
+    const hasMathOperatorOrFunc =
+      /\d+\s*(?:\*\*|[+\-*/%^])\s*\d+|\b(?:sqrt|sin|cos|tan|log|ln|abs|round|floor|ceil|pow|min|max)\s*\(/i.test(
+        sanitizedForMathCheck,
+      );
+    const wantsMath =
+      !looksLikeFileIntent &&
+      ((/\b(calculate|compute|evaluate|solve)\b/i.test(userInstruction) &&
+        (/\d/.test(sanitizedForMathCheck) || hasMathOperatorOrFunc)) ||
+        hasMathOperatorOrFunc);
+    if (wantsMath) {
+      const expr = extractMathExpressionForMock(userInstruction);
+      if (expr) {
+        return makeMockToolCall(CALCULATE_TOOL_NAME, { mode: 'math', expression: expr });
+      }
+    }
+  }
+
+  // 5. edit_file
+  const knownFiles = findGeneratedFilesInMessages(messages);
+  const hasEditVerb = /\b(edit|modify|update|patch|change|replace|fix|refactor)\b/i.test(
+    userInstruction,
+  );
+  const hasFileOrCodeTarget =
+    Boolean(explicitFilenameMatch) ||
+    /\b(file|script|module|program|code|function|line|lines)\b/i.test(userInstruction);
+  const wantsEdit =
+    /\b(edit_file)\b/i.test(userInstruction) ||
+    (hasEditVerb &&
+      (Boolean(explicitFilenameMatch) || (knownFiles.length > 0 && hasFileOrCodeTarget)));
+
+  if (availableNames.has(EDIT_FILE_TOOL_NAME) && wantsEdit) {
+    const targetFilename =
+      explicitFilenameMatch?.[1] ?? knownFiles[knownFiles.length - 1] ?? 'example.ts';
+    const replaceMatch = /\breplace\s+[`"']([^`"']+)[`"']\s+with\s+[`"']([^`"']*)[`"']/i.exec(
+      userInstruction,
+    );
+    if (replaceMatch) {
+      return makeMockToolCall(EDIT_FILE_TOOL_NAME, {
+        filename: targetFilename,
+        old_text: replaceMatch[1],
+        new_text: replaceMatch[2],
+      });
+    }
+
+    const lineRangeMatch = /\blines?\s*(\d+)(?:\s*(?:-|to|through)\s*(\d+))?/i.exec(userInstruction);
+    const startLine = lineRangeMatch ? Number(lineRangeMatch[1]) : 1;
+    const endLine = lineRangeMatch?.[2] ? Number(lineRangeMatch[2]) : startLine;
+    return makeMockToolCall(EDIT_FILE_TOOL_NAME, {
+      filename: targetFilename,
+      start_line: startLine,
+      end_line: Math.max(startLine, endLine),
+      replacement: buildMockCommentLineForFilename(targetFilename),
+    });
+  }
+
+  // 6. implicit indexed attachment chunk read
+  if (availableNames.has(READ_ATTACHED_CHUNK_TOOL_NAME) && isIndexedAttachment) {
+    return buildReadAttachedChunkCall();
+  }
+
+  // 6. create_file
+  if (!availableNames.has(CREATE_FILE_TOOL_NAME)) return null;
 
   const wantsSnippetOnly =
     /\b(example|snippet|one-liner|short code|show me how)\b/.test(lower) &&
@@ -598,9 +946,12 @@ function detectMockFileGenerationRequest(
   if (wantsSnippetOnly) return null;
 
   const wantsFile =
-    /\b(create|generate|write|build|make|save)\b.*\b(file|script|module|program|\.[a-z0-9]{1,6})\b/.test(
+    /\b(create|generate|write|build|make|save)\b.*\b(file|script|module|program|report|chart|diagram|widget|table|\.[a-z0-9]{1,8})\b/.test(
       lower,
-    ) || /\b[a-z0-9_-]+\.(rs|ts|tsx|js|py|go|cpp|c|html|css|json|sh|yaml)\b/.test(lower);
+    ) ||
+    /\b[a-z0-9_-]+\.(rs|ts|tsx|js|py|go|cpp|c|html|htm|css|json|sh|yaml|yml|md|markdown|csv|tsv|svg)\b/.test(
+      lower,
+    );
   if (!wantsFile) return null;
 
   if (lower.includes('rust') || lower.includes('.rs')) {
@@ -700,19 +1051,75 @@ fn main() {
     println!("List: {} (len={})", list, list.len());
 }
 `;
-    return {
-      id: `call_mock_${Date.now().toString(36)}`,
-      type: 'function',
-      function: {
-        name: CREATE_FILE_TOOL_NAME,
-        arguments: JSON.stringify({
-          filename: 'recursive_linked_list.rs',
-          title: 'Recursive linked list',
-          language: 'rust',
-          content,
-        }),
-      },
-    };
+    return makeMockToolCall(CREATE_FILE_TOOL_NAME, {
+      filename: 'recursive_linked_list.rs',
+      title: 'Recursive linked list',
+      language: 'rust',
+      content,
+    });
+  }
+
+  if (lower.includes('.svg') || /\bsvg\b/.test(lower)) {
+    return makeMockToolCall(CREATE_FILE_TOOL_NAME, {
+      filename: 'context_budget.svg',
+      title: 'Context Budget Diagram',
+      language: 'svg',
+      content: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 120" width="360" height="120">
+  <rect x="0" y="0" width="360" height="120" rx="10" fill="#F7F8F9" stroke="#D3D8DF" />
+  <text x="16" y="28" font-family="sans-serif" font-size="14" font-weight="700" fill="#161B26">LowCon 8K Budget Partition</text>
+  <rect x="16" y="46" width="230" height="24" rx="4" fill="#2A3FE0" />
+  <rect x="250" y="46" width="64" height="24" rx="4" fill="#1D7A4E" />
+  <rect x="318" y="46" width="26" height="24" rx="4" fill="#AAB2BF" />
+  <text x="16" y="92" font-family="sans-serif" font-size="11" fill="#444D5C">Prompt (75%) · Reply Reserve (20%) · Safety (5%)</text>
+</svg>`,
+    });
+  }
+
+  if (lower.includes('.csv') || lower.includes('.tsv') || /\b(csv|tsv)\b/.test(lower)) {
+    const isTsv = lower.includes('.tsv') || /\btsv\b/.test(lower);
+    const sep = isTsv ? '\t' : ',';
+    return makeMockToolCall(CREATE_FILE_TOOL_NAME, {
+      filename: isTsv ? 'metrics.tsv' : 'metrics.csv',
+      title: 'Local Benchmark Metrics',
+      language: isTsv ? 'tsv' : 'csv',
+      content: [
+        ['Profile', 'ContextLimit', 'PromptBudget', 'Status'].join(sep),
+        ['Qwen2.5-7B', '8192', '6144', 'Ready'].join(sep),
+        ['Llama3-8B', '16384', '12288', 'Verified'].join(sep),
+        ['OfflineMock', '131072', '98304', 'Deterministic'].join(sep),
+      ].join('\n'),
+    });
+  }
+
+  if (lower.includes('.html') || lower.includes('.htm') || /\bhtml\b/.test(lower)) {
+    return makeMockToolCall(CREATE_FILE_TOOL_NAME, {
+      filename: 'widget.html',
+      title: 'Budget Calculator Widget',
+      language: 'html',
+      content: `<!DOCTYPE html>
+<html>
+<head><title>LowCon Widget</title></head>
+<body style="font-family: system-ui, sans-serif; padding: 16px; color: #161B26;">
+  <h2 style="margin-top:0;">Context Partition Preview</h2>
+  <p id="summary">8192 total tokens · 20% reply reserve</p>
+  <button id="btn" style="padding: 6px 12px; border-radius: 6px; border: 1px solid #2A3FE0; background: #2A3FE0; color: #fff; cursor: pointer;">Test 16K</button>
+  <script>
+    document.getElementById('btn').addEventListener('click', function () {
+      document.getElementById('summary').textContent = '16384 total tokens · 12288 prompt budget';
+    });
+  </script>
+</body>
+</html>`,
+    });
+  }
+
+  if (lower.includes('.md') || lower.includes('.markdown') || /\bmarkdown\b/.test(lower)) {
+    return makeMockToolCall(CREATE_FILE_TOOL_NAME, {
+      filename: 'summary.md',
+      title: 'Context Strategy Summary',
+      language: 'markdown',
+      content: `# LowCon Context Strategy\n\n- **Budget-first assembly:** Reserves output and safety margin before packing history.\n- **Pinned rules:** Always preserved regardless of keyword overlap.\n- **Tier 1 tools:** Safe math, surgical file edits, chunked attachments, and local memory.\n`,
+    });
   }
 
   const isPython = lower.includes('python') || lower.includes('.py');
@@ -737,19 +1144,12 @@ if __name__ == "__main__":
 console.log(greetLocal('LowCon'));
 `;
 
-  return {
-    id: `call_mock_${Date.now().toString(36)}`,
-    type: 'function',
-    function: {
-      name: CREATE_FILE_TOOL_NAME,
-      arguments: JSON.stringify({
-        filename,
-        title: isPython ? 'Generated Python script' : 'Generated TypeScript module',
-        language,
-        content,
-      }),
-    },
-  };
+  return makeMockToolCall(CREATE_FILE_TOOL_NAME, {
+    filename,
+    title: isPython ? 'Generated Python script' : 'Generated TypeScript module',
+    language,
+    content,
+  });
 }
 
 /**
@@ -956,11 +1356,8 @@ export class InferenceController {
     signal: AbortSignal,
     callbacks: StreamCallbacks,
   ): Promise<void> {
-    const hasCreateFileTool = params.tools?.some(
-      (t) => t.function.name === CREATE_FILE_TOOL_NAME,
-    );
-    if (hasCreateFileTool) {
-      const mockToolCall = detectMockFileGenerationRequest(params.structuredMessages);
+    if (params.tools && params.tools.length > 0 && params.toolChoice !== 'none') {
+      const mockToolCall = detectMockToolCallRequest(params.structuredMessages, params.tools);
       if (mockToolCall) {
         callbacks.onToolCallDetected?.(mockToolCall.function.name);
         await new Promise<void>((resolve) => {

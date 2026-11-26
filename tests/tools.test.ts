@@ -12,7 +12,26 @@ import {
   type StreamStopReason,
 } from '../src/core/inference';
 import { DiagnosticLogger } from '../src/core/privacy';
-import { createDefaultModels } from '../src/core/storage';
+import { createDefaultMemoryNotes, createDefaultModels } from '../src/core/storage';
+import {
+  ALL_FILE_AND_TIER1_TOOLS,
+  buildToolPolicyForTools,
+  CALCULATE_TOOL_NAME,
+  EDIT_FILE_TOOL_DEFINITION,
+  EDIT_FILE_TOOL_NAME,
+  executeCalculateTool,
+  executeEditFileTool,
+  executeReadAttachedChunkTool,
+  executeSaveMemoryNoteTool,
+  executeSearchMemoryTool,
+  formatAttachedFileForPrompt,
+  FULL_TOOL_CALL_POLICY_INSTRUCTION,
+  READ_ATTACHED_CHUNK_TOOL_NAME,
+  SAVE_MEMORY_TOOL_NAME,
+  SEARCH_MEMORY_TOOL_NAME,
+  selectToolsForPromptBudget,
+  shouldIndexAttachedFile,
+} from '../src/core/tier1Tools';
 import {
   CREATE_FILE_TOOL_DEFINITION,
   CREATE_FILE_TOOL_NAME,
@@ -21,7 +40,7 @@ import {
   isDuplicateGeneratedFileBlock,
   sanitizeGeneratedFilename,
 } from '../src/core/tools';
-import type { GeneratedFileArtifact, ToolCallRecord } from '../src/core/types';
+import type { GeneratedFileArtifact, MemoryNote, ToolCallRecord } from '../src/core/types';
 
 function makeSseStream(chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -313,5 +332,269 @@ test('DuplicateFileCodeFilter strips redundant code blocks matching created file
   assert.equal(emitted.includes('struct Node<T>'), false);
   assert.equal(emitted.includes('I created `list.rs`'), true);
   assert.equal(emitted.includes('rustc list.rs && ./list'), true);
+});
+
+async function runMockStep(
+  controller: InferenceController,
+  sessionId: string,
+  messages: Array<{
+    role: 'system' | 'user' | 'assistant' | 'tool';
+    content: string | null;
+    tool_calls?: ToolCallRecord[];
+    tool_call_id?: string;
+    name?: string;
+  }>,
+  tools = ALL_FILE_AND_TIER1_TOOLS,
+): Promise<{ text: string; stopReason: StreamStopReason | null; toolCalls?: ToolCallRecord[] }> {
+  let text = '';
+  let stopReason: StreamStopReason | null = null;
+  let toolCalls: ToolCallRecord[] | undefined;
+
+  await controller.startGeneration(
+    sessionId,
+    {
+      exactRenderedPrompt: messages.map((m) => m.content ?? '').join('\n'),
+      structuredMessages: messages,
+      maxTokens: 1024,
+      temperature: 0.7,
+      topP: 0.9,
+      stopSequences: [],
+      tools,
+    },
+    {
+      onToken: (tok) => {
+        text += tok;
+      },
+      onComplete: (_tokens, reason, stats) => {
+        stopReason = reason;
+        toolCalls = stats?.toolCalls;
+      },
+      onCancelled: () => assert.fail('unexpected cancel'),
+      onError: (err) => assert.fail(err),
+    },
+  );
+
+  return { text, stopReason, toolCalls };
+}
+
+test('mock harness and Tier 1 runtime execute calculate, edit_file, read_attached_chunk, search_memory, and save_memory_note end-to-end', async () => {
+  const logger = new DiagnosticLogger('disabled');
+  const controller = new InferenceController(logger, () => {});
+  const mockModel = createDefaultModels()[0];
+  assert.equal(controller.loadModel(mockModel).ok, true);
+
+  // 1. calculate
+  const calcStep1 = await runMockStep(controller, 't1', [
+    { role: 'user', content: 'calculate round(sqrt(144) * pi, 2)' },
+  ]);
+  assert.equal(calcStep1.stopReason, 'tool_calls');
+  assert.equal(calcStep1.toolCalls?.[0]?.function.name, CALCULATE_TOOL_NAME);
+  const calcExec = executeCalculateTool(calcStep1.toolCalls![0].function.arguments);
+  assert.equal(calcExec.ok, true);
+  if (calcExec.ok) {
+    assert.equal(calcExec.formatted, '37.7');
+  }
+  const calcStep2 = await runMockStep(controller, 't1', [
+    { role: 'user', content: 'calculate round(sqrt(144) * pi, 2)' },
+    { role: 'assistant', content: null, tool_calls: calcStep1.toolCalls },
+    {
+      role: 'tool',
+      tool_call_id: calcStep1.toolCalls![0].id,
+      name: CALCULATE_TOOL_NAME,
+      content: calcExec.toolResultJson,
+    },
+  ]);
+  assert.equal(calcStep2.stopReason, 'done');
+  assert.ok(calcStep2.text.includes('37.7'));
+
+  // 2. edit_file across session history
+  const existingArtifact: GeneratedFileArtifact = {
+    id: 'file_demo',
+    filename: 'example.ts',
+    title: 'Example',
+    language: 'typescript',
+    content: "export function greet() {\n  return 'LowCon';\n}\n",
+    createdAt: Date.now(),
+  };
+  const editStep1 = await runMockStep(controller, 't2', [
+    {
+      role: 'assistant',
+      content: 'Created file.\n\n[Attached generated files: example.ts (typescript, 3 lines)]',
+    },
+    { role: 'user', content: "Update example.ts to replace 'LowCon' with 'Local Workbench'" },
+  ]);
+  assert.equal(editStep1.stopReason, 'tool_calls');
+  assert.equal(editStep1.toolCalls?.[0]?.function.name, EDIT_FILE_TOOL_NAME);
+  const editExec = executeEditFileTool(editStep1.toolCalls![0].function.arguments, [existingArtifact]);
+  assert.equal(editExec.ok, true);
+  if (editExec.ok) {
+    assert.ok(editExec.artifact.content.includes("'Local Workbench'"));
+    assert.equal(editExec.linesChanged, 1);
+  }
+  const editStep2 = await runMockStep(controller, 't2', [
+    { role: 'user', content: "Update example.ts to replace 'LowCon' with 'Local Workbench'" },
+    { role: 'assistant', content: null, tool_calls: editStep1.toolCalls },
+    {
+      role: 'tool',
+      tool_call_id: editStep1.toolCalls![0].id,
+      name: EDIT_FILE_TOOL_NAME,
+      content: editExec.toolResultJson,
+    },
+  ]);
+  assert.equal(editStep2.stopReason, 'done');
+  assert.ok(editStep2.text.includes('example.ts'));
+
+  // 3. read_attached_chunk with compact indexing on >80 lines
+  const largeLines = Array.from({ length: 120 }, (_, i) => `export const item${i + 1} = ${i + 1};`);
+  const largeAttachment = { name: 'big_module.ts', content: largeLines.join('\n') };
+  assert.equal(shouldIndexAttachedFile(largeAttachment.content), true);
+  const formattedLarge = formatAttachedFileForPrompt(largeAttachment);
+  assert.equal(formattedLarge.isIndexed, true);
+  assert.ok(formattedLarge.promptBlock.length < largeAttachment.content.length / 2);
+
+  const readStep1 = await runMockStep(controller, 't3', [
+    { role: 'user', content: `Inspect lines 10-25\n\n${formattedLarge.promptBlock}` },
+  ]);
+  assert.equal(readStep1.stopReason, 'tool_calls');
+  assert.equal(readStep1.toolCalls?.[0]?.function.name, READ_ATTACHED_CHUNK_TOOL_NAME);
+  const readExec = executeReadAttachedChunkTool(readStep1.toolCalls![0].function.arguments, [
+    largeAttachment,
+  ]);
+  assert.equal(readExec.ok, true);
+  if (readExec.ok) {
+    assert.equal(readExec.startLine, 10);
+    assert.equal(readExec.endLine, 25);
+    assert.ok(readExec.content.includes('10: export const item10 = 10;'));
+  }
+
+  // 4. search_memory
+  const notes: MemoryNote[] = createDefaultMemoryNotes('t4');
+  const searchStep1 = await runMockStep(controller, 't4', [
+    { role: 'user', content: 'Search memory for deterministic prompt packing' },
+  ]);
+  assert.equal(searchStep1.stopReason, 'tool_calls');
+  assert.equal(searchStep1.toolCalls?.[0]?.function.name, SEARCH_MEMORY_TOOL_NAME);
+  const searchExec = executeSearchMemoryTool(
+    searchStep1.toolCalls![0].function.arguments,
+    notes,
+    't4',
+  );
+  assert.equal(searchExec.ok, true);
+  if (searchExec.ok) {
+    assert.ok(searchExec.count >= 1);
+  }
+
+  // 5. save_memory_note
+  const saveStep1 = await runMockStep(controller, 't5', [
+    { role: 'user', content: 'Remember that we always run tsx tests before committing' },
+  ]);
+  assert.equal(saveStep1.stopReason, 'tool_calls');
+  assert.equal(saveStep1.toolCalls?.[0]?.function.name, SAVE_MEMORY_TOOL_NAME);
+  const saveExec = executeSaveMemoryNoteTool(
+    saveStep1.toolCalls![0].function.arguments,
+    () => 'tier1test1',
+    'Integration Test Session',
+    't5',
+  );
+  assert.equal(saveExec.ok, true);
+  if (saveExec.ok) {
+    assert.ok(saveExec.note.content.includes('tsx tests'));
+  }
+});
+
+test('assembleContext packs ALL_FILE_AND_TIER1_TOOLS and indexed large attachment within 4K budget invariants', () => {
+  const smallAttachment = { name: 'tiny.txt', content: 'short line 1\nshort line 2' };
+  assert.equal(shouldIndexAttachedFile(smallAttachment.content), false);
+  const smallPrompt = formatAttachedFileForPrompt(smallAttachment);
+  assert.equal(smallPrompt.isIndexed, false);
+  assert.ok(smallPrompt.promptBlock.includes('short line 1'));
+
+  const hugeContent = Array.from({ length: 240 }, (_, i) => `const row_${i} = "payload_${i}";`).join(
+    '\n',
+  );
+  const indexed = formatAttachedFileForPrompt({ name: 'huge.ts', content: hugeContent });
+  assert.equal(indexed.isIndexed, true);
+
+  const res = assembleContext(
+    {
+      coreInstruction: `You are LowCon.\n\n${FULL_TOOL_CALL_POLICY_INSTRUCTION}`,
+      currentUserMessage: `Summarize huge.ts\n\n${indexed.promptBlock}`,
+      pinnedFacts: [],
+      retrievedMemories: [],
+      conversationTurns: [],
+      summaries: [],
+      tools: ALL_FILE_AND_TIER1_TOOLS,
+    },
+    {
+      modelContextLimit: 4096,
+      outputReservePct: 20,
+      safetyMarginPct: 5,
+      templateType: 'ChatML',
+    },
+  );
+
+  assert.equal(res.ok, true);
+  if (res.ok) {
+    assert.equal(res.inspection.tools?.length, 6);
+    const budget = buildTurnContextBudget(res.inspection);
+    const packed = getPackedTokens(budget);
+    const free = getFreeTokens(budget);
+    const held = budget.segments.filter((s) => s.isHeld).reduce((sum, s) => sum + s.tokens, 0);
+    assert.equal(packed, res.inspection.totalTokens);
+    assert.equal(packed + free + held, 4096);
+  }
+
+  // Verify EDIT_FILE_TOOL_DEFINITION declares top-level edit fields matching executeEditFileTool
+  const editProps = (
+    EDIT_FILE_TOOL_DEFINITION.function.parameters as { properties?: Record<string, unknown> }
+  ).properties;
+  for (const key of ['filename', 'edits', 'start_line', 'end_line', 'replacement', 'old_text', 'new_text', 'replace_all']) {
+    assert.ok(editProps && key in editProps, `Expected '${key}' in edit_file schema properties`);
+  }
+
+  // Verify 2K (2048) budget fits default pinned rule + indexed 120-line attachment + scoped Tier 1 tools
+  const indexed120 = formatAttachedFileForPrompt({
+    name: 'module_120.ts',
+    content: Array.from({ length: 120 }, (_, i) => `export function fn${i}() { return ${i}; }`).join('\n'),
+  });
+  const defaultPinned = createDefaultMemoryNotes('s_2k').filter((n) => n.isPinned);
+  for (const scenario of [
+    { hasAttachments: true, hasGeneratedFiles: false },
+    { hasAttachments: true, hasGeneratedFiles: true },
+    { hasAttachments: false, hasGeneratedFiles: true },
+    { hasAttachments: false, hasGeneratedFiles: false },
+  ]) {
+    const tools2k = selectToolsForPromptBudget(2048, scenario);
+    const policy2k = buildToolPolicyForTools(tools2k);
+    const res2k = assembleContext(
+      {
+        coreInstruction: `You are LowCon.\n\n${policy2k}`,
+        currentUserMessage: scenario.hasAttachments
+          ? `Inspect lines 1-20\n\n${indexed120.promptBlock}`
+          : 'Hello',
+        pinnedFacts: defaultPinned.map((n) => ({
+          id: n.id,
+          title: n.title,
+          content: n.content,
+          sourceReference: n.sourceReference,
+        })),
+        retrievedMemories: [],
+        conversationTurns: [],
+        summaries: [],
+        tools: tools2k,
+      },
+      {
+        modelContextLimit: 2048,
+        outputReservePct: 20,
+        safetyMarginPct: 5,
+        templateType: 'ChatML',
+      },
+    );
+    assert.equal(
+      res2k.ok,
+      true,
+      `Expected 2K budget to fit for scenario ${JSON.stringify(scenario)}: ${res2k.ok ? '' : res2k.message}`,
+    );
+  }
 });
 

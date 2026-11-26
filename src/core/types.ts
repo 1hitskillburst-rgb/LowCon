@@ -107,6 +107,13 @@ export interface GeneratedFileArtifact {
   language: string;
   content: string;
   createdAt: number;
+  updatedAt?: number;
+  isEdited?: boolean;
+}
+
+export interface AttachedFileAttachment {
+  name: string;
+  content: string;
 }
 
 export interface StructuredChatMessage {
@@ -148,6 +155,7 @@ export interface ChatMessage {
   sources: string[];
   turnBudget?: TurnContextBudget;
   generatedFiles?: GeneratedFileArtifact[];
+  attachedFiles?: AttachedFileAttachment[];
   toolActivity?: string[];
   isError?: boolean;
   tokenCount?: number;
