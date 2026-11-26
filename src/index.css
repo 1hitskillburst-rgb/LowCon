@@ -41,3 +41,72 @@
   color: transparent;
   animation: lowcon-shimmer-sweep 2s linear infinite;
 }
+
+.katex-display {
+  margin: 0.25rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.15rem 0;
+}
+
+.hljs {
+  color: #e6edf3;
+  background: transparent;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: #8b949e;
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-subst,
+.hljs-type {
+  color: #ff7b72;
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag .hljs-attr {
+  color: #79c0ff;
+}
+
+.hljs-string,
+.hljs-doctag,
+.hljs-regexp {
+  color: #a5d6ff;
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-selector-id,
+.hljs-title.function_ {
+  color: #d2a8ff;
+}
+
+.hljs-built_in,
+.hljs-title.class_,
+.hljs-class .hljs-title {
+  color: #ffa657;
+}
+
+.hljs-attribute,
+.hljs-name,
+.hljs-tag,
+.hljs-property {
+  color: #7ee787;
+}
+
+.hljs-addition {
+  color: #aff5b4;
+  background-color: rgba(46, 160, 67, 0.18);
+}
+
+.hljs-deletion {
+  color: #ffdcd7;
+  background-color: rgba(248, 81, 73, 0.18);
+}

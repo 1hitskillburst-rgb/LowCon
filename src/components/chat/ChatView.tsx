@@ -19,6 +19,7 @@ import type {
   WorkerStatus,
 } from '../../core/types';
 import { ContextStrip } from './ContextBudgetViz';
+import { MarkdownMessage } from './MarkdownMessage';
 
 interface ChatViewProps {
   session: Session;
@@ -345,26 +346,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
                             {isThinkingExpanded && (
                               <div
                                 data-testid={`thinking-content-${msg.id}`}
-                                className="max-h-72 overflow-y-auto border-t border-[#D3D8DF] px-3 py-2.5 text-[12.5px] leading-relaxed whitespace-pre-wrap text-[#444D5C]"
+                                className="max-h-72 overflow-y-auto border-t border-[#D3D8DF] px-3 py-2.5"
                               >
-                                {msg.thinkingContent}
+                                <MarkdownMessage content={msg.thinkingContent ?? ''} compact />
                               </div>
                             )}
                           </div>
                         )}
 
                         {hasVisibleContent ? (
-                          <div
-                            className={`space-y-2.5 text-[15.5px] leading-relaxed whitespace-pre-wrap ${
-                              msg.isError
-                                ? 'rounded-[6px] border border-[#D9383A]/30 bg-[#D9383A]/5 px-3.5 py-2.5 text-[13.5px] text-[#D9383A]'
-                                : 'text-[#1D2330]'
-                            }`}
-                          >
-                            {msg.content.split('\n\n').map((para, idx) => (
-                              <p key={idx}>{para}</p>
-                            ))}
-                          </div>
+                          msg.isError ? (
+                            <div className="rounded-[6px] border border-[#D9383A]/30 bg-[#D9383A]/5 px-3.5 py-2.5 text-[13.5px] leading-relaxed whitespace-pre-wrap text-[#D9383A]">
+                              {msg.content}
+                            </div>
+                          ) : (
+                            <MarkdownMessage content={msg.content} />
+                          )
                         ) : isMsgStreaming ? (
                           <p
                             data-testid="streaming-placeholder"
