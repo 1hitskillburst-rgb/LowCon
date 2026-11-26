@@ -6,7 +6,7 @@ import { SidebarNav } from './components/layout/SidebarNav';
 import { PromptInspectorModal } from './components/modals/PromptInspectorModal';
 import { SourcesModal } from './components/modals/SourcesModal';
 import { VaultLockOverlay } from './components/modals/VaultLockOverlay';
-import { MemoryView } from './components/views/MemoryView';
+import { MemoryView, type MemoryFilter } from './components/views/MemoryView';
 import { ModelsView } from './components/views/ModelsView';
 import { SettingsView } from './components/views/SettingsView';
 import {
@@ -16,7 +16,12 @@ import {
   type AssemblyCandidates,
 } from './core/context';
 import { fetchLocalLmStudioModels, InferenceController } from './core/inference';
-import { getPinnedNotesForPrompt, retrieveMemoryNotes } from './core/memory';
+import {
+  buildDraftSessionSummary,
+  buildSummaryCandidates,
+  getPinnedNotesForPrompt,
+  retrieveMemoryNotes,
+} from './core/memory';
 import { DiagnosticLogger, safeTruncateChars } from './core/privacy';
 import {
   createDefaultWorkspace,
@@ -46,6 +51,35 @@ import {
 const CORE_SYSTEM_INSTRUCTION =
   'You are LowCon, a private, deterministic assistant running on this device. Respect all pinned project rules, cite local memory when relevant, and keep responses accurate and concise.';
 
+function takeNextWordChunk(
+  queue: string,
+  maxWords: number,
+  flushPartial: boolean,
+): { chunk: string; rest: string } {
+  if (!queue) return { chunk: '', rest: '' };
+  let cursor = 0;
+  let wordsTaken = 0;
+
+  while (cursor < queue.length && wordsTaken < maxWords) {
+    const remaining = queue.slice(cursor);
+    const match = /^(\s*\S+\s+|\s+)/.exec(remaining);
+    if (match) {
+      cursor += match[0].length;
+      wordsTaken += 1;
+    } else {
+      if (flushPartial || remaining.length >= 24) {
+        cursor = queue.length;
+      }
+      break;
+    }
+  }
+
+  return {
+    chunk: queue.slice(0, cursor),
+    rest: queue.slice(cursor),
+  };
+}
+
 function buildLivePreviewInspection(
   session: Session | undefined,
   activeModel: ModelProfile | undefined,
@@ -57,7 +91,8 @@ function buildLivePreviewInspection(
   const templateType = activeModel?.chatTemplate ?? 'ChatML';
   const sessionId = session?.id;
 
-  const pinnedNotes = getPinnedNotesForPrompt(memoryNotes, sessionId);
+  const nonSummaryNotes = memoryNotes.filter((n) => !n.isSummary);
+  const pinnedNotes = getPinnedNotesForPrompt(nonSummaryNotes, sessionId);
   const queryBasis =
     composerText.trim() ||
     [...(session?.messages ?? [])].reverse().find((m) => m.role === 'user')?.content ||
@@ -65,7 +100,7 @@ function buildLivePreviewInspection(
     'context budget';
 
   const retrievedScored = settings.memoryRetrievalEnabled
-    ? retrieveMemoryNotes(memoryNotes, {
+    ? retrieveMemoryNotes(nonSummaryNotes, {
         query: queryBasis,
         sessionId,
         excludePinned: true,
@@ -73,6 +108,8 @@ function buildLivePreviewInspection(
         limit: 6,
       })
     : [];
+
+  const summaries = buildSummaryCandidates(memoryNotes, sessionId);
 
   const historyTurns = (session?.messages ?? [])
     .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.isError && m.content.trim())
@@ -103,7 +140,7 @@ function buildLivePreviewInspection(
       isPinned: false,
     })),
     conversationTurns: historyTurns,
-    summaries: [],
+    summaries,
   };
 
   const result = assembleContext(candidates, {
@@ -170,10 +207,23 @@ export const App: React.FC = () => {
   const [lastTurnInspection, setLastTurnInspection] = useState<PromptInspection | null>(null);
   const [workerStatus, setWorkerStatus] = useState<WorkerStatus>({ state: 'unloaded' });
   const [generatingSessionId, setGeneratingSessionId] = useState<string | null>(null);
+  const [liveTokensPerSecond, setLiveTokensPerSecond] = useState<number | null>(null);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [diagnosticEntries, setDiagnosticEntries] = useState<DiagnosticEntry[]>(() =>
     logger.getEntries(),
   );
+  const [requestedMemoryFilter, setRequestedMemoryFilter] = useState<{
+    filter: MemoryFilter;
+    seq: number;
+  } | null>(null);
+  const manuallyUnloadedRef = useRef(false);
+  const activeDripCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      activeDripCleanupRef.current?.();
+    };
+  }, []);
 
   // Subscribe to diagnostic logger updates
   useEffect(() => {
@@ -208,7 +258,7 @@ export const App: React.FC = () => {
   );
 
   useEffect(() => {
-    if (vaultLocked || !activeModel || !controllerRef.current) return;
+    if (vaultLocked || !activeModel || !controllerRef.current || manuallyUnloadedRef.current) return;
     const loaded = controllerRef.current.getLoadedModel();
     const effectiveCtx = getEffectiveContextLimit(
       activeModel,
@@ -219,9 +269,10 @@ export const App: React.FC = () => {
       loaded.id !== activeModel.id ||
       loaded.backendType !== activeModel.backendType ||
       loaded.filePath !== activeModel.filePath ||
+      loaded.chatTemplate !== activeModel.chatTemplate ||
       (loaded.contextOverride ?? loaded.contextLimit) !== effectiveCtx;
 
-    if (shouldReload && workerStatus.state !== 'generating') {
+    if (shouldReload && controllerRef.current.getStatus().state !== 'generating') {
       const res = controllerRef.current.loadModel({
         ...activeModel,
         contextOverride: effectiveCtx,
@@ -234,7 +285,6 @@ export const App: React.FC = () => {
     vaultLocked,
     activeModel,
     workspace.settings.contextLimitOverride,
-    workerStatus.state,
   ]);
 
   // Persist unsealed workspace reliably on every state change
@@ -279,6 +329,7 @@ export const App: React.FC = () => {
 
   const handleSelectActiveModel = useCallback(
     (modelId: string) => {
+      manuallyUnloadedRef.current = false;
       setBannerError(null);
       setLastTurnInspection(null);
       setWorkspace((prev) => {
@@ -299,6 +350,7 @@ export const App: React.FC = () => {
 
   const handleLoadModel = useCallback(
     (modelId: string) => {
+      manuallyUnloadedRef.current = false;
       setBannerError(null);
       const target = workspace.models.find((m) => m.id === modelId);
       if (!target || !controllerRef.current) return;
@@ -318,11 +370,13 @@ export const App: React.FC = () => {
   );
 
   const handleUnloadModel = useCallback(() => {
+    manuallyUnloadedRef.current = true;
     controllerRef.current?.unloadModel();
     setGeneratingSessionId(null);
   }, []);
 
   const handleSwitchBackend = useCallback((backend: BackendType) => {
+    manuallyUnloadedRef.current = false;
     setBannerError(null);
     setLastTurnInspection(null);
     setWorkspace((prev) => {
@@ -401,6 +455,7 @@ export const App: React.FC = () => {
 
     // 1. Ensure model is loaded into worker before assembling/sending
     if (!controllerRef.current.isLoaded()) {
+      manuallyUnloadedRef.current = false;
       const loadRes = controllerRef.current.loadModel({
         ...activeModel,
         contextOverride: effectiveLimit,
@@ -412,11 +467,12 @@ export const App: React.FC = () => {
     }
 
     // 2. Fetch pinned project rules UNCONDITIONALLY (fixes keyword-gated pin bug)
-    const pinnedNotes = getPinnedNotesForPrompt(workspace.memoryNotes, targetSessionId);
+    const nonSummaryNotes = workspace.memoryNotes.filter((n) => !n.isSummary);
+    const pinnedNotes = getPinnedNotesForPrompt(nonSummaryNotes, targetSessionId);
 
     // 3. Fetch unpinned relevant memories via BM25 FTS across ALL notes
     const retrievedScored = workspace.settings.memoryRetrievalEnabled
-      ? retrieveMemoryNotes(workspace.memoryNotes, {
+      ? retrieveMemoryNotes(nonSummaryNotes, {
           query: userContent,
           sessionId: targetSessionId,
           excludePinned: true,
@@ -424,6 +480,8 @@ export const App: React.FC = () => {
           limit: 8,
         })
       : [];
+
+    const summaryCandidates = buildSummaryCandidates(workspace.memoryNotes, targetSessionId);
 
     const historyTurns = activeSession.messages
       .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.isError && m.content.trim())
@@ -454,7 +512,7 @@ export const App: React.FC = () => {
           isPinned: false,
         })),
         conversationTurns: historyTurns,
-        summaries: [],
+        summaries: summaryCandidates,
       },
       {
         modelContextLimit: effectiveLimit,
@@ -480,6 +538,9 @@ export const App: React.FC = () => {
       ...retrievedScored
         .filter((s) => inspection.includedMemoryIds.includes(s.note.id))
         .map((s) => `Memory note: ${s.note.title} (${s.note.sourceReference})`),
+      ...summaryCandidates
+        .filter((s) => inspection.includedMemoryIds.includes(s.id))
+        .map((s) => `Summary: Turns ${s.sourceTurnRange}`),
     ];
 
     const now = Date.now();
@@ -527,14 +588,146 @@ export const App: React.FC = () => {
       }),
     }));
 
+    // Progressive word-by-word drip queue for visible answer text
+    activeDripCleanupRef.current?.();
+
     setComposerText('');
     setAttachedFile(null);
     setGeneratingSessionId(targetSessionId);
+    setLiveTokensPerSecond(null);
 
     logger.info(
       'chat',
       `Dispatching turn (session=${targetSessionId.slice(0, 8)}, packed=${inspection.totalTokens}/${inspection.budgetPartition.promptBudget}, max_tokens=${inspection.budgetPartition.outputReserve}, pinned=${pinnedNotes.length}, retrieved=${retrievedScored.length})`,
     );
+
+    let pendingWordQueue = '';
+    let thinkingStartedAt: number | null = null;
+    let thinkingFinishedAt: number | null = null;
+    let streamCompletion: {
+      totalTokens: number;
+      stopReason: 'done' | 'max_tokens' | 'stop_sequence';
+      tokensPerSecond: number;
+    } | null = null;
+    let dripStopped = false;
+
+    const finalizeStream = (completion: NonNullable<typeof streamCompletion>) => {
+      const thinkingDurationMs =
+        thinkingStartedAt !== null
+          ? Math.max(100, (thinkingFinishedAt ?? performance.now()) - thinkingStartedAt)
+          : undefined;
+      setWorkspace((prev) => ({
+        ...prev,
+        sessions: prev.sessions.map((s) => {
+          if (s.id !== targetSessionId) return s;
+          return {
+            ...s,
+            updatedAt: Date.now(),
+            messages: s.messages.map((m) =>
+              m.id === assistantMsgId
+                ? {
+                    ...m,
+                    tokenCount: completion.totalTokens,
+                    tokensPerSecond:
+                      completion.tokensPerSecond > 0
+                        ? completion.tokensPerSecond
+                        : m.tokensPerSecond,
+                    stopReason: completion.stopReason,
+                    thinkingDurationMs: thinkingDurationMs ?? m.thinkingDurationMs,
+                  }
+                : m,
+            ),
+          };
+        }),
+      }));
+      setLiveTokensPerSecond(null);
+      setGeneratingSessionId((curr) => (curr === targetSessionId ? null : curr));
+    };
+
+    const dripTimer = setInterval(() => {
+      if (dripStopped) return;
+
+      if (pendingWordQueue.length > 0) {
+        const wordsPerTick =
+          pendingWordQueue.length > 240
+            ? 5
+            : pendingWordQueue.length > 100
+              ? 3
+              : pendingWordQueue.length > 40
+                ? 2
+                : 1;
+        const { chunk, rest } = takeNextWordChunk(
+          pendingWordQueue,
+          wordsPerTick,
+          streamCompletion !== null,
+        );
+        pendingWordQueue = rest;
+
+        if (chunk) {
+          setWorkspace((prev) => ({
+            ...prev,
+            sessions: prev.sessions.map((s) => {
+              if (s.id !== targetSessionId) return s;
+              return {
+                ...s,
+                updatedAt: Date.now(),
+                messages: s.messages.map((m) =>
+                  m.id === assistantMsgId ? { ...m, content: m.content + chunk } : m,
+                ),
+              };
+            }),
+          }));
+        }
+      }
+
+      if (streamCompletion && pendingWordQueue.length === 0) {
+        stopDrip();
+        finalizeStream(streamCompletion);
+      }
+    }, 22);
+
+    const handleCancelDrip = () => {
+      dripStopped = true;
+      clearInterval(dripTimer);
+      pendingWordQueue = '';
+      if (activeDripCleanupRef.current === handleCancelDrip) {
+        activeDripCleanupRef.current = null;
+      }
+      setLiveTokensPerSecond(null);
+      setWorkspace((prev) => ({
+        ...prev,
+        sessions: prev.sessions.map((s) => {
+          if (s.id !== targetSessionId) return s;
+          return {
+            ...s,
+            messages: s.messages.map((m) =>
+              m.id === assistantMsgId
+                ? {
+                    ...m,
+                    content: m.content
+                      ? `${m.content}\n\n[Generation stopped by user]`
+                      : '[Generation stopped by user]',
+                  }
+                : m,
+            ),
+          };
+        }),
+      }));
+      setGeneratingSessionId((curr) => (curr === targetSessionId ? null : curr));
+    };
+
+    const stopDrip = () => {
+      dripStopped = true;
+      clearInterval(dripTimer);
+      pendingWordQueue = '';
+      if (
+        activeDripCleanupRef.current === stopDrip ||
+        activeDripCleanupRef.current === handleCancelDrip
+      ) {
+        activeDripCleanupRef.current = null;
+      }
+    };
+    activeDripCleanupRef.current = stopDrip;
 
     // 6. Stream tokens strictly to targetSessionId (session-isolated even if user switches tabs/sessions)
     await controllerRef.current.startGeneration(
@@ -550,7 +743,11 @@ export const App: React.FC = () => {
         selectedLmModel: workspace.settings.selectedLmModel,
       },
       {
-        onToken: (token) => {
+        onThinkingToken: (token) => {
+          if (dripStopped) return;
+          if (thinkingStartedAt === null) {
+            thinkingStartedAt = performance.now();
+          }
           setWorkspace((prev) => ({
             ...prev,
             sessions: prev.sessions.map((s) => {
@@ -559,33 +756,65 @@ export const App: React.FC = () => {
                 ...s,
                 updatedAt: Date.now(),
                 messages: s.messages.map((m) =>
-                  m.id === assistantMsgId ? { ...m, content: m.content + token } : m,
+                  m.id === assistantMsgId
+                    ? { ...m, thinkingContent: (m.thinkingContent ?? '') + token }
+                    : m,
                 ),
               };
             }),
           }));
         },
-        onComplete: (totalTokens, stopReason) => {
+        onToken: (token) => {
+          if (dripStopped) return;
+          if (thinkingStartedAt !== null && thinkingFinishedAt === null && token.trim()) {
+            thinkingFinishedAt = performance.now();
+          }
+          pendingWordQueue += token;
+        },
+        onProgress: (progress) => {
+          if (dripStopped) return;
+          if (progress.tokensPerSecond > 0) {
+            setLiveTokensPerSecond(progress.tokensPerSecond);
+            setWorkspace((prev) => ({
+              ...prev,
+              sessions: prev.sessions.map((s) => {
+                if (s.id !== targetSessionId) return s;
+                return {
+                  ...s,
+                  messages: s.messages.map((m) =>
+                    m.id === assistantMsgId
+                      ? { ...m, tokensPerSecond: progress.tokensPerSecond }
+                      : m,
+                  ),
+                };
+              }),
+            }));
+          }
+        },
+        onComplete: (totalTokens, stopReason, stats) => {
           logger.info(
             'chat',
-            `Generation complete (session=${targetSessionId.slice(0, 8)}, tokens=${totalTokens}, stop=${stopReason})`,
+            `Generation complete (session=${targetSessionId.slice(0, 8)}, tokens=${totalTokens}, stop=${stopReason}, tps=${stats?.tokensPerSecond ?? 0})`,
           );
-          setWorkspace((prev) => ({
-            ...prev,
-            sessions: prev.sessions.map((s) => {
-              if (s.id !== targetSessionId) return s;
-              return {
-                ...s,
-                updatedAt: Date.now(),
-                messages: s.messages.map((m) =>
-                  m.id === assistantMsgId ? { ...m, tokenCount: totalTokens } : m,
-                ),
-              };
-            }),
-          }));
-          setGeneratingSessionId((curr) => (curr === targetSessionId ? null : curr));
+          if (thinkingStartedAt !== null && thinkingFinishedAt === null) {
+            thinkingFinishedAt = performance.now();
+          }
+          const completion = {
+            totalTokens,
+            stopReason,
+            tokensPerSecond: stats?.tokensPerSecond ?? 0,
+          };
+          if (pendingWordQueue.length === 0) {
+            stopDrip();
+            finalizeStream(completion);
+          } else {
+            streamCompletion = completion;
+            activeDripCleanupRef.current = handleCancelDrip;
+          }
         },
         onCancelled: () => {
+          stopDrip();
+          setLiveTokensPerSecond(null);
           logger.info('chat', `Generation cancelled (session=${targetSessionId.slice(0, 8)})`);
           setWorkspace((prev) => ({
             ...prev,
@@ -609,6 +838,8 @@ export const App: React.FC = () => {
           setGeneratingSessionId((curr) => (curr === targetSessionId ? null : curr));
         },
         onError: (message) => {
+          stopDrip();
+          setLiveTokensPerSecond(null);
           setBannerError(message);
           setWorkspace((prev) => ({
             ...prev,
@@ -644,7 +875,11 @@ export const App: React.FC = () => {
   ]);
 
   const handleStopGeneration = useCallback(() => {
-    controllerRef.current?.cancelGeneration();
+    if (controllerRef.current?.getStatus().state === 'generating') {
+      controllerRef.current.cancelGeneration();
+    } else {
+      activeDripCleanupRef.current?.();
+    }
   }, []);
 
   const handleSaveReplyAsNote = useCallback(
@@ -674,20 +909,61 @@ export const App: React.FC = () => {
     [activeSession, logger],
   );
 
+  const handleUpdateTaskGoal = useCallback(
+    (goal: string) => {
+      if (!activeSession) return;
+      const trimmed = goal.trim();
+      setLastTurnInspection(null);
+      setWorkspace((prev) => ({
+        ...prev,
+        sessions: prev.sessions.map((s) =>
+          s.id === activeSession.id
+            ? { ...s, taskGoal: trimmed || undefined, updatedAt: Date.now() }
+            : s,
+        ),
+      }));
+      logger.info(
+        'chat',
+        trimmed ? 'Updated active session task goal' : 'Cleared active session task goal',
+      );
+    },
+    [activeSession, logger],
+  );
+
+  const handleGenerateSessionSummary = useCallback((): boolean => {
+    if (!activeSession) return false;
+    const draft = buildDraftSessionSummary(activeSession, `summary_${createUuid().slice(0, 8)}`);
+    if (!draft) return false;
+    setLastTurnInspection(null);
+    setWorkspace((prev) => ({
+      ...prev,
+      memoryNotes: [draft, ...prev.memoryNotes],
+    }));
+    logger.info('memory', `Generated draft session summary '${draft.title}' (awaiting approval)`);
+    return true;
+  }, [activeSession, logger]);
+
   const handleCreateNote = useCallback(
-    (input: { title: string; content: string; sourceReference: string; isPinned: boolean }) => {
+    (input: {
+      title: string;
+      content: string;
+      sourceReference: string;
+      isPinned: boolean;
+      isSummary?: boolean;
+    }) => {
       const now = Date.now();
+      const isSummary = Boolean(input.isSummary);
       const note: MemoryNote = {
-        id: `note_${createUuid().slice(0, 8)}`,
-        sessionId: undefined,
+        id: `${isSummary ? 'summary' : 'note'}_${createUuid().slice(0, 8)}`,
+        sessionId: isSummary ? activeSession?.id : undefined,
         title: input.title,
         content: input.content,
         sourceReference: input.sourceReference,
         sourceMessageIds: [],
         isPinned: input.isPinned,
-        isSummary: false,
+        isSummary,
         isDisabled: false,
-        userApproved: true,
+        userApproved: !isSummary,
         createdAt: now,
         updatedAt: now,
       };
@@ -696,9 +972,12 @@ export const App: React.FC = () => {
         ...prev,
         memoryNotes: [note, ...prev.memoryNotes],
       }));
-      logger.info('memory', `Created memory note '${note.title}' (pinned=${note.isPinned})`);
+      logger.info(
+        'memory',
+        `Created ${isSummary ? 'draft summary' : 'memory note'} '${note.title}' (pinned=${note.isPinned})`,
+      );
     },
-    [logger],
+    [activeSession?.id, logger],
   );
 
   const handleUpdateNote = useCallback(
@@ -753,22 +1032,32 @@ export const App: React.FC = () => {
     }
 
     const firstModel = res.models[0] ?? '';
-    setWorkspace((prev) => ({
-      ...prev,
-      models: prev.models.map((m) =>
-        m.backendType === 'lm_studio' ? { ...m, filePath: res.endpoint } : m,
-      ),
-      settings: {
-        ...prev.settings,
-        lmStudioEndpoint: res.endpoint,
-        connectedLmModels: res.models,
-        selectedLmModel: prev.settings.selectedLmModel || firstModel,
-        connectionStatus:
-          res.models.length > 0
-            ? `Connected (${res.models.length} model${res.models.length === 1 ? '' : 's'} available)`
-            : 'Connected, but no models are currently loaded in LM Studio.',
-      },
-    }));
+    setWorkspace((prev) => {
+      const currentSelected = prev.settings.selectedLmModel;
+      const nextSelectedModel =
+        res.models.length > 0
+          ? res.models.includes(currentSelected)
+            ? currentSelected
+            : firstModel
+          : '';
+
+      return {
+        ...prev,
+        models: prev.models.map((m) =>
+          m.backendType === 'lm_studio' ? { ...m, filePath: res.endpoint } : m,
+        ),
+        settings: {
+          ...prev.settings,
+          lmStudioEndpoint: res.endpoint,
+          connectedLmModels: res.models,
+          selectedLmModel: nextSelectedModel,
+          connectionStatus:
+            res.models.length > 0
+              ? `Connected (${res.models.length} model${res.models.length === 1 ? '' : 's'} available)`
+              : 'Connected, but no models are currently loaded in LM Studio.',
+        },
+      };
+    });
   }, [workspace.settings.lmStudioEndpoint, logger]);
 
   const handleSelectLmModel = useCallback(
@@ -878,17 +1167,30 @@ export const App: React.FC = () => {
                   }));
                 }}
                 isGenerating={generatingSessionId === activeSession.id}
+                liveTokensPerSecond={
+                  generatingSessionId === activeSession.id ? liveTokensPerSecond : null
+                }
                 hoveredSegment={hoveredSegment}
                 onHoverSegment={setHoveredSegment}
                 onSendMessage={() => void handleSendMessage()}
                 onStopGeneration={handleStopGeneration}
                 onNewSession={handleNewSession}
+                onSummarizeSession={handleGenerateSessionSummary}
+                onReviewSummaries={() => {
+                  setRequestedMemoryFilter((prev) => ({
+                    filter: 'summaries',
+                    seq: (prev?.seq ?? 0) + 1,
+                  }));
+                  setCurrentTab('memory');
+                }}
                 onOpenSources={setActiveSources}
                 onSaveAsNote={handleSaveReplyAsNote}
               />
 
               <ContextPanel
                 budget={activeTurnBudget}
+                taskGoal={activeSession.taskGoal}
+                onUpdateTaskGoal={handleUpdateTaskGoal}
                 memoryNotes={workspace.memoryNotes}
                 includedMemoryIds={activeInspection.includedMemoryIds}
                 memoryRetrievalEnabled={workspace.settings.memoryRetrievalEnabled}
@@ -912,6 +1214,7 @@ export const App: React.FC = () => {
               activeModelId={workspace.activeModelId}
               workerStatus={workerStatus}
               globalContextOverride={workspace.settings.contextLimitOverride}
+              lmStudioEndpoint={workspace.settings.lmStudioEndpoint}
               onSelectActiveModel={handleSelectActiveModel}
               onLoadModel={handleLoadModel}
               onUnloadModel={handleUnloadModel}
@@ -947,6 +1250,18 @@ export const App: React.FC = () => {
               notes={workspace.memoryNotes}
               includedMemoryIds={activeInspection.includedMemoryIds}
               activeSessionId={workspace.activeSessionId}
+              canSummarizeActiveSession={Boolean(
+                activeSession?.messages.some(
+                  (m) =>
+                    (m.role === 'user' || m.role === 'assistant') &&
+                    !m.isError &&
+                    m.content.trim().length > 0,
+                ),
+              )}
+              requestedFilter={requestedMemoryFilter}
+              onGenerateSessionSummary={() => {
+                handleGenerateSessionSummary();
+              }}
               onCreateNote={handleCreateNote}
               onUpdateNote={handleUpdateNote}
               onDeleteNote={handleDeleteNote}

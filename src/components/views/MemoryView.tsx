@@ -1,20 +1,24 @@
-import React, { useMemo, useState } from 'react';
-import { CheckCircle2, Edit3, Eye, EyeOff, Pin, Plus, Search, Trash2, X } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { CheckCircle2, Edit3, Eye, EyeOff, FileText, Pin, Plus, Search, Trash2, X } from 'lucide-react';
 import { retrieveMemoryNotes } from '../../core/memory';
 import { formatRelativeTime } from '../../core/privacy';
 import type { MemoryNote } from '../../core/types';
 
-type MemoryFilter = 'all' | 'pinned' | 'in_prompt' | 'summaries';
+export type MemoryFilter = 'all' | 'pinned' | 'in_prompt' | 'summaries';
 
 interface MemoryViewProps {
   notes: MemoryNote[];
   includedMemoryIds: string[];
   activeSessionId: string;
+  canSummarizeActiveSession: boolean;
+  requestedFilter?: { filter: MemoryFilter; seq: number } | null;
+  onGenerateSessionSummary: () => void;
   onCreateNote: (input: {
     title: string;
     content: string;
     sourceReference: string;
     isPinned: boolean;
+    isSummary: boolean;
   }) => void;
   onUpdateNote: (
     noteId: string,
@@ -27,6 +31,9 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
   notes,
   includedMemoryIds,
   activeSessionId,
+  canSummarizeActiveSession,
+  requestedFilter,
+  onGenerateSessionSummary,
   onCreateNote,
   onUpdateNote,
   onDeleteNote,
@@ -34,12 +41,19 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [filter, setFilter] = useState<MemoryFilter>('all');
 
+  useEffect(() => {
+    if (requestedFilter) {
+      setFilter(requestedFilter.filter);
+    }
+  }, [requestedFilter]);
+
   // Create Note Modal State
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newContent, setNewContent] = useState('');
   const [newSource, setNewSource] = useState('Manual local note');
   const [newPinned, setNewPinned] = useState(false);
+  const [newIsSummary, setNewIsSummary] = useState(false);
 
   // Edit Note Modal State (controlled directly so edits persist cleanly — fixes discarded clone bug)
   const [editingNote, setEditingNote] = useState<{
@@ -65,7 +79,9 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
       .map((s) => ({ note: s.note, score: s.finalScore }))
       .filter(({ note }) => {
         if (filter === 'pinned') return note.isPinned;
-        if (filter === 'in_prompt') return !note.isDisabled && (includedSet.has(note.id) || note.isPinned);
+        if (filter === 'in_prompt') {
+          return !note.isDisabled && (includedSet.has(note.id) || (note.isPinned && !note.isSummary));
+        }
         if (filter === 'summaries') return note.isSummary;
         return true;
       });
@@ -77,14 +93,19 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
     onCreateNote({
       title: newTitle.trim(),
       content: newContent.trim(),
-      sourceReference: newSource.trim() || 'Manual local note',
+      sourceReference: newSource.trim() || (newIsSummary ? '1-4' : 'Manual local note'),
       isPinned: newPinned,
+      isSummary: newIsSummary,
     });
     setNewTitle('');
     setNewContent('');
     setNewSource('Manual local note');
     setNewPinned(false);
+    setNewIsSummary(false);
     setShowCreateModal(false);
+    if (newIsSummary) {
+      setFilter('summaries');
+    }
   };
 
   const handleEditSubmit = (e: React.FormEvent) => {
@@ -104,7 +125,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
     { id: 'pinned', label: `Pinned (${notes.filter((n) => n.isPinned).length})` },
     {
       id: 'in_prompt',
-      label: `In Active Prompt (${notes.filter((n) => !n.isDisabled && (includedSet.has(n.id) || n.isPinned)).length})`,
+      label: `In Active Prompt (${notes.filter((n) => !n.isDisabled && (includedSet.has(n.id) || (n.isPinned && !n.isSummary))).length})`,
     },
     { id: 'summaries', label: `Summaries (${notes.filter((n) => n.isSummary).length})` },
   ];
@@ -118,14 +139,29 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
           <span className="ml-1 font-semibold text-[#161B26]">Memory</span>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setShowCreateModal(true)}
-          className="inline-flex items-center gap-1.5 rounded-[6px] bg-[#2A3FE0] px-3.5 py-1.5 text-[12.5px] font-semibold text-white hover:bg-[#2234be]"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          <span>New Note</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {canSummarizeActiveSession && (
+            <button
+              type="button"
+              onClick={() => {
+                onGenerateSessionSummary();
+                setFilter('summaries');
+              }}
+              className="inline-flex items-center gap-1.5 rounded-[6px] border border-[#D3D8DF] bg-white px-3 py-1.5 text-[12.5px] font-medium text-[#161B26] hover:bg-[#DDE1E7]"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              <span>Summarize Active Chat</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowCreateModal(true)}
+            className="inline-flex items-center gap-1.5 rounded-[6px] bg-[#2A3FE0] px-3.5 py-1.5 text-[12.5px] font-semibold text-white hover:bg-[#2234be]"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            <span>New Note</span>
+          </button>
+        </div>
       </header>
 
       {/* Body */}
@@ -187,7 +223,8 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
               </div>
             ) : (
               filteredNotes.map(({ note }) => {
-                const isInPrompt = !note.isDisabled && (includedSet.has(note.id) || note.isPinned);
+                const isInPrompt =
+                  !note.isDisabled && (includedSet.has(note.id) || (note.isPinned && !note.isSummary));
                 return (
                   <article
                     key={note.id}
@@ -386,6 +423,15 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                   className="h-4 w-4 accent-[#2A3FE0]"
                 />
                 <span>Pin as project rule (always included in every prompt)</span>
+              </label>
+              <label className="flex items-center gap-2 text-[13px] text-[#161B26]">
+                <input
+                  type="checkbox"
+                  checked={newIsSummary}
+                  onChange={(e) => setNewIsSummary(e.target.checked)}
+                  className="h-4 w-4 accent-[#2A3FE0]"
+                />
+                <span>Create as conversation summary (requires approval before prompt injection)</span>
               </label>
             </div>
             <div className="flex justify-end gap-2 border-t border-[#D3D8DF] px-5 py-3">

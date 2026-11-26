@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ALLOWED_LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+const DEFAULT_DESKTOP_PORTS = [41735, 41736, 41737, 41738, 41739, 0];
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -11,10 +12,27 @@ const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
   '.ico': 'image/x-icon',
   '.json': 'application/json; charset=utf-8',
+  '.wasm': 'application/wasm',
+  '.woff': 'font/woff',
   '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.map': 'application/json; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
 };
+
+class HttpError extends Error {
+  constructor(statusCode, message) {
+    super(message);
+    this.name = 'HttpError';
+    this.statusCode = statusCode;
+  }
+}
 
 function isLocalLoopbackEndpoint(rawEndpoint) {
   try {
@@ -37,7 +55,11 @@ function normalizeLocalEndpoint(rawEndpoint) {
 }
 
 function sendJson(res, status, payload) {
+  if (res.headersSent || res.destroyed) return;
   res.statusCode = status;
+  if (status === 413) {
+    res.setHeader('Connection', 'close');
+  }
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.end(JSON.stringify(payload));
 }
@@ -46,24 +68,47 @@ function readJsonBody(req, maxBytes = 2 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
+    let settled = false;
+
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    };
+
     req.on('data', (chunk) => {
+      if (settled) return;
       total += chunk.length;
       if (total > maxBytes) {
-        reject(new Error('Request payload exceeds 2MB limit.'));
-        req.destroy();
+        req.resume();
+        fail(new HttpError(413, 'Request body exceeds the 2MB limit.'));
         return;
       }
       chunks.push(chunk);
     });
+
     req.on('end', () => {
+      if (settled) return;
       try {
-        const raw = Buffer.concat(chunks).toString('utf8');
-        resolve(raw ? JSON.parse(raw) : {});
-      } catch (err) {
-        reject(err);
+        const raw = Buffer.concat(chunks).toString('utf8').trim();
+        if (!raw) {
+          settled = true;
+          resolve({});
+          return;
+        }
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          fail(new HttpError(400, 'Invalid request body: expected a JSON object.'));
+          return;
+        }
+        settled = true;
+        resolve(parsed);
+      } catch {
+        fail(new HttpError(400, 'Malformed JSON request body.'));
       }
     });
-    req.on('error', reject);
+
+    req.on('error', (err) => fail(err));
   });
 }
 
@@ -90,7 +135,13 @@ function extractModels(payload) {
     }
   } else if (Array.isArray(payload.models)) {
     for (const item of payload.models) {
-      if (item && typeof item.name === 'string') models.push(item.name);
+      if (typeof item === 'string') models.push(item);
+      else if (item && typeof item.name === 'string') models.push(item.name);
+      else if (item && typeof item.id === 'string') models.push(item.id);
+    }
+  } else if (Array.isArray(payload)) {
+    for (const item of payload) {
+      if (typeof item === 'string') models.push(item);
       else if (item && typeof item.id === 'string') models.push(item.id);
     }
   }
@@ -98,6 +149,14 @@ function extractModels(payload) {
 }
 
 async function handleModelsProxy(req, res) {
+  const controller = new AbortController();
+  const onClose = () => {
+    if (!res.writableEnded) {
+      controller.abort();
+    }
+  };
+  res.on('close', onClose);
+
   try {
     const body = await readJsonBody(req);
     const endpoint = typeof body.endpoint === 'string' ? body.endpoint : '';
@@ -116,18 +175,24 @@ async function handleModelsProxy(req, res) {
     let upstream = null;
     let lastErr = '';
     for (const url of urls) {
+      if (controller.signal.aborted) break;
+      const attemptController = new AbortController();
+      const onParentAbort = () => attemptController.abort();
+      controller.signal.addEventListener('abort', onParentAbort, { once: true });
+      const timer = setTimeout(() => attemptController.abort(), 5000);
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 5000);
-        const r = await fetch(url, { signal: controller.signal });
-        clearTimeout(timer);
+        const r = await fetch(url, { signal: attemptController.signal });
         if (r.ok) {
           upstream = r;
           break;
         }
+        await r.body?.cancel().catch(() => {});
         lastErr = `HTTP ${r.status} from ${url}`;
       } catch (err) {
         lastErr = err instanceof Error ? err.message : String(err);
+      } finally {
+        clearTimeout(timer);
+        controller.signal.removeEventListener('abort', onParentAbort);
       }
     }
 
@@ -138,14 +203,35 @@ async function handleModelsProxy(req, res) {
       return;
     }
 
-    const payload = await upstream.json();
+    let payload;
+    try {
+      payload = await upstream.json();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      sendJson(res, 502, {
+        error: `Invalid JSON response from local server at ${primaryUrl}: ${msg}`,
+      });
+      return;
+    }
+
     sendJson(res, 200, { endpoint: base, models: extractModels(payload) });
   } catch (err) {
-    sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    const status = err instanceof HttpError ? err.statusCode : 500;
+    sendJson(res, status, { error: err instanceof Error ? err.message : String(err) });
+  } finally {
+    res.off('close', onClose);
   }
 }
 
 async function handleChatProxy(req, res) {
+  const controller = new AbortController();
+  const onResponseClose = () => {
+    if (!res.writableEnded) {
+      controller.abort();
+    }
+  };
+  res.on('close', onResponseClose);
+
   try {
     const body = await readJsonBody(req);
     const endpoint = typeof body.endpoint === 'string' ? body.endpoint : '';
@@ -162,10 +248,14 @@ async function handleChatProxy(req, res) {
       return;
     }
 
+    if (body.stream !== undefined && typeof body.stream !== 'boolean') {
+      sendJson(res, 400, { error: 'Invalid chat payload: stream must be a boolean.' });
+      return;
+    }
+
+    const stream = body.stream !== false;
     const base = normalizeLocalEndpoint(endpoint);
     const url = `${base}/chat/completions`;
-    const controller = new AbortController();
-    req.on('close', () => controller.abort());
 
     const upstream = await fetch(url, {
       method: 'POST',
@@ -185,7 +275,7 @@ async function handleChatProxy(req, res) {
           typeof body.max_tokens === 'number' && Number.isFinite(body.max_tokens)
             ? Math.min(32768, Math.max(16, Math.floor(body.max_tokens)))
             : 512,
-        stream: true,
+        stream,
         stop: Array.isArray(body.stop)
           ? body.stop.filter((s) => typeof s === 'string' && s.length > 0).slice(0, 8)
           : undefined,
@@ -201,87 +291,199 @@ async function handleChatProxy(req, res) {
       return;
     }
 
+    const upstreamContentType = (upstream.headers.get('content-type') || '').toLowerCase();
+    if (!stream || upstreamContentType.includes('application/json')) {
+      const text = await upstream.text();
+      let jsonPayload;
+      try {
+        jsonPayload = JSON.parse(text);
+      } catch {
+        sendJson(res, 502, { error: `Local server ${url} returned invalid JSON.` });
+        return;
+      }
+      sendJson(res, 200, jsonPayload);
+      return;
+    }
+
     res.statusCode = 200;
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
 
     const reader = upstream.body.getReader();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      res.write(Buffer.from(value));
+    try {
+      while (true) {
+        if (res.writableEnded || res.destroyed) {
+          await reader.cancel().catch(() => {});
+          break;
+        }
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && value.byteLength > 0) {
+          res.write(Buffer.from(value));
+        }
+      }
+    } finally {
+      reader.releaseLock();
     }
-    res.end();
-  } catch (err) {
-    if (!res.headersSent) {
-      sendJson(res, 502, { error: err instanceof Error ? err.message : String(err) });
-    } else {
+    if (!res.writableEnded) {
       res.end();
     }
+  } catch (err) {
+    if (!res.headersSent) {
+      const status = err instanceof HttpError ? err.statusCode : 502;
+      sendJson(res, status, { error: err instanceof Error ? err.message : String(err) });
+    } else if (!res.writableEnded) {
+      res.end();
+    }
+  } finally {
+    res.off('close', onResponseClose);
   }
 }
 
-function startDesktopServer(distDir) {
-  const resolvedDist = path.resolve(distDir);
-  const indexHtml = path.join(resolvedDist, 'index.html');
+function getPreferredPorts(options = {}) {
+  if (typeof options.port === 'number' && Number.isInteger(options.port) && options.port >= 0) {
+    return [options.port];
+  }
+  const envPortRaw = process.env.LOWCON_DESKTOP_PORT;
+  if (envPortRaw) {
+    const envPort = Number(envPortRaw);
+    if (Number.isInteger(envPort) && envPort > 0 && envPort <= 65535) {
+      return [envPort, ...DEFAULT_DESKTOP_PORTS.filter((p) => p !== envPort)];
+    }
+  }
+  return DEFAULT_DESKTOP_PORTS;
+}
 
+function listenOnPreferredPorts(server, ports) {
   return new Promise((resolve, reject) => {
-    const server = http.createServer((req, res) => {
-      const urlPath = (req.url || '/').split('?')[0];
+    let idx = 0;
 
-      if (urlPath === '/api/health' && req.method === 'GET') {
-        sendJson(res, 200, { status: 'ok', runtime: 'desktop' });
+    const tryNext = () => {
+      if (idx >= ports.length) {
+        reject(new Error('Failed to bind any local loopback port for LowCon desktop server.'));
         return;
       }
-      if (urlPath === '/api/local-llm/models' && req.method === 'POST') {
-        void handleModelsProxy(req, res);
-        return;
-      }
-      if (urlPath === '/api/local-llm/chat' && req.method === 'POST') {
-        void handleChatProxy(req, res);
-        return;
-      }
-
-      if (req.method !== 'GET' && req.method !== 'HEAD') {
-        sendJson(res, 405, { error: 'Method not allowed' });
-        return;
-      }
-
-      const rel = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
-      const candidate = path.resolve(resolvedDist, rel);
-      const isInsideDist =
-        candidate === resolvedDist || candidate.startsWith(resolvedDist + path.sep);
-
-      const filePath =
-        isInsideDist && fs.existsSync(candidate) && fs.statSync(candidate).isFile()
-          ? candidate
-          : indexHtml;
-
-      fs.readFile(filePath, (err, data) => {
-        if (err) {
-          res.statusCode = 404;
-          res.end('Not found');
+      const port = ports[idx++];
+      const onError = (err) => {
+        server.off('listening', onListening);
+        if ((err.code === 'EADDRINUSE' || err.code === 'EACCES') && idx < ports.length) {
+          tryNext();
           return;
         }
-        const ext = path.extname(filePath).toLowerCase();
-        res.statusCode = 200;
-        res.setHeader('Content-Type', MIME_TYPES[ext] || 'application/octet-stream');
-        res.end(data);
-      });
-    });
+        reject(err);
+      };
+      const onListening = () => {
+        server.off('error', onError);
+        const addr = server.address();
+        resolve({
+          server,
+          port: addr.port,
+          url: `http://127.0.0.1:${addr.port}`,
+        });
+      };
 
-    server.on('error', reject);
-    // Strictly bind 127.0.0.1 on an ephemeral OS port so only this desktop window can reach it
-    server.listen(0, '127.0.0.1', () => {
-      const addr = server.address();
-      resolve({
-        server,
-        port: addr.port,
-        url: `http://127.0.0.1:${addr.port}`,
-      });
-    });
+      server.once('error', onError);
+      server.once('listening', onListening);
+      server.listen(port, '127.0.0.1');
+    };
+
+    tryNext();
   });
 }
 
-module.exports = { startDesktopServer };
+function startDesktopServer(distDir, options = {}) {
+  const resolvedDist = path.resolve(distDir);
+  const indexHtml = path.join(resolvedDist, 'index.html');
+  if (!fs.existsSync(indexHtml)) {
+    return Promise.reject(
+      new Error(`Desktop build not found at ${resolvedDist}. Run "npm run build" first.`),
+    );
+  }
+
+  const server = http.createServer((req, res) => {
+    const urlPath = (req.url || '/').split('?')[0];
+
+    if (urlPath === '/api/health' && req.method === 'GET') {
+      sendJson(res, 200, { status: 'ok', app: 'LowCon', runtime: 'desktop' });
+      return;
+    }
+    if (urlPath === '/api/local-llm/models' && req.method === 'POST') {
+      void handleModelsProxy(req, res);
+      return;
+    }
+    if (urlPath === '/api/local-llm/chat' && req.method === 'POST') {
+      void handleChatProxy(req, res);
+      return;
+    }
+    if (urlPath === '/api' || urlPath.startsWith('/api/')) {
+      sendJson(res, 404, { error: `API route not found: ${req.method} ${urlPath}` });
+      return;
+    }
+
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      sendJson(res, 405, { error: 'Method not allowed' });
+      return;
+    }
+
+    let decodedPath;
+    try {
+      decodedPath = decodeURIComponent(urlPath);
+    } catch {
+      sendJson(res, 400, { error: 'Malformed URL encoding' });
+      return;
+    }
+
+    if (decodedPath.includes('\0')) {
+      sendJson(res, 400, { error: 'Invalid request path' });
+      return;
+    }
+
+    const rel = decodedPath === '/' ? 'index.html' : decodedPath.replace(/^\/+/, '');
+    const candidate = path.resolve(resolvedDist, rel);
+    const isInsideDist =
+      candidate === resolvedDist || candidate.startsWith(resolvedDist + path.sep);
+    if (!isInsideDist) {
+      sendJson(res, 403, { error: 'Forbidden' });
+      return;
+    }
+
+    let filePath = indexHtml;
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        filePath = candidate;
+      }
+    } catch {
+      filePath = indexHtml;
+    }
+
+    fs.readFile(filePath, (err, data) => {
+      if (err) {
+        res.statusCode = 404;
+        res.end('Not found');
+        return;
+      }
+      const ext = path.extname(filePath).toLowerCase();
+      res.statusCode = 200;
+      res.setHeader('Content-Type', MIME_TYPES[ext] || 'application/octet-stream');
+      res.setHeader('Content-Length', data.length);
+      if (req.method === 'HEAD') {
+        res.end();
+        return;
+      }
+      res.end(data);
+    });
+  });
+
+  return listenOnPreferredPorts(server, getPreferredPorts(options));
+}
+
+module.exports = {
+  startDesktopServer,
+  extractModels,
+  isLocalLoopbackEndpoint,
+  normalizeLocalEndpoint,
+  validateMessages,
+};

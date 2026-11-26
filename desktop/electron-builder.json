@@ -2,7 +2,8 @@
   "appId": "com.lowcon.workbench",
   "productName": "LowCon",
   "directories": {
-    "output": "release"
+    "output": "release",
+    "buildResources": "desktop/build"
   },
   "files": [
     "dist/**/*",
@@ -15,18 +16,24 @@
     "main": "desktop/main.cjs"
   },
   "mac": {
+    "icon": "desktop/build/icon.png",
     "category": "public.app-category.developer-tools",
     "target": ["dmg", "zip"]
   },
   "win": {
+    "icon": "desktop/build/icon.ico",
     "target": ["nsis", "portable"]
   },
   "linux": {
+    "icon": "desktop/build/icon.png",
     "category": "Development",
     "target": ["AppImage", "tar.gz"]
   },
   "nsis": {
     "oneClick": false,
-    "allowToChangeInstallationDirectory": true
+    "allowToChangeInstallationDirectory": true,
+    "installerIcon": "desktop/build/icon.ico",
+    "uninstallerIcon": "desktop/build/icon.ico",
+    "installerHeaderIcon": "desktop/build/icon.ico"
   }
 }

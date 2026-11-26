@@ -84,12 +84,32 @@ function extractModelIds(payload: unknown): string[] {
   return models;
 }
 
+function parseJsonObjectBody(body: unknown): Record<string, unknown> | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return null;
+  }
+  return body as Record<string, unknown>;
+}
+
 export function createLocalLlmProxyRouter(): Router {
   const router = Router();
 
   router.post('/models', async (req: Request, res: Response) => {
+    const controller = new AbortController();
+    const onClose = () => {
+      if (!res.writableEnded) {
+        controller.abort();
+      }
+    };
+    res.on('close', onClose);
+
     try {
-      const body = (req.body ?? {}) as Record<string, unknown>;
+      const body = parseJsonObjectBody(req.body);
+      if (!body) {
+        res.status(400).json({ error: 'Invalid request body: expected a JSON object.' });
+        return;
+      }
+
       const endpoint = typeof body.endpoint === 'string' ? body.endpoint : '';
       if (!isLocalLoopbackEndpoint(endpoint)) {
         res.status(403).json({
@@ -107,38 +127,75 @@ export function createLocalLlmProxyRouter(): Router {
       let lastErr = '';
 
       for (const url of urls) {
+        if (controller.signal.aborted) break;
+        const attemptController = new AbortController();
+        const onParentAbort = () => attemptController.abort();
+        controller.signal.addEventListener('abort', onParentAbort, { once: true });
+        const timer = setTimeout(() => attemptController.abort(), 5000);
         try {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 5000);
-          const r = await fetch(url, { signal: controller.signal });
-          clearTimeout(timer);
+          const r = await fetch(url, { signal: attemptController.signal });
           if (r.ok) {
             upstreamResp = r;
             break;
           }
+          await r.body?.cancel().catch(() => {});
           lastErr = `HTTP ${r.status} from ${url}`;
         } catch (err) {
           lastErr = err instanceof Error ? err.message : String(err);
+        } finally {
+          clearTimeout(timer);
+          controller.signal.removeEventListener('abort', onParentAbort);
         }
       }
 
       if (!upstreamResp) {
-        res.status(502).json({
-          error: `Failed to connect to local server at ${primaryUrl}: ${lastErr}. Is LM Studio's Local Server running?`,
-        });
+        if (!res.headersSent && !res.destroyed) {
+          res.status(502).json({
+            error: `Failed to connect to local server at ${primaryUrl}: ${lastErr}. Is LM Studio's Local Server running?`,
+          });
+        }
         return;
       }
 
-      const payload: unknown = await upstreamResp.json();
-      res.status(200).json({ endpoint: base, models: extractModelIds(payload) });
+      let payload: unknown;
+      try {
+        payload = await upstreamResp.json();
+      } catch (err) {
+        if (!res.headersSent && !res.destroyed) {
+          const msg = err instanceof Error ? err.message : String(err);
+          res.status(502).json({ error: `Invalid JSON response from local server at ${primaryUrl}: ${msg}` });
+        }
+        return;
+      }
+
+      if (!res.headersSent && !res.destroyed) {
+        res.status(200).json({ endpoint: base, models: extractModelIds(payload) });
+      }
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      if (!res.headersSent && !res.destroyed) {
+        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    } finally {
+      res.off('close', onClose);
     }
   });
 
   router.post('/chat', async (req: Request, res: Response) => {
+    const controller = new AbortController();
+    const onClose = () => {
+      if (!res.writableEnded) {
+        controller.abort();
+      }
+    };
+    res.on('close', onClose);
+
     try {
-      const body = (req.body ?? {}) as Record<string, unknown>;
+      const body = parseJsonObjectBody(req.body);
+      if (!body) {
+        res.status(400).json({ error: 'Invalid request body: expected a JSON object.' });
+        return;
+      }
+
       const endpoint = typeof body.endpoint === 'string' ? body.endpoint : '';
       if (!isLocalLoopbackEndpoint(endpoint)) {
         res.status(403).json({
@@ -153,6 +210,12 @@ export function createLocalLlmProxyRouter(): Router {
         return;
       }
 
+      if (body.stream !== undefined && typeof body.stream !== 'boolean') {
+        res.status(400).json({ error: 'Invalid chat payload: stream must be a boolean.' });
+        return;
+      }
+
+      const stream = body.stream !== false;
       const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : 'local-model';
       const temperature =
         typeof body.temperature === 'number' && Number.isFinite(body.temperature)
@@ -172,8 +235,6 @@ export function createLocalLlmProxyRouter(): Router {
 
       const base = normalizeLocalEndpoint(endpoint);
       const url = `${base}/chat/completions`;
-      const controller = new AbortController();
-      req.on('close', () => controller.abort());
 
       const upstream = await fetch(url, {
         method: 'POST',
@@ -184,7 +245,7 @@ export function createLocalLlmProxyRouter(): Router {
           temperature,
           top_p: topP,
           max_tokens: maxTokens,
-          stream: true,
+          stream,
           stop,
         }),
         signal: controller.signal,
@@ -192,30 +253,68 @@ export function createLocalLlmProxyRouter(): Router {
 
       if (!upstream.ok || !upstream.body) {
         const text = await upstream.text().catch(() => '');
-        res.status(upstream.status || 502).json({
-          error: `Local server ${url} returned HTTP ${upstream.status}: ${text.slice(0, 200)}`,
-        });
+        if (!res.headersSent && !res.destroyed) {
+          res.status(upstream.status || 502).json({
+            error: `Local server ${url} returned HTTP ${upstream.status}: ${text.slice(0, 200)}`,
+          });
+        }
+        return;
+      }
+
+      const upstreamContentType = (upstream.headers.get('content-type') ?? '').toLowerCase();
+      if (!stream || upstreamContentType.includes('application/json')) {
+        const text = await upstream.text();
+        let jsonPayload: unknown;
+        try {
+          jsonPayload = JSON.parse(text);
+        } catch {
+          if (!res.headersSent && !res.destroyed) {
+            res.status(502).json({ error: `Local server ${url} returned invalid JSON.` });
+          }
+          return;
+        }
+        if (!res.headersSent && !res.destroyed) {
+          res.status(200).json(jsonPayload);
+        }
         return;
       }
 
       res.status(200);
       res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
       res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders();
 
       const reader = upstream.body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        res.write(Buffer.from(value));
+      try {
+        while (true) {
+          if (res.writableEnded || res.destroyed) {
+            await reader.cancel().catch(() => {});
+            break;
+          }
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value && value.byteLength > 0) {
+            res.write(Buffer.from(value));
+          }
+        }
+      } finally {
+        reader.releaseLock();
       }
-      res.end();
-    } catch (err) {
-      if (!res.headersSent) {
-        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
-      } else {
+      if (!res.writableEnded) {
         res.end();
       }
+    } catch (err) {
+      if (!res.headersSent) {
+        if (!res.destroyed) {
+          res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+        }
+      } else if (!res.writableEnded) {
+        res.end();
+      }
+    } finally {
+      res.off('close', onClose);
     }
   });
 

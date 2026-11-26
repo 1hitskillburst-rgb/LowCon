@@ -101,6 +101,10 @@ export interface ChatMessage {
   createdAt: number;
   modelInfo?: string;
   content: string;
+  thinkingContent?: string;
+  thinkingDurationMs?: number;
+  tokensPerSecond?: number;
+  stopReason?: 'done' | 'max_tokens' | 'stop_sequence';
   aside?: string;
   sources: string[];
   turnBudget?: TurnContextBudget;

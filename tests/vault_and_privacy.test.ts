@@ -9,7 +9,11 @@ import {
 } from '../src/core/privacy';
 import { decryptVaultString, encryptVaultString, VaultError } from '../src/core/vault';
 import { createMockGgufBytes, parseGgufHeader } from '../src/core/gguf';
-import { parseSseLine } from '../src/core/inference';
+import {
+  consumeSseStream,
+  parseSseLine,
+  type GenerationProgress,
+} from '../src/core/inference';
 
 test('loopback privacy boundary allows local addresses and blocks remote hosts', () => {
   assert.equal(isLocalEndpoint('http://127.0.0.1:1234/v1'), true);
@@ -90,4 +94,171 @@ test('SSE line parser handles delta chunks, finish reasons, and [DONE]', () => {
     { deltaContent: 'Hello ', stopReason: undefined },
   );
   assert.deepEqual(parseSseLine('data: [DONE]'), { stopReason: 'done' });
+});
+
+test('consumeSseStream flushes trailing buffered SSE line without trailing newline', async () => {
+  const encoder = new TextEncoder();
+  const chunks = [
+    encoder.encode('data: {"choices":[{"delta":{"content":"Hello "},"finish_reason":null}]}\n'),
+    encoder.encode('data: {"choices":[{"delta":{"content":"world"},"finish_reason":"length"}]}'),
+  ];
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(chunk);
+      }
+      controller.close();
+    },
+  });
+
+  const tokens: string[] = [];
+  let completed: { totalTokens: number; stopReason: string } | null = null;
+  let cancelled = false;
+  let errorMsg: string | null = null;
+
+  await consumeSseStream(stream, new AbortController().signal, {
+    onToken: (tok) => tokens.push(tok),
+    onComplete: (totalTokens, stopReason) => {
+      completed = { totalTokens, stopReason };
+    },
+    onCancelled: () => {
+      cancelled = true;
+    },
+    onError: (msg) => {
+      errorMsg = msg;
+    },
+  });
+
+  assert.deepEqual(tokens, ['Hello ', 'world']);
+  assert.deepEqual(completed, { totalTokens: 2, stopReason: 'max_tokens' });
+  assert.equal(cancelled, false);
+  assert.equal(errorMsg, null);
+});
+
+test('consumeSseStream flushes trailing [DONE] marker and split multi-byte UTF-8', async () => {
+  const encoder = new TextEncoder();
+  const fullPayload =
+    'data: {"choices":[{"delta":{"content":"Hi 🚀"},"finish_reason":null}]}\n' +
+    'data: [DONE]';
+  const bytes = encoder.encode(fullPayload);
+  const splitAt = fullPayload.indexOf('🚀') + 2; // split mid-emoji UTF-8 sequence
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes.subarray(0, splitAt));
+      controller.enqueue(bytes.subarray(splitAt));
+      controller.close();
+    },
+  });
+
+  const tokens: string[] = [];
+  let completed: { totalTokens: number; stopReason: string } | null = null;
+
+  await consumeSseStream(stream, new AbortController().signal, {
+    onToken: (tok) => tokens.push(tok),
+    onComplete: (totalTokens, stopReason) => {
+      completed = { totalTokens, stopReason };
+    },
+    onCancelled: () => {},
+    onError: () => {},
+  });
+
+  assert.deepEqual(tokens, ['Hi 🚀']);
+  assert.deepEqual(completed, { totalTokens: 1, stopReason: 'done' });
+});
+
+test('parseSseLine extracts reasoning_content, reasoning, usage tokens, and error payloads', () => {
+  assert.deepEqual(
+    parseSseLine('data: {"choices":[{"delta":{"reasoning_content":"Step 1"},"finish_reason":null}]}'),
+    { deltaContent: undefined, stopReason: undefined, deltaThinking: 'Step 1' },
+  );
+  assert.deepEqual(
+    parseSseLine('data: {"choices":[{"delta":{"reasoning":"Step 2","content":"Ans"},"finish_reason":"stop"}],"usage":{"completion_tokens":42}}'),
+    {
+      deltaContent: 'Ans',
+      stopReason: 'done',
+      deltaThinking: 'Step 2',
+      usageCompletionTokens: 42,
+    },
+  );
+  assert.deepEqual(
+    parseSseLine('data: {"error":{"message":"Model unloaded"}}'),
+    { error: 'Model unloaded' },
+  );
+});
+
+test('consumeSseStream routes reasoning_content and split <think> tags with live tok/s progress', async () => {
+  const encoder = new TextEncoder();
+  const sseLines = [
+    'data: {"choices":[{"delta":{"reasoning_content":"First reason. "},"finish_reason":null}]}\n',
+    'data: {"choices":[{"delta":{"content":"<thi"},"finish_reason":null}]}\n',
+    'data: {"choices":[{"delta":{"content":"nk>Hidden thought</thi"},"finish_reason":null}]}\n',
+    'data: {"choices":[{"delta":{"content":"nk>Visible answer."},"finish_reason":"stop"}],"usage":{"completion_tokens":18}}\n',
+  ];
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const line of sseLines) {
+        controller.enqueue(encoder.encode(line));
+      }
+      controller.close();
+    },
+  });
+
+  const contentTokens: string[] = [];
+  const thinkingTokens: string[] = [];
+  const progressEvents: GenerationProgress[] = [];
+  let completed: {
+    totalTokens: number;
+    stopReason: string;
+    tps?: number;
+  } | null = null;
+
+  await consumeSseStream(stream, new AbortController().signal, {
+    onToken: (tok) => contentTokens.push(tok),
+    onThinkingToken: (tok) => thinkingTokens.push(tok),
+    onProgress: (p) => progressEvents.push(p),
+    onComplete: (totalTokens, stopReason, stats) => {
+      completed = { totalTokens, stopReason, tps: stats?.tokensPerSecond };
+    },
+    onCancelled: () => {},
+    onError: () => {},
+  });
+
+  assert.equal(thinkingTokens.join(''), 'First reason. Hidden thought');
+  assert.equal(contentTokens.join(''), 'Visible answer.');
+  assert.ok(progressEvents.length >= 3);
+  assert.ok(progressEvents.some((p) => p.isThinking));
+  assert.ok(progressEvents.every((p) => p.tokensPerSecond > 0));
+  assert.equal(completed?.totalTokens, 18);
+  assert.equal(completed?.stopReason, 'done');
+  assert.ok((completed?.tps ?? 0) > 0);
+});
+
+test('consumeSseStream invokes onError and suppresses onComplete on SSE error chunk', async () => {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(
+        encoder.encode('data: {"error":{"message":"Context overflow in LM Studio"}}\n'),
+      );
+      controller.close();
+    },
+  });
+
+  let errorMsg: string | null = null;
+  let completedCalled = false;
+
+  await consumeSseStream(stream, new AbortController().signal, {
+    onToken: () => {},
+    onComplete: () => {
+      completedCalled = true;
+    },
+    onCancelled: () => {},
+    onError: (msg) => {
+      errorMsg = msg;
+    },
+  });
+
+  assert.equal(errorMsg, 'Context overflow in LM Studio');
+  assert.equal(completedCalled, false);
 });

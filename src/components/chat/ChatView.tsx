@@ -1,5 +1,15 @@
-import React, { useRef, useState } from 'react';
-import { Brain, Check, Copy, Paperclip, Square, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  Brain,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  FileText,
+  Paperclip,
+  Square,
+  X,
+} from 'lucide-react';
 import { getPackedTokens } from '../../core/context';
 import { formatNumber, formatRelativeTime } from '../../core/privacy';
 import type {
@@ -24,11 +34,14 @@ interface ChatViewProps {
   memoryRetrievalEnabled: boolean;
   onToggleMemoryRetrieval: (enabled: boolean) => void;
   isGenerating: boolean;
+  liveTokensPerSecond?: number | null;
   hoveredSegment: ContextSegmentKey | null;
   onHoverSegment: (key: ContextSegmentKey | null) => void;
   onSendMessage: () => void;
   onStopGeneration: () => void;
   onNewSession: () => void;
+  onSummarizeSession: () => boolean;
+  onReviewSummaries: () => void;
   onOpenSources: (sources: string[]) => void;
   onSaveAsNote: (content: string, messageId: string) => void;
 }
@@ -47,11 +60,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   memoryRetrievalEnabled,
   onToggleMemoryRetrieval,
   isGenerating,
+  liveTokensPerSecond,
   hoveredSegment,
   onHoverSegment,
   onSendMessage,
   onStopGeneration,
   onNewSession,
+  onSummarizeSession,
+  onReviewSummaries,
   onOpenSources,
   onSaveAsNote,
 }) => {
@@ -59,12 +75,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [savedNoteMsgId, setSavedNoteMsgId] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [summaryCreatedNotice, setSummaryCreatedNotice] = useState(false);
+  const [expandedThinkingIds, setExpandedThinkingIds] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setSummaryCreatedNotice(false);
+  }, [session.id]);
+
+  const hasValidTurns = session.messages.some(
+    (m) => (m.role === 'user' || m.role === 'assistant') && !m.isError && m.content.trim().length > 0,
+  );
+
+  const lastMessageId = session.messages[session.messages.length - 1]?.id;
 
   const workerStatusText =
     workerStatus.state === 'loaded'
       ? 'Worker ready'
       : workerStatus.state === 'generating'
-        ? 'Streaming'
+        ? liveTokensPerSecond && liveTokensPerSecond > 0
+          ? `Streaming · ${liveTokensPerSecond.toFixed(1)} tok/s`
+          : 'Streaming'
         : workerStatus.state === 'loading'
           ? 'Loading model'
           : workerStatus.state === 'error'
@@ -154,20 +184,71 @@ export const ChatView: React.FC<ChatViewProps> = ({
         <div className="mx-auto max-w-[660px]">
           {/* Session Title Header */}
           <div className="flex items-start justify-between gap-4">
-            <div>
+            <div className="min-w-0 flex-1">
               <h1 className="text-[24px] leading-snug font-bold tracking-tight text-[#161B26]">
                 {session.title}
               </h1>
               <p className="mt-0.5 text-[13px] text-[#778091]">{session.subtitle}</p>
+              {session.taskGoal?.trim() && (
+                <div className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-[6px] border border-[#2A3FE0]/25 bg-[#2A3FE0]/8 px-2.5 py-1 text-[12px] text-[#2A3FE0]">
+                  <span className="shrink-0 font-semibold">Task goal:</span>
+                  <span className="truncate">{session.taskGoal}</span>
+                </div>
+              )}
             </div>
-            <button
-              type="button"
-              onClick={onNewSession}
-              className="shrink-0 rounded-[6px] border border-[#D3D8DF] bg-white px-3 py-1.5 text-[13px] text-[#444D5C] transition-colors hover:bg-[#DDE1E7] hover:text-[#161B26]"
-            >
-              New session
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              {hasValidTurns && (
+                <button
+                  type="button"
+                  disabled={isGenerating}
+                  onClick={() => {
+                    if (onSummarizeSession()) {
+                      setSummaryCreatedNotice(true);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-[6px] border border-[#D3D8DF] bg-white px-3 py-1.5 text-[13px] text-[#444D5C] transition-colors hover:bg-[#DDE1E7] hover:text-[#161B26] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  <span>Summarize chat</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onNewSession}
+                className="shrink-0 rounded-[6px] border border-[#D3D8DF] bg-white px-3 py-1.5 text-[13px] text-[#444D5C] transition-colors hover:bg-[#DDE1E7] hover:text-[#161B26]"
+              >
+                New session
+              </button>
+            </div>
           </div>
+
+          {summaryCreatedNotice && (
+            <div
+              role="status"
+              className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[8px] border border-[#1D7A4E]/30 bg-[#1D7A4E]/8 px-3.5 py-2 text-[12.5px] text-[#1D7A4E]"
+            >
+              <span>
+                Draft summary saved (unapproved). Approve it in Memory → Summaries to include it in prompts.
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onReviewSummaries}
+                  className="rounded-[5px] bg-[#1D7A4E] px-2.5 py-1 text-[12px] font-semibold text-white hover:bg-[#16603d]"
+                >
+                  Review &amp; Approve
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSummaryCreatedNotice(false)}
+                  aria-label="Dismiss summary notice"
+                  className="rounded p-0.5 opacity-75 hover:opacity-100"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Conversation Stream */}
           <div className="mt-7 space-y-6">
@@ -198,113 +279,184 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 </div>
               </div>
             ) : (
-              session.messages.map((msg) => (
-                <article key={msg.id} className="space-y-1.5">
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-[13px] font-bold text-[#161B26]">{msg.authorName}</span>
-                    <span className="text-[12px] text-[#778091]">
-                      {formatRelativeTime(msg.createdAt)}
-                      {msg.modelInfo ? ` · ${msg.modelInfo}` : ''}
-                    </span>
-                  </div>
+              session.messages.map((msg) => {
+                const isMsgStreaming =
+                  isGenerating && msg.role === 'assistant' && msg.id === lastMessageId;
+                const hasThinking = Boolean(msg.thinkingContent?.trim());
+                const hasVisibleContent = msg.content.trim().length > 0;
+                const isThinkingExpanded = Boolean(expandedThinkingIds[msg.id]);
+                const isThinkingActive = isMsgStreaming && hasThinking && !hasVisibleContent;
+                const thinkingLabel = isThinkingActive
+                  ? 'Thinking...'
+                  : msg.thinkingDurationMs
+                    ? `Thought for ${(msg.thinkingDurationMs / 1000).toFixed(1)}s`
+                    : 'Thought process';
+                const outputReserveTokens = msg.turnBudget?.segments.find(
+                  (s) => s.key === 'out',
+                )?.tokens;
 
-                  {msg.role === 'user' ? (
-                    <div className="border-l-[3px] border-[#F2D452] py-0.5 pl-4 text-[15px] leading-relaxed whitespace-pre-wrap text-[#161B26]">
-                      {msg.content}
+                return (
+                  <article key={msg.id} className="space-y-1.5">
+                    <div className="flex flex-wrap items-baseline gap-2">
+                      <span className="text-[13px] font-bold text-[#161B26]">{msg.authorName}</span>
+                      <span className="text-[12px] text-[#778091]">
+                        {formatRelativeTime(msg.createdAt)}
+                        {msg.modelInfo ? ` · ${msg.modelInfo}` : ''}
+                        {msg.tokensPerSecond && msg.tokensPerSecond > 0
+                          ? ` · ${msg.tokensPerSecond.toFixed(1)} tok/s`
+                          : ''}
+                      </span>
                     </div>
-                  ) : (
-                    <div className="space-y-3 pt-0.5">
-                      {msg.content.length === 0 ? (
-                        <p className="text-[14px] italic text-[#778091]">
-                          Streaming response within verified context budget...
-                        </p>
-                      ) : (
-                        <div
-                          className={`space-y-2.5 text-[15.5px] leading-relaxed whitespace-pre-wrap ${
-                            msg.isError
-                              ? 'rounded-[6px] border border-[#D9383A]/30 bg-[#D9383A]/5 px-3.5 py-2.5 text-[13.5px] text-[#D9383A]'
-                              : 'text-[#1D2330]'
-                          }`}
-                        >
-                          {msg.content.split('\n\n').map((para, idx) => (
-                            <p key={idx}>{para}</p>
-                          ))}
-                        </div>
-                      )}
 
-                      {msg.aside && (
-                        <div className="border-l-[2px] border-[#AAB2BF] pl-3.5 text-[13px] italic text-[#444D5C]">
-                          {msg.aside}
-                        </div>
-                      )}
-
-                      {/* Message Action Row */}
-                      {msg.content.length > 0 && !msg.isError && (
-                        <div className="flex flex-wrap items-center gap-2 pt-0.5">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void navigator.clipboard?.writeText(msg.content);
-                              setCopiedId(msg.id);
-                              setTimeout(() => setCopiedId(null), 1400);
-                            }}
-                            className="inline-flex items-center gap-1 rounded-[5px] px-2 py-1 text-[12px] text-[#778091] hover:bg-[#E8EBEF] hover:text-[#161B26]"
-                          >
-                            {copiedId === msg.id ? (
-                              <Check className="h-3.5 w-3.5 text-[#1D7A4E]" />
-                            ) : (
-                              <Copy className="h-3.5 w-3.5" />
-                            )}
-                            <span>{copiedId === msg.id ? 'Copied' : 'Copy'}</span>
-                          </button>
-
-                          {msg.sources.length > 0 && (
+                    {msg.role === 'user' ? (
+                      <div className="border-l-[3px] border-[#F2D452] py-0.5 pl-4 text-[15px] leading-relaxed whitespace-pre-wrap text-[#161B26]">
+                        {msg.content}
+                      </div>
+                    ) : (
+                      <div className="space-y-3 pt-0.5">
+                        {hasThinking && (
+                          <div className="rounded-[8px] border border-[#D3D8DF] bg-[#EEF0F3]/75">
                             <button
                               type="button"
-                              onClick={() => onOpenSources(msg.sources)}
+                              aria-expanded={isThinkingExpanded}
+                              data-testid={`thinking-toggle-${msg.id}`}
+                              onClick={() =>
+                                setExpandedThinkingIds((prev) => ({
+                                  ...prev,
+                                  [msg.id]: !prev[msg.id],
+                                }))
+                              }
+                              className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[12.5px] font-medium text-[#444D5C] hover:text-[#161B26]"
+                            >
+                              <span className="inline-flex items-center gap-1.5">
+                                {isThinkingExpanded ? (
+                                  <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                                ) : (
+                                  <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                                )}
+                                <span className={isThinkingActive ? 'lowcon-streaming-glow font-semibold' : ''}>
+                                  {thinkingLabel}
+                                </span>
+                              </span>
+                              <span className="text-[11px] text-[#778091]">
+                                {isThinkingExpanded ? 'Hide' : 'Show'}
+                              </span>
+                            </button>
+                            {isThinkingExpanded && (
+                              <div
+                                data-testid={`thinking-content-${msg.id}`}
+                                className="max-h-72 overflow-y-auto border-t border-[#D3D8DF] px-3 py-2.5 text-[12.5px] leading-relaxed whitespace-pre-wrap text-[#444D5C]"
+                              >
+                                {msg.thinkingContent}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {hasVisibleContent ? (
+                          <div
+                            className={`space-y-2.5 text-[15.5px] leading-relaxed whitespace-pre-wrap ${
+                              msg.isError
+                                ? 'rounded-[6px] border border-[#D9383A]/30 bg-[#D9383A]/5 px-3.5 py-2.5 text-[13.5px] text-[#D9383A]'
+                                : 'text-[#1D2330]'
+                            }`}
+                          >
+                            {msg.content.split('\n\n').map((para, idx) => (
+                              <p key={idx}>{para}</p>
+                            ))}
+                          </div>
+                        ) : isMsgStreaming ? (
+                          <p
+                            data-testid="streaming-placeholder"
+                            className="lowcon-streaming-glow text-[14px] font-medium italic"
+                          >
+                            Streaming response within verified context budget...
+                          </p>
+                        ) : (
+                          <div
+                            data-testid="empty-response-notice"
+                            className="rounded-[6px] border border-[#D3D8DF] bg-[#EEF0F3] px-3.5 py-2.5 text-[13px] text-[#444D5C]"
+                          >
+                            {msg.stopReason === 'max_tokens' && hasThinking
+                              ? `Output reply reserve (${outputReserveTokens ?? 'current'} tokens) was reached during thinking before visible answer text started. Increase Output Reply Reserve in Settings or inspect the Thought process above.`
+                              : 'Model finished without returning visible answer text.'}
+                          </div>
+                        )}
+
+                        {msg.aside && (
+                          <div className="border-l-[2px] border-[#AAB2BF] pl-3.5 text-[13px] italic text-[#444D5C]">
+                            {msg.aside}
+                          </div>
+                        )}
+
+                        {/* Message Action Row */}
+                        {hasVisibleContent && !msg.isError && (
+                          <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void navigator.clipboard?.writeText(msg.content);
+                                setCopiedId(msg.id);
+                                setTimeout(() => setCopiedId(null), 1400);
+                              }}
+                              className="inline-flex items-center gap-1 rounded-[5px] px-2 py-1 text-[12px] text-[#778091] hover:bg-[#E8EBEF] hover:text-[#161B26]"
+                            >
+                              {copiedId === msg.id ? (
+                                <Check className="h-3.5 w-3.5 text-[#1D7A4E]" />
+                              ) : (
+                                <Copy className="h-3.5 w-3.5" />
+                              )}
+                              <span>{copiedId === msg.id ? 'Copied' : 'Copy'}</span>
+                            </button>
+
+                            {msg.sources.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => onOpenSources(msg.sources)}
+                                className="rounded-[5px] px-2 py-1 text-[12px] text-[#778091] hover:bg-[#E8EBEF] hover:text-[#161B26]"
+                              >
+                                View sources ({msg.sources.length})
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onSaveAsNote(msg.content, msg.id);
+                                setSavedNoteMsgId(msg.id);
+                                setTimeout(() => setSavedNoteMsgId(null), 1800);
+                              }}
                               className="rounded-[5px] px-2 py-1 text-[12px] text-[#778091] hover:bg-[#E8EBEF] hover:text-[#161B26]"
                             >
-                              View sources ({msg.sources.length})
+                              {savedNoteMsgId === msg.id ? 'Saved to Memory ✓' : 'Save as note'}
                             </button>
-                          )}
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onSaveAsNote(msg.content, msg.id);
-                              setSavedNoteMsgId(msg.id);
-                              setTimeout(() => setSavedNoteMsgId(null), 1800);
-                            }}
-                            className="rounded-[5px] px-2 py-1 text-[12px] text-[#778091] hover:bg-[#E8EBEF] hover:text-[#161B26]"
-                          >
-                            {savedNoteMsgId === msg.id ? 'Saved to Memory ✓' : 'Save as note'}
-                          </button>
-                        </div>
-                      )}
-
-                      {/* Per-Turn Context Strip */}
-                      {msg.turnBudget && (
-                        <div className="pt-2">
-                          <div className="mb-1.5 flex items-center justify-between text-[12px]">
-                            <span className="font-semibold text-[#161B26]">
-                              Context used for this reply
-                            </span>
-                            <span className="text-[#778091] tabular-nums">
-                              {formatNumber(getPackedTokens(msg.turnBudget))} of{' '}
-                              {formatNumber(msg.turnBudget.totalLimit)} tokens
-                            </span>
                           </div>
-                          <ContextStrip
-                            budget={msg.turnBudget}
-                            hoveredKey={hoveredSegment}
-                            onHoverChange={onHoverSegment}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </article>
-              ))
+                        )}
+
+                        {/* Per-Turn Context Strip */}
+                        {msg.turnBudget && (
+                          <div className="pt-2">
+                            <div className="mb-1.5 flex items-center justify-between text-[12px]">
+                              <span className="font-semibold text-[#161B26]">
+                                Context used for this reply
+                              </span>
+                              <span className="text-[#778091] tabular-nums">
+                                {formatNumber(getPackedTokens(msg.turnBudget))} of{' '}
+                                {formatNumber(msg.turnBudget.totalLimit)} tokens
+                              </span>
+                            </div>
+                            <ContextStrip
+                              budget={msg.turnBudget}
+                              hoveredKey={hoveredSegment}
+                              onHoverChange={onHoverSegment}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </article>
+                );
+              })
             )}
           </div>
         </div>

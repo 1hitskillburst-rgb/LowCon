@@ -130,3 +130,113 @@ test('conservative estimator scales CJK text and handles empty input', () => {
   assert.equal(estimateTokensConservative(''), 0);
   assert.ok(estimateTokensConservative('你好世界') >= 4);
 });
+
+test('taskGoal feeds Active Task State in prompt assembly and budget breakdown', () => {
+  const res = assembleContext(
+    {
+      coreInstruction: 'You are LowCon.',
+      currentUserMessage: 'Check current progress.',
+      pinnedFacts: [],
+      taskState: { goal: 'Keep responses concise and verify local budget invariants' },
+      retrievedMemories: [],
+      conversationTurns: [],
+      summaries: [],
+    },
+    {
+      modelContextLimit: 2048,
+      outputReservePct: 20,
+      safetyMarginPct: 5,
+      templateType: 'ChatML',
+    },
+  );
+
+  assert.equal(res.ok, true);
+  if (res.ok) {
+    assert.ok(res.inspection.exactRenderedPrompt.includes('[Active Task State]'));
+    assert.ok(
+      res.inspection.exactRenderedPrompt.includes(
+        'Goal: Keep responses concise and verify local budget invariants',
+      ),
+    );
+    assert.ok(res.inspection.includedItems.some((item) => item.kind === 'task_state'));
+    const budget = buildTurnContextBudget(res.inspection);
+    assert.ok(budget.segments.some((seg) => seg.key === 'task' && seg.tokens > 0));
+    assert.equal(getPackedTokens(budget), res.inspection.totalTokens);
+  }
+});
+
+test('Stage 2 summary compaction switches to compactText before dropping unpinned summaries', () => {
+  const verboseTail = 'extra background context '.repeat(35);
+  const compactRes = assembleContext(
+    {
+      coreInstruction: 'You are LowCon.',
+      currentUserMessage: 'Continue the plan.',
+      pinnedFacts: [],
+      retrievedMemories: [],
+      conversationTurns: [],
+      summaries: [
+        {
+          id: 'sum-1',
+          sourceTurnRange: '1-4',
+          fullText: `Compact summary core. ${verboseTail}`,
+          compactText: 'Compact summary core.',
+          isPinned: false,
+        },
+      ],
+    },
+    {
+      modelContextLimit: 512,
+      outputReservePct: 20,
+      safetyMarginPct: 5,
+      templateType: 'ChatML',
+    },
+  );
+
+  assert.equal(compactRes.ok, true);
+  if (compactRes.ok) {
+    assert.ok(compactRes.inspection.exactRenderedPrompt.includes('Compact summary core.'));
+    assert.equal(compactRes.inspection.exactRenderedPrompt.includes('extra background context'), false);
+    assert.ok(compactRes.inspection.includedMemoryIds.includes('sum-1'));
+    assert.ok(compactRes.inspection.includedItems.some((i) => i.id === 'sum-1' && i.kind === 'summary'));
+  }
+
+  // When even compact summaries overflow, unpinned summaries are dropped while pinned summaries stay
+  const dropRes = assembleContext(
+    {
+      coreInstruction: 'You are LowCon.',
+      currentUserMessage: 'Proceed.',
+      pinnedFacts: [],
+      retrievedMemories: [],
+      conversationTurns: [],
+      summaries: [
+        {
+          id: 'sum-pinned',
+          sourceTurnRange: '1-2',
+          fullText: 'Pinned summary decision.',
+          compactText: 'Pinned summary decision.',
+          isPinned: true,
+        },
+        {
+          id: 'sum-unpinned',
+          sourceTurnRange: '3-8',
+          fullText: 'Unpinned summary overflow '.repeat(40),
+          compactText: 'Unpinned summary overflow '.repeat(40),
+          isPinned: false,
+        },
+      ],
+    },
+    {
+      modelContextLimit: 512,
+      outputReservePct: 20,
+      safetyMarginPct: 5,
+      templateType: 'ChatML',
+    },
+  );
+
+  assert.equal(dropRes.ok, true);
+  if (dropRes.ok) {
+    assert.ok(dropRes.inspection.includedMemoryIds.includes('sum-pinned'));
+    assert.equal(dropRes.inspection.includedMemoryIds.includes('sum-unpinned'), false);
+    assert.ok(dropRes.inspection.excludedCandidates.some((e) => e.id === 'sum-unpinned' && e.kind === 'summary'));
+  }
+});

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { getFreeTokens, getPackedPercentage, getPackedTokens } from '../../core/context';
 import { formatNumber } from '../../core/privacy';
 import type { ContextSegmentKey, MemoryNote, TurnContextBudget } from '../../core/types';
@@ -6,6 +6,8 @@ import { ContextSegmentRow, VerticalContextStack } from './ContextBudgetViz';
 
 interface ContextPanelProps {
   budget: TurnContextBudget;
+  taskGoal?: string;
+  onUpdateTaskGoal: (goal: string) => void;
   memoryNotes: MemoryNote[];
   includedMemoryIds: string[];
   memoryRetrievalEnabled: boolean;
@@ -17,6 +19,8 @@ interface ContextPanelProps {
 
 export const ContextPanel: React.FC<ContextPanelProps> = ({
   budget,
+  taskGoal,
+  onUpdateTaskGoal,
   memoryNotes,
   includedMemoryIds,
   memoryRetrievalEnabled,
@@ -25,6 +29,14 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
   onHoverSegment,
   onOpenPromptInspector,
 }) => {
+  const [isEditingGoal, setIsEditingGoal] = useState(false);
+  const [goalDraft, setGoalDraft] = useState(taskGoal ?? '');
+
+  useEffect(() => {
+    setIsEditingGoal(false);
+    setGoalDraft(taskGoal ?? '');
+  }, [taskGoal]);
+
   const packed = getPackedTokens(budget);
   const free = getFreeTokens(budget);
   const pct = getPackedPercentage(budget);
@@ -35,7 +47,7 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
 
   const includedSet = new Set(includedMemoryIds);
   const activeNotesInPrompt = memoryNotes.filter(
-    (n) => !n.isDisabled && (includedSet.has(n.id) || n.isPinned),
+    (n) => !n.isDisabled && (includedSet.has(n.id) || (n.isPinned && !n.isSummary)),
   );
 
   return (
@@ -94,8 +106,90 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
         Inspect exact prompt
       </button>
 
+      {/* Active Session Task Goal */}
+      <div className="mt-6 border-t border-[#D3D8DF] pt-4">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-[14px] font-bold text-[#161B26]">Active task goal</h3>
+          {!isEditingGoal && (
+            <div className="flex items-center gap-2">
+              {taskGoal?.trim() && (
+                <button
+                  type="button"
+                  onClick={() => onUpdateTaskGoal('')}
+                  className="text-[11.5px] font-medium text-[#778091] hover:text-[#D9383A]"
+                >
+                  Clear
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setGoalDraft(taskGoal ?? '');
+                  setIsEditingGoal(true);
+                }}
+                className="text-[12px] font-semibold text-[#2A3FE0] hover:underline"
+              >
+                {taskGoal?.trim() ? 'Edit' : 'Set goal'}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {isEditingGoal ? (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              onUpdateTaskGoal(goalDraft);
+              setIsEditingGoal(false);
+            }}
+            className="mt-2 space-y-2"
+          >
+            <label htmlFor="session-task-goal-input" className="sr-only">
+              Active session task goal
+            </label>
+            <textarea
+              id="session-task-goal-input"
+              rows={2}
+              value={goalDraft}
+              onChange={(e) => setGoalDraft(e.target.value)}
+              placeholder="e.g. Keep answers under 150 words and cite local files only"
+              className="w-full rounded-[6px] border border-[#D3D8DF] bg-white px-2.5 py-1.5 text-[12.5px] text-[#161B26] placeholder:text-[#778091] focus:border-[#2A3FE0] focus:outline-none"
+            />
+            <div className="flex justify-end gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setGoalDraft(taskGoal ?? '');
+                  setIsEditingGoal(false);
+                }}
+                className="rounded-[5px] border border-[#D3D8DF] bg-white px-2.5 py-1 text-[11.5px] font-medium text-[#444D5C] hover:bg-[#DDE1E7]"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="rounded-[5px] bg-[#2A3FE0] px-2.5 py-1 text-[11.5px] font-semibold text-white hover:bg-[#2234be]"
+              >
+                Save goal
+              </button>
+            </div>
+          </form>
+        ) : taskGoal?.trim() ? (
+          <p
+            data-testid="active-task-goal-display"
+            className="mt-1.5 rounded-[6px] border border-[#D3D8DF] bg-white px-2.5 py-2 text-[12.5px] leading-snug text-[#161B26]"
+          >
+            {taskGoal}
+          </p>
+        ) : (
+          <p className="mt-1.5 text-[12.5px] italic text-[#778091]">
+            No task goal set for this session.
+          </p>
+        )}
+      </div>
+
       {/* Memory in this prompt */}
-      <div className="mt-7">
+      <div className="mt-6">
         <div className="flex items-center justify-between">
           <h3 className="text-[14px] font-bold text-[#161B26]">Memory in this prompt</h3>
           <span className="text-[12px] text-[#778091]">
@@ -116,7 +210,11 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
                 style={{ borderColor: note.isPinned ? '#161B26' : '#8F9CF3' }}
               >
                 <div className="text-[11.5px] text-[#778091]">
-                  {note.isPinned ? 'Pinned project rule (always included)' : 'Retrieved as relevant'}
+                  {note.isSummary
+                    ? 'Approved history summary'
+                    : note.isPinned
+                      ? 'Pinned project rule (always included)'
+                      : 'Retrieved as relevant'}
                 </div>
                 <div className="text-[13px] font-medium text-[#161B26]">{note.title}</div>
                 <div className="line-clamp-2 text-[12px] text-[#444D5C]">{note.content}</div>

@@ -9,9 +9,9 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "tsc --noEmit && vite build",
-    "start": "NODE_ENV=production node server.ts",
+    "start": "node -e \"import('node:child_process').then(({spawnSync})=>{const r=spawnSync(process.execPath,['server.ts'],{stdio:'inherit',env:{...process.env,NODE_ENV:'production'}});process.exit(r.status??1);})\"",
     "preview": "vite preview --host 0.0.0.0 --port 3000",
-    "desktop:dev": "LOWCON_DESKTOP_DEV=1 electron desktop/main.cjs",
+    "desktop:dev": "electron desktop/main.cjs --dev",
     "desktop:pack": "npm run build && electron-builder --config desktop/electron-builder.json --dir",
     "desktop:build": "npm run build && electron-builder --config desktop/electron-builder.json",
     "lint": "eslint src server server.ts --ext .ts,.tsx",

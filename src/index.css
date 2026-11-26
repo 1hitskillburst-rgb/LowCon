@@ -16,3 +16,28 @@
     box-sizing: border-box;
   }
 }
+
+@keyframes lowcon-shimmer-sweep {
+  0% {
+    background-position: 200% 50%;
+  }
+  100% {
+    background-position: -200% 50%;
+  }
+}
+
+.lowcon-streaming-glow {
+  background: linear-gradient(
+    90deg,
+    #778091 0%,
+    #778091 34%,
+    #2A3FE0 50%,
+    #778091 66%,
+    #778091 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: lowcon-shimmer-sweep 2s linear infinite;
+}

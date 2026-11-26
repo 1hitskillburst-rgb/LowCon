@@ -663,16 +663,47 @@ export function assembleContext(
     });
   }
 
-  // Retrieved memory notes -> 'mem' segment
-  if (workingMemories.length > 0) {
-    const memBlock = workingMemories.map((m) => `${m.title}: ${m.excerpt}`).join('\n');
-    const memTokens = estimateTokensConservative(memBlock);
+  // Retrieved memory notes & approved summaries -> 'mem' segment
+  const memTokens =
+    workingMemories.length > 0
+      ? estimateTokensConservative(workingMemories.map((m) => `${m.title}: ${m.excerpt}`).join('\n'))
+      : 0;
+  const summaryTokens =
+    workingSummaries.length > 0
+      ? estimateTokensConservative(
+          workingSummaries
+            .map((s) => `(Turns ${s.sourceTurnRange}) ${useCompactSummaries ? s.compactText : s.fullText}`)
+            .join('\n'),
+        )
+      : 0;
+
+  if (workingMemories.length > 0 || workingSummaries.length > 0) {
+    const descParts: string[] = [];
+    if (workingMemories.length > 0) {
+      descParts.push(
+        `${workingMemories.length} source-linked local note${workingMemories.length === 1 ? '' : 's'}`,
+      );
+    }
+    if (workingSummaries.length > 0) {
+      descParts.push(
+        `${workingSummaries.length} ${useCompactSummaries ? 'compact ' : ''}summar${workingSummaries.length === 1 ? 'y' : 'ies'}`,
+      );
+    }
+
+    const sectionName =
+      workingSummaries.length > 0 && workingMemories.length === 0
+        ? `History summaries (${workingSummaries.length})`
+        : workingSummaries.length > 0
+          ? `Memory & summaries (${workingMemories.length + workingSummaries.length})`
+          : `Retrieved memory (${workingMemories.length})`;
+
     sections.push({
       segmentKey: 'mem',
-      name: `Retrieved memory (${workingMemories.length})`,
-      tokens: memTokens,
-      description: `${workingMemories.length} source-linked local note${workingMemories.length === 1 ? '' : 's'}`,
+      name: sectionName,
+      tokens: memTokens + summaryTokens,
+      description: descParts.join(' · '),
     });
+
     for (const m of workingMemories) {
       includedItems.push({
         id: m.id,
@@ -680,6 +711,16 @@ export function assembleContext(
         label: m.title,
         tokens: estimateTokensConservative(`${m.title}: ${m.excerpt}`),
         sourceRef: m.sourceMessageId,
+      });
+    }
+    for (const s of workingSummaries) {
+      const text = useCompactSummaries ? s.compactText : s.fullText;
+      includedItems.push({
+        id: s.id,
+        kind: 'summary',
+        label: `Summary (Turns ${s.sourceTurnRange})${useCompactSummaries ? ' [compact]' : ''}`,
+        tokens: estimateTokensConservative(`(Turns ${s.sourceTurnRange}) ${text}`),
+        sourceRef: s.sourceTurnRange,
       });
     }
   }
@@ -724,6 +765,7 @@ export function assembleContext(
   const includedMemoryIds = [
     ...pinnedFacts.map((f) => f.id),
     ...workingMemories.map((m) => m.id),
+    ...workingSummaries.map((s) => s.id),
   ];
 
   return {

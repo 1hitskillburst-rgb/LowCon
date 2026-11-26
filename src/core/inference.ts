@@ -17,20 +17,37 @@ export interface GenerationParams {
   selectedLmModel?: string;
 }
 
+export interface GenerationProgress {
+  totalTokens: number;
+  tokensPerSecond: number;
+  isThinking: boolean;
+}
+
 export type StreamCallbacks = {
   onToken: (token: string) => void;
-  onComplete: (totalTokens: number, stopReason: 'done' | 'max_tokens' | 'stop_sequence') => void;
+  onThinkingToken?: (token: string) => void;
+  onProgress?: (progress: GenerationProgress) => void;
+  onComplete: (
+    totalTokens: number,
+    stopReason: 'done' | 'max_tokens' | 'stop_sequence',
+    stats?: { tokensPerSecond: number },
+  ) => void;
   onCancelled: () => void;
   onError: (message: string) => void;
 };
 
 export interface ParsedSseResult {
   deltaContent?: string;
+  deltaThinking?: string;
   stopReason?: 'done' | 'max_tokens' | 'stop_sequence';
+  usageCompletionTokens?: number;
+  error?: string;
 }
 
 /**
  * Parses a single Server-Sent Events line from an OpenAI-compatible stream.
+ * Supports standard `delta.content`, reasoning fields (`reasoning_content` / `reasoning`),
+ * usage/timing token counts, and inline `error` payloads.
  */
 export function parseSseLine(line: string): ParsedSseResult | null {
   const trimmed = line.trim();
@@ -47,13 +64,43 @@ export function parseSseLine(line: string): ParsedSseResult | null {
   }
 
   const parsed = JSON.parse(data) as {
+    error?: string | { message?: string };
+    usage?: { completion_tokens?: number };
+    timings?: { predicted_n?: number };
     choices?: Array<{
-      delta?: { content?: string };
+      delta?: {
+        content?: string | null;
+        reasoning_content?: string | null;
+        reasoning?: string | null;
+      };
+      message?: {
+        content?: string | null;
+        reasoning_content?: string | null;
+        reasoning?: string | null;
+      };
       finish_reason?: string | null;
     }>;
   };
+
+  if (parsed.error) {
+    const errorMsg =
+      typeof parsed.error === 'string'
+        ? parsed.error
+        : parsed.error.message?.trim() || 'Local inference server returned a stream error.';
+    return { error: errorMsg };
+  }
+
   const choice = parsed.choices?.[0];
-  const deltaContent = typeof choice?.delta?.content === 'string' ? choice.delta.content : undefined;
+  const rawContent = choice?.delta?.content ?? choice?.message?.content;
+  const deltaContent = typeof rawContent === 'string' ? rawContent : undefined;
+
+  const rawThinking =
+    choice?.delta?.reasoning_content ??
+    choice?.delta?.reasoning ??
+    choice?.message?.reasoning_content ??
+    choice?.message?.reasoning;
+  const deltaThinking = typeof rawThinking === 'string' ? rawThinking : undefined;
+
   const finishReason = choice?.finish_reason;
 
   let stopReason: ParsedSseResult['stopReason'];
@@ -63,7 +110,238 @@ export function parseSseLine(line: string): ParsedSseResult | null {
     stopReason = 'stop_sequence';
   }
 
-  return { deltaContent, stopReason };
+  const rawUsage = parsed.usage?.completion_tokens ?? parsed.timings?.predicted_n;
+  const usageCompletionTokens =
+    typeof rawUsage === 'number' && Number.isFinite(rawUsage) && rawUsage > 0
+      ? Math.round(rawUsage)
+      : undefined;
+
+  const result: ParsedSseResult = { deltaContent, stopReason };
+  if (deltaThinking !== undefined) {
+    result.deltaThinking = deltaThinking;
+  }
+  if (usageCompletionTokens !== undefined) {
+    result.usageCompletionTokens = usageCompletionTokens;
+  }
+  return result;
+}
+
+const THINK_OPEN_TAG = '<think>';
+const THINK_CLOSE_TAG = '</think>';
+
+function trailingTagPrefixLength(text: string, tag: string): number {
+  const lower = text.toLowerCase();
+  const maxCheck = Math.min(lower.length, tag.length - 1);
+  for (let len = maxCheck; len >= 1; len--) {
+    if (lower.endsWith(tag.slice(0, len))) {
+      return len;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Stateful splitter for inline `<think>...</think>` blocks split across arbitrary stream chunks.
+ */
+class ThinkTagSplitter {
+  private inThink = false;
+  private pending = '';
+  private onContent: (text: string) => void;
+  private onThinking: (text: string) => void;
+
+  constructor(onContent: (text: string) => void, onThinking: (text: string) => void) {
+    this.onContent = onContent;
+    this.onThinking = onThinking;
+  }
+
+  isInThink(): boolean {
+    return this.inThink;
+  }
+
+  push(chunk: string): void {
+    if (!chunk) return;
+    this.pending += chunk;
+
+    while (this.pending.length > 0) {
+      if (!this.inThink) {
+        const idx = this.pending.toLowerCase().indexOf(THINK_OPEN_TAG);
+        if (idx !== -1) {
+          if (idx > 0) {
+            this.onContent(this.pending.slice(0, idx));
+          }
+          this.pending = this.pending.slice(idx + THINK_OPEN_TAG.length);
+          this.inThink = true;
+          continue;
+        }
+        const hold = trailingTagPrefixLength(this.pending, THINK_OPEN_TAG);
+        const emitLen = this.pending.length - hold;
+        if (emitLen > 0) {
+          this.onContent(this.pending.slice(0, emitLen));
+          this.pending = this.pending.slice(emitLen);
+        }
+        break;
+      } else {
+        const idx = this.pending.toLowerCase().indexOf(THINK_CLOSE_TAG);
+        if (idx !== -1) {
+          if (idx > 0) {
+            this.onThinking(this.pending.slice(0, idx));
+          }
+          this.pending = this.pending.slice(idx + THINK_CLOSE_TAG.length);
+          this.inThink = false;
+          continue;
+        }
+        const hold = trailingTagPrefixLength(this.pending, THINK_CLOSE_TAG);
+        const emitLen = this.pending.length - hold;
+        if (emitLen > 0) {
+          this.onThinking(this.pending.slice(0, emitLen));
+          this.pending = this.pending.slice(emitLen);
+        }
+        break;
+      }
+    }
+  }
+
+  flush(): void {
+    if (!this.pending) return;
+    if (this.inThink) {
+      this.onThinking(this.pending);
+    } else {
+      this.onContent(this.pending);
+    }
+    this.pending = '';
+  }
+}
+
+/**
+ * Consumes an OpenAI-compatible SSE ReadableStream, flushing any trailing
+ * decoder bytes and buffered line data if the stream closes without a newline.
+ */
+export async function consumeSseStream(
+  body: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+  callbacks: StreamCallbacks,
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const startedAt = performance.now();
+  let buffer = '';
+  let streamedDeltas = 0;
+  let latestUsageTokens: number | undefined;
+  let stopReason: 'done' | 'max_tokens' | 'stop_sequence' = 'done';
+
+  let emittedThinkingInChunk = false;
+  let emittedContentInChunk = false;
+
+  const splitter = new ThinkTagSplitter(
+    (text) => {
+      if (text) {
+        emittedContentInChunk = true;
+        callbacks.onToken(text);
+      }
+    },
+    (text) => {
+      if (text) {
+        emittedThinkingInChunk = true;
+        callbacks.onThinkingToken?.(text);
+      }
+    },
+  );
+
+  const calcTokensPerSecond = (tokens: number): number => {
+    if (tokens <= 0) return 0;
+    const elapsedSecs = Math.max(0.05, (performance.now() - startedAt) / 1000);
+    return Number((tokens / elapsedSecs).toFixed(1));
+  };
+
+  const processLines = (lines: string[]): 'done' | 'error' | null => {
+    for (const line of lines) {
+      const parsed = parseSseLine(line);
+      if (!parsed) continue;
+
+      if (parsed.error) {
+        splitter.flush();
+        callbacks.onError(parsed.error);
+        return 'error';
+      }
+
+      if (parsed.usageCompletionTokens !== undefined) {
+        latestUsageTokens = parsed.usageCompletionTokens;
+      }
+
+      emittedThinkingInChunk = false;
+      emittedContentInChunk = false;
+      const hadPayload =
+        (parsed.deltaThinking && parsed.deltaThinking.length > 0) ||
+        (parsed.deltaContent && parsed.deltaContent.length > 0);
+
+      if (parsed.deltaThinking) {
+        emittedThinkingInChunk = true;
+        callbacks.onThinkingToken?.(parsed.deltaThinking);
+      }
+
+      if (parsed.deltaContent) {
+        splitter.push(parsed.deltaContent);
+      }
+
+      if (hadPayload) {
+        streamedDeltas += 1;
+        const currentTotal = latestUsageTokens ?? streamedDeltas;
+        callbacks.onProgress?.({
+          totalTokens: currentTotal,
+          tokensPerSecond: calcTokensPerSecond(currentTotal),
+          isThinking:
+            splitter.isInThink() || (emittedThinkingInChunk && !emittedContentInChunk),
+        });
+      }
+
+      if (parsed.stopReason) {
+        stopReason = parsed.stopReason;
+        splitter.flush();
+        const finalTokens = latestUsageTokens ?? streamedDeltas;
+        callbacks.onComplete(finalTokens, stopReason, {
+          tokensPerSecond: calcTokensPerSecond(finalTokens),
+        });
+        return 'done';
+      }
+    }
+    return null;
+  };
+
+  while (true) {
+    if (signal.aborted) {
+      await reader.cancel().catch(() => {});
+      callbacks.onCancelled();
+      return;
+    }
+
+    const { done, value } = await reader.read();
+    if (done) {
+      buffer += decoder.decode();
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+
+    const outcome = processLines(lines);
+    if (outcome) {
+      return;
+    }
+  }
+
+  if (buffer.trim()) {
+    const outcome = processLines(buffer.split('\n'));
+    if (outcome) {
+      return;
+    }
+  }
+
+  splitter.flush();
+  const finalTokens = latestUsageTokens ?? streamedDeltas;
+  callbacks.onComplete(finalTokens, stopReason, {
+    tokensPerSecond: calcTokensPerSecond(finalTokens),
+  });
 }
 
 /**
@@ -310,8 +588,15 @@ export class InferenceController {
       params.structuredMessages,
     );
     const tokens = splitIntoStreamTokens(fullReply);
+    const startedAt = performance.now();
     let emitted = 0;
     let stopReason: 'done' | 'max_tokens' | 'stop_sequence' = 'done';
+
+    const calcTps = (count: number): number => {
+      if (count <= 0) return 0;
+      const elapsedSecs = Math.max(0.05, (performance.now() - startedAt) / 1000);
+      return Number((count / elapsedSecs).toFixed(1));
+    };
 
     for (const token of tokens) {
       if (signal.aborted) {
@@ -343,6 +628,11 @@ export class InferenceController {
 
       emitted += 1;
       callbacks.onToken(token);
+      callbacks.onProgress?.({
+        totalTokens: emitted,
+        tokensPerSecond: calcTps(emitted),
+        isThinking: false,
+      });
 
       if (emitted >= params.maxTokens) {
         stopReason = 'max_tokens';
@@ -350,7 +640,7 @@ export class InferenceController {
       }
     }
 
-    callbacks.onComplete(emitted, stopReason);
+    callbacks.onComplete(emitted, stopReason, { tokensPerSecond: calcTps(emitted) });
   }
 
   private async streamFromLmStudio(
@@ -393,41 +683,6 @@ export class InferenceController {
       );
     }
 
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let totalTokens = 0;
-    let stopReason: 'done' | 'max_tokens' | 'stop_sequence' = 'done';
-
-    while (true) {
-      if (signal.aborted) {
-        await reader.cancel().catch(() => {});
-        callbacks.onCancelled();
-        return;
-      }
-
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-
-      for (const line of lines) {
-        const parsed = parseSseLine(line);
-        if (!parsed) continue;
-        if (parsed.deltaContent) {
-          totalTokens += 1;
-          callbacks.onToken(parsed.deltaContent);
-        }
-        if (parsed.stopReason) {
-          stopReason = parsed.stopReason;
-          callbacks.onComplete(totalTokens, stopReason);
-          return;
-        }
-      }
-    }
-
-    callbacks.onComplete(totalTokens, stopReason);
+    await consumeSseStream(resp.body, signal, callbacks);
   }
 }

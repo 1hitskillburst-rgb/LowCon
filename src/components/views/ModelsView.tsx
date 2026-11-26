@@ -10,6 +10,7 @@ interface ModelsViewProps {
   activeModelId: string;
   workerStatus: WorkerStatus;
   globalContextOverride: number;
+  lmStudioEndpoint: string;
   onSelectActiveModel: (modelId: string) => void;
   onLoadModel: (modelId: string) => void;
   onUnloadModel: () => void;
@@ -32,6 +33,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   activeModelId,
   workerStatus,
   globalContextOverride,
+  lmStudioEndpoint,
   onSelectActiveModel,
   onLoadModel,
   onUnloadModel,
@@ -40,12 +42,14 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   onRemoveModel,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const resolvedDefaultEndpoint = lmStudioEndpoint.trim() || 'http://127.0.0.1:1234/v1';
   const [parseMessage, setParseMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(
     null,
   );
+  const [isDraggingGguf, setIsDraggingGguf] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [newName, setNewName] = useState('');
-  const [newEndpoint, setNewEndpoint] = useState('http://127.0.0.1:1234/v1');
+  const [newEndpoint, setNewEndpoint] = useState(resolvedDefaultEndpoint);
   const [newBackend, setNewBackend] = useState<'mock' | 'lm_studio'>('lm_studio');
   const [newContextLimit, setNewContextLimit] = useState(8192);
   const [newTemplate, setNewTemplate] = useState<ChatTemplateType>('ChatML');
@@ -55,11 +59,15 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
       ? workerStatus.modelId
       : null;
 
-  const handleGgufInspect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const inspectGgufFile = async (file: File) => {
     setParseMessage(null);
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.gguf')) {
+      setParseMessage({
+        kind: 'err',
+        text: `Unsupported file '${file.name}'. Please select or drop a .gguf model file.`,
+      });
+      return;
+    }
 
     try {
       // Read up to 4 MB of the binary header (enough for GGUF v1/v2/v3 metadata without loading GB weights)
@@ -70,7 +78,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
       const profile: ModelProfile = {
         id: `gguf_${createUuid().slice(0, 8)}`,
         name: `${parsed.name} (${parsed.quantization})`,
-        filePath: 'http://127.0.0.1:1234/v1',
+        filePath: resolvedDefaultEndpoint,
         backendType: 'lm_studio',
         architecture: parsed.architecture,
         quantization: parsed.quantization,
@@ -82,11 +90,42 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
       onAddModel(profile);
       setParseMessage({
         kind: 'ok',
-        text: `Parsed GGUF v${parsed.version} header: ${parsed.name} · arch=${parsed.architecture} · quant=${parsed.quantization} · ctx=${formatNumber(parsed.contextLength)} · template=${parsed.inferredTemplateType}. Profile added (routes through local LM Studio server).`,
+        text: `Parsed GGUF v${parsed.version} header: ${parsed.name} · arch=${parsed.architecture} · quant=${parsed.quantization} · ctx=${formatNumber(parsed.contextLength)} · template=${parsed.inferredTemplateType}. Profile added (routes through ${resolvedDefaultEndpoint}).`,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setParseMessage({ kind: 'err', text: `GGUF inspection failed: ${msg}` });
+    }
+  };
+
+  const handleGgufInspect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    await inspectGgufFile(file);
+  };
+
+  const handleGgufDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDraggingGguf) {
+      setIsDraggingGguf(true);
+    }
+  };
+
+  const handleGgufDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingGguf(false);
+  };
+
+  const handleGgufDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingGguf(false);
+    const file = e.dataTransfer?.files?.[0];
+    if (file) {
+      void inspectGgufFile(file);
     }
   };
 
@@ -98,7 +137,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
       name: newName.trim(),
       filePath:
         newBackend === 'lm_studio'
-          ? newEndpoint.trim() || 'http://127.0.0.1:1234/v1'
+          ? newEndpoint.trim() || resolvedDefaultEndpoint
           : 'in-process://deterministic-mock',
       backendType: newBackend,
       architecture: newBackend === 'lm_studio' ? 'openai-compatible' : 'qwen2',
@@ -198,6 +237,39 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                 <span>Unload Worker</span>
               </button>
             )}
+          </div>
+
+          {/* GGUF Drag-and-Drop Inspector Card */}
+          <div
+            data-testid="gguf-dropzone"
+            onDragEnter={handleGgufDragOver}
+            onDragOver={handleGgufDragOver}
+            onDragLeave={handleGgufDragLeave}
+            onDrop={handleGgufDrop}
+            onClick={() => fileInputRef.current?.click()}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
+            aria-label="Drop a .gguf file here or click to inspect its header"
+            className={`flex cursor-pointer items-center justify-between gap-3 rounded-[8px] border border-dashed px-4 py-3 text-[13px] transition-colors ${
+              isDraggingGguf
+                ? 'border-[#2A3FE0] bg-[#2A3FE0]/8 text-[#2A3FE0]'
+                : 'border-[#AAB2BF] bg-white text-[#444D5C] hover:border-[#2A3FE0]'
+            }`}
+          >
+            <div className="flex items-center gap-2.5">
+              <FileUp className="h-4 w-4 shrink-0" />
+              <span>
+                Drop a local <code className="font-mono text-[12px]">.gguf</code> file here (or click)
+                to inspect its binary header and create a profile targeting{' '}
+                <code className="font-mono text-[12px]">{resolvedDefaultEndpoint}</code>.
+              </span>
+            </div>
           </div>
 
           {parseMessage && (

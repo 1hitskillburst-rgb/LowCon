@@ -1,4 +1,6 @@
-import type { MemoryNote } from './types';
+import type { SummaryExcerptCandidate } from './context';
+import { safeTruncateChars } from './privacy';
+import type { MemoryNote, Session } from './types';
 
 export interface ScoringWeights {
   keywordWeight: number;
@@ -224,4 +226,83 @@ export function retrieveMemoryNotes(
 
   const sliced = limit > 0 ? scored.slice(0, limit) : scored;
   return sliced.map((item, idx) => ({ ...item, rank: idx + 1 }));
+}
+
+function buildCompactSummaryText(content: string): string {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  const maxCompactChars = 120;
+  if (Array.from(normalized).length <= maxCompactChars) {
+    return normalized;
+  }
+  const truncated = safeTruncateChars(normalized, maxCompactChars - 3);
+  return `${truncated}...`;
+}
+
+/**
+ * Converts approved, enabled summary MemoryNotes into SummaryExcerptCandidates
+ * for budget-first context assembly and Stage 2 summary compaction.
+ */
+export function buildSummaryCandidates(
+  notes: MemoryNote[],
+  sessionId?: string,
+): SummaryExcerptCandidate[] {
+  return notes
+    .filter((n) => {
+      if (n.isDisabled || !n.isSummary || !n.userApproved) return false;
+      if (sessionId && n.sessionId && n.sessionId !== sessionId) return false;
+      return true;
+    })
+    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+    .map((n) => {
+      const fullText = `${n.title}: ${n.content.trim()}`;
+      const compactBody = buildCompactSummaryText(n.content);
+      return {
+        id: n.id,
+        sourceTurnRange: n.sourceReference.trim() || 'session',
+        fullText,
+        compactText: `${n.title}: ${compactBody}`,
+        isPinned: n.isPinned,
+      };
+    });
+}
+
+/**
+ * Generates an extractive draft summary MemoryNote from a session's messages.
+ * Draft summaries start with `userApproved: false` so users review and approve them
+ * in Memory before prompt injection.
+ */
+export function buildDraftSessionSummary(
+  session: Session,
+  id: string,
+  nowMs = Date.now(),
+): MemoryNote | null {
+  const validTurns = session.messages.filter(
+    (m) => (m.role === 'user' || m.role === 'assistant') && !m.isError && m.content.trim().length > 0,
+  );
+  if (validTurns.length === 0) {
+    return null;
+  }
+
+  const lines = validTurns.map((m, idx) => {
+    const speaker = m.role === 'user' ? 'User' : 'Assistant';
+    const compact = m.content.replace(/\s+/g, ' ').trim();
+    const snippet = Array.from(compact).length > 140 ? `${safeTruncateChars(compact, 137)}...` : compact;
+    return `${idx + 1}. ${speaker}: ${snippet}`;
+  });
+
+  const turnRange = validTurns.length === 1 ? '1' : `1-${validTurns.length}`;
+  return {
+    id,
+    sessionId: session.id,
+    title: `Summary: ${safeTruncateChars(session.title, 40)}`,
+    content: lines.join('\n'),
+    sourceReference: `Session "${session.title}" (turns ${turnRange})`,
+    sourceMessageIds: validTurns.map((m) => m.id),
+    isPinned: false,
+    isSummary: true,
+    isDisabled: false,
+    userApproved: false,
+    createdAt: nowMs,
+    updatedAt: nowMs,
+  };
 }
