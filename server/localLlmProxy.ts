@@ -1,6 +1,148 @@
+import { execFile } from 'node:child_process';
 import { Router, type Request, type Response } from 'express';
 
 const ALLOWED_LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
+let lastTrackedEndpoint = '';
+const lastTrackedModels = new Set<string>();
+
+export function recordTrackedLocalEndpoint(endpoint: string, model?: string): void {
+  if (isLocalLoopbackEndpoint(endpoint)) {
+    lastTrackedEndpoint = normalizeLocalEndpoint(endpoint);
+  }
+  if (model && model.trim()) {
+    lastTrackedModels.add(model.trim());
+  }
+}
+
+async function fetchLoadedInstanceIds(
+  origin: string,
+  timeoutMs = 1500,
+): Promise<{ restSupported: boolean; instanceIds: string[] }> {
+  for (const url of [`${origin}/api/v1/models`, `${origin}/api/v0/models`]) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(url, { signal: controller.signal });
+      if (!resp.ok) {
+        await resp.body?.cancel().catch(() => {});
+        continue;
+      }
+      const payload = (await resp.json()) as {
+        models?: Array<{
+          loaded_instances?: Array<{ id?: unknown }>;
+        }>;
+        data?: Array<{ id?: unknown; state?: unknown }>;
+      };
+      const ids: string[] = [];
+      if (Array.isArray(payload.models)) {
+        for (const m of payload.models) {
+          if (Array.isArray(m?.loaded_instances)) {
+            for (const inst of m.loaded_instances) {
+              if (typeof inst?.id === 'string' && inst.id.trim()) {
+                ids.push(inst.id.trim());
+              }
+            }
+          }
+        }
+      }
+      if (Array.isArray(payload.data)) {
+        for (const item of payload.data) {
+          if (
+            item &&
+            typeof item.id === 'string' &&
+            item.id.trim() &&
+            (!item.state || item.state === 'loaded')
+          ) {
+            ids.push(item.id.trim());
+          }
+        }
+      }
+      return { restSupported: true, instanceIds: [...new Set(ids)] };
+    } catch {
+      // Try next endpoint
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return { restSupported: false, instanceIds: [] };
+}
+
+function runLmsUnloadAll(timeoutMs = 2500): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      execFile('lms', ['unload', '--all'], { timeout: timeoutMs, windowsHide: true }, (err) => {
+        resolve(!err);
+      });
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+export async function unloadAllLocalModels(
+  rawEndpoint?: string,
+  fallbackModels: string[] = [],
+): Promise<{ ok: boolean; endpoint?: string; unloaded: string[]; cliFallbackUsed: boolean }> {
+  const candidate = rawEndpoint?.trim() || lastTrackedEndpoint;
+  if (!candidate || !isLocalLoopbackEndpoint(candidate)) {
+    const cliUsed = await runLmsUnloadAll();
+    return { ok: true, unloaded: [], cliFallbackUsed: cliUsed };
+  }
+
+  const normalized = normalizeLocalEndpoint(candidate);
+  const origin = new URL(normalized).origin;
+  const { restSupported, instanceIds } = await fetchLoadedInstanceIds(origin);
+
+  const targets = restSupported
+    ? instanceIds
+    : [...new Set([...fallbackModels.map((m) => m.trim()).filter(Boolean), ...lastTrackedModels])];
+
+  const unloaded: string[] = [];
+  let restFailed = false;
+
+  if (targets.length > 0) {
+    const results = await Promise.allSettled(
+      targets.map(async (instanceId) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2000);
+        try {
+          const r = await fetch(`${origin}/api/v1/models/unload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ instance_id: instanceId }),
+            signal: controller.signal,
+          });
+          await r.body?.cancel().catch(() => {});
+          if (r.ok) {
+            return instanceId;
+          }
+          restFailed = true;
+          return null;
+        } catch {
+          restFailed = true;
+          return null;
+        } finally {
+          clearTimeout(timer);
+        }
+      }),
+    );
+
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value) {
+        unloaded.push(r.value);
+      }
+    }
+  }
+
+  let cliFallbackUsed = false;
+  if ((!restSupported || restFailed) && unloaded.length === 0) {
+    cliFallbackUsed = await runLmsUnloadAll();
+  }
+
+  lastTrackedModels.clear();
+  return { ok: true, endpoint: origin, unloaded, cliFallbackUsed };
+}
 
 export function isLocalLoopbackEndpoint(rawEndpoint: string): boolean {
   try {
@@ -263,6 +405,7 @@ export function createLocalLlmProxyRouter(): Router {
       }
 
       const base = normalizeLocalEndpoint(endpoint);
+      recordTrackedLocalEndpoint(base);
       const primaryUrl = `${base}/models`;
       const fallbackUrl = base.endsWith('/v1') ? `${base.slice(0, -3)}/models` : primaryUrl;
       const urls = primaryUrl === fallbackUrl ? [primaryUrl] : [primaryUrl, fallbackUrl];
@@ -389,6 +532,7 @@ export function createLocalLlmProxyRouter(): Router {
       const toolChoice = tools && tools.length > 0 ? validateToolChoice(body.tool_choice) : undefined;
 
       const base = normalizeLocalEndpoint(endpoint);
+      recordTrackedLocalEndpoint(base, model);
       const url = `${base}/chat/completions`;
 
       const upstream = await fetch(url, {
@@ -473,6 +617,33 @@ export function createLocalLlmProxyRouter(): Router {
       }
     } finally {
       res.off('close', onClose);
+    }
+  });
+
+  router.post('/unload-all', async (req: Request, res: Response) => {
+    try {
+      const body = parseJsonObjectBody(req.body);
+      if (!body) {
+        res.status(400).json({ error: 'Invalid request body: expected a JSON object.' });
+        return;
+      }
+
+      const rawEndpoint = typeof body.endpoint === 'string' ? body.endpoint.trim() : '';
+      if (rawEndpoint && !isLocalLoopbackEndpoint(rawEndpoint)) {
+        res.status(403).json({
+          error: `LowCon privacy boundary: Remote endpoint '${rawEndpoint}' rejected. Only local loopback addresses (127.0.0.1 / localhost / ::1) are permitted.`,
+        });
+        return;
+      }
+
+      const fallbackModels = Array.isArray(body.models)
+        ? body.models.filter((m): m is string => typeof m === 'string' && m.trim().length > 0).slice(0, 32)
+        : [];
+
+      const result = await unloadAllLocalModels(rawEndpoint || undefined, fallbackModels);
+      res.status(200).json(result);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 

@@ -1189,6 +1189,72 @@ export async function fetchLocalLmStudioModels(
   }
 }
 
+/**
+ * Unloads all loaded models on the local OpenAI-compatible / LM Studio server.
+ * Supports `beacon` mode (`navigator.sendBeacon` / `keepalive`) for tab/app exit.
+ */
+export async function unloadLocalLmModels(
+  rawEndpoint: string,
+  models: string[],
+  options: { beacon?: boolean; logger?: DiagnosticLogger } = {},
+): Promise<{ ok: boolean; unloaded?: string[]; error?: string }> {
+  const normalized = normalizeApiEndpoint(rawEndpoint);
+  if (!isLocalEndpoint(normalized)) {
+    const err = `LowCon privacy boundary: Remote endpoint '${normalized}' rejected for unload.`;
+    options.logger?.warn('inference', err);
+    return { ok: false, error: err };
+  }
+
+  const payload = JSON.stringify({
+    endpoint: normalized,
+    models: models.filter((m) => typeof m === 'string' && m.trim().length > 0),
+  });
+
+  if (options.beacon) {
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+        const sent = navigator.sendBeacon(
+          '/api/local-llm/unload-all',
+          new Blob([payload], { type: 'application/json' }),
+        );
+        if (sent) {
+          return { ok: true };
+        }
+      }
+      void fetch('/api/local-llm/unload-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+        keepalive: true,
+      }).catch(() => {});
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
+  }
+
+  try {
+    const resp = await fetch('/api/local-llm/unload-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+    });
+    const data = (await resp.json().catch(() => ({}))) as {
+      ok?: boolean;
+      unloaded?: string[];
+      error?: string;
+    };
+    if (!resp.ok) {
+      return { ok: false, error: data.error ?? `HTTP ${resp.status}` };
+    }
+    return { ok: true, unloaded: Array.isArray(data.unloaded) ? data.unloaded : [] };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    options.logger?.warn('inference', `Failed to unload local server models: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
 function splitIntoStreamTokens(text: string): string[] {
   const tokens: string[] = [];
   let buf = '';

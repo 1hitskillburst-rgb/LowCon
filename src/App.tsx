@@ -20,6 +20,7 @@ import {
 import {
   fetchLocalLmStudioModels,
   InferenceController,
+  unloadLocalLmModels,
   type StreamStopReason,
 } from './core/inference';
 import {
@@ -317,9 +318,32 @@ export const App: React.FC = () => {
   } | null>(null);
   const manuallyUnloadedRef = useRef(false);
   const activeDripCleanupRef = useRef<(() => void) | null>(null);
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
 
   useEffect(() => {
+    let unloadedForExit = false;
+    const handleExitUnload = () => {
+      if (unloadedForExit) return;
+      unloadedForExit = true;
+      controllerRef.current?.cancelGeneration();
+      controllerRef.current?.unloadModel();
+
+      const settings = workspaceRef.current.settings;
+      const candidateModels = [
+        settings.selectedLmModel,
+        ...settings.connectedLmModels,
+      ].filter((m) => typeof m === 'string' && m.trim().length > 0);
+      if (settings.activeBackendType === 'lm_studio' || candidateModels.length > 0) {
+        void unloadLocalLmModels(settings.lmStudioEndpoint, candidateModels, { beacon: true });
+      }
+    };
+
+    window.addEventListener('pagehide', handleExitUnload);
+    window.addEventListener('beforeunload', handleExitUnload);
     return () => {
+      window.removeEventListener('pagehide', handleExitUnload);
+      window.removeEventListener('beforeunload', handleExitUnload);
       activeDripCleanupRef.current?.();
     };
   }, []);
@@ -484,7 +508,15 @@ export const App: React.FC = () => {
     manuallyUnloadedRef.current = true;
     controllerRef.current?.unloadModel();
     setGeneratingSessionId(null);
-  }, []);
+    const settings = workspaceRef.current.settings;
+    const candidateModels = [
+      settings.selectedLmModel,
+      ...settings.connectedLmModels,
+    ].filter((m) => typeof m === 'string' && m.trim().length > 0);
+    if (settings.activeBackendType === 'lm_studio' || candidateModels.length > 0) {
+      void unloadLocalLmModels(settings.lmStudioEndpoint, candidateModels, { logger });
+    }
+  }, [logger]);
 
   const handleSwitchBackend = useCallback((backend: BackendType) => {
     manuallyUnloadedRef.current = false;

@@ -1,10 +1,12 @@
 const { app, BrowserWindow, dialog, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
-const { startDesktopServer } = require('./server.cjs');
+const { startDesktopServer, unloadAllLocalModels } = require('./server.cjs');
 
 let mainWindow = null;
 let embeddedServer = null;
+let isUnloadingOnQuit = false;
+let quitUnloadDone = false;
 
 app.setAppUserModelId('com.lowcon.workbench');
 
@@ -231,6 +233,23 @@ function closeEmbeddedServer() {
     embeddedServer = null;
   }
 }
+
+app.on('before-quit', (event) => {
+  if (quitUnloadDone) {
+    closeEmbeddedServer();
+    return;
+  }
+  event.preventDefault();
+  if (isUnloadingOnQuit) return;
+  isUnloadingOnQuit = true;
+
+  const timeout = new Promise((resolve) => setTimeout(resolve, 2500));
+  Promise.race([unloadAllLocalModels().catch(() => {}), timeout]).finally(() => {
+    quitUnloadDone = true;
+    closeEmbeddedServer();
+    app.quit();
+  });
+});
 
 app.on('will-quit', closeEmbeddedServer);
 

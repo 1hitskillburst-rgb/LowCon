@@ -84,11 +84,47 @@ test('server chat message validator accepts structured roles including tool call
 test('HTTP integration: /api/health, /api/local-llm/models, and /api/local-llm/chat (streaming, non-streaming, abort, and error handling)', async () => {
   let upstreamAborts = 0;
   let lastChatPayload: Record<string, unknown> | null = null;
+  const unloadedInstances: string[] = [];
 
   const mockLlm = await listenServer((req, res) => {
     if (req.method === 'GET' && req.url === '/v1/models') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ data: [{ id: 'qwen2.5-7b-instruct' }, { id: 'llama-3.2-3b' }] }));
+      return;
+    }
+
+    if (req.method === 'GET' && req.url === '/api/v1/models') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          models: [
+            {
+              key: 'google/gemma-4-e2b',
+              loaded_instances: [{ id: 'google/gemma-4-e2b' }],
+            },
+            {
+              key: 'qwen2.5-7b-instruct',
+              loaded_instances: [{ id: 'qwen2.5-7b-instruct:2' }],
+            },
+          ],
+        }),
+      );
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/api/v1/models/unload') {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+          instance_id?: string;
+        };
+        if (parsed.instance_id) {
+          unloadedInstances.push(parsed.instance_id);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ instance_id: parsed.instance_id }));
+      });
       return;
     }
 
@@ -323,6 +359,30 @@ test('HTTP integration: /api/health, /api/local-llm/models, and /api/local-llm/c
     });
     assert.equal(tooLarge.status, 413);
     assert.match(tooLarge.headers.get('content-type') ?? '', /application\/json/i);
+
+    // 9. /api/local-llm/unload-all enforces loopback boundary and unloads loaded instances
+    const unloadRemote = await fetch(`${proxyServer.baseUrl}/api/local-llm/unload-all`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint: 'https://api.openai.com/v1' }),
+    });
+    assert.equal(unloadRemote.status, 403);
+
+    const unloadOk = await fetch(`${proxyServer.baseUrl}/api/local-llm/unload-all`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint: mockLlm.baseUrl }),
+    });
+    assert.equal(unloadOk.status, 200);
+    const unloadJson = (await unloadOk.json()) as {
+      ok: boolean;
+      unloaded: string[];
+      cliFallbackUsed: boolean;
+    };
+    assert.equal(unloadJson.ok, true);
+    assert.deepEqual(unloadJson.unloaded.sort(), ['google/gemma-4-e2b', 'qwen2.5-7b-instruct:2']);
+    assert.deepEqual(unloadedInstances.sort(), ['google/gemma-4-e2b', 'qwen2.5-7b-instruct:2']);
+    assert.equal(unloadJson.cliFallbackUsed, false);
   } finally {
     await closeServer(directServer.server);
     await closeServer(proxyServer.server);

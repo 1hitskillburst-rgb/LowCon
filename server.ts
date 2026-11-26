@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createLocalLlmProxyRouter } from './server/localLlmProxy.ts';
+import { createLocalLlmProxyRouter, unloadAllLocalModels } from './server/localLlmProxy.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 3000);
@@ -78,9 +78,22 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, HOST, () => {
+  const server = app.listen(PORT, HOST, () => {
     console.log(`LowCon listening on http://${HOST}:${PORT} (${IS_PROD ? 'production' : 'dev'})`);
   });
+
+  let shuttingDown = false;
+  const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const timeout = new Promise((resolve) => setTimeout(resolve, 2000));
+    Promise.race([unloadAllLocalModels().catch(() => {}), timeout]).finally(() => {
+      server.close(() => process.exit(0));
+      setTimeout(() => process.exit(0), 500).unref();
+    });
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
 }
 
 function isDirectEntry(): boolean {
