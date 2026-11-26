@@ -17,6 +17,7 @@ const MAX_MATH_NESTING_DEPTH = 64;
 const MAX_REGEX_MATCHES = 100;
 const MAX_DIFF_PREVIEW_LINES = 24;
 const MAX_DIFF_PREVIEW_CHARS = 1200;
+const MAX_SAVED_NOTE_CONTENT_CHARS = 800;
 
 export type CalculateMode = 'math' | 'json_validate' | 'regex_test' | 'date_diff';
 
@@ -1232,10 +1233,9 @@ function splitReplacementLines(replacement: string): string[] {
     return [];
   }
   const normalized = replacement.replace(/\r\n/g, '\n');
-  const trimmedSingleTrailing =
-    normalized.length > 1 && normalized.endsWith('\n')
-      ? normalized.slice(0, -1)
-      : normalized;
+  const trimmedSingleTrailing = normalized.endsWith('\n')
+    ? normalized.slice(0, -1)
+    : normalized;
   return trimmedSingleTrailing.split('\n');
 }
 
@@ -1882,12 +1882,13 @@ export function executeSaveMemoryNoteTool(
   const sourceReference = trimmedSessionTitle
     ? `Saved via AI tool (${safeTruncateChars(trimmedSessionTitle, 60)})`
     : 'Saved via AI tool';
+  const boundedContent = safeTruncateChars(rawContent, MAX_SAVED_NOTE_CONTENT_CHARS);
 
   const note: MemoryNote = {
     id: `note_${createId().slice(0, 8)}`,
     ...(sessionId ? { sessionId } : {}),
     title: safeTruncateChars(rawTitle, 120),
-    content: rawContent,
+    content: boundedContent,
     sourceReference,
     sourceMessageIds: [],
     isPinned,
@@ -1908,6 +1909,7 @@ export function executeSaveMemoryNoteTool(
       isPinned: note.isPinned,
       userApproved: note.userApproved,
       sourceReference: note.sourceReference,
+      ...(boundedContent !== rawContent ? { truncated: true } : {}),
       message: `Saved memory note '${note.title}'${note.isPinned ? ' (pinned)' : ''}.`,
     }),
   };

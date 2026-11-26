@@ -685,6 +685,44 @@ function stripExistingCspMetaTags(html: string): string {
   );
 }
 
+function hasOnlySafeDocumentPreamble(prefix: string, allowHtmlOpenTag: boolean): boolean {
+  let i = 0;
+  let seenHtmlOpen = false;
+
+  while (i < prefix.length) {
+    if (/\s/.test(prefix[i])) {
+      i += 1;
+      continue;
+    }
+
+    if (prefix.startsWith('<!--', i)) {
+      const closeIdx = prefix.indexOf('-->', i + 4);
+      if (closeIdx === -1) return false;
+      i = closeIdx + 3;
+      continue;
+    }
+
+    if (/^<!doctype\b/i.test(prefix.slice(i))) {
+      const tagEnd = findTagEnd(prefix, i + 9);
+      if (tagEnd === -1) return false;
+      i = tagEnd + 1;
+      continue;
+    }
+
+    if (allowHtmlOpenTag && !seenHtmlOpen && /^<html(?=[\s>])/i.test(prefix.slice(i))) {
+      const tagEnd = findTagEnd(prefix, i + 5);
+      if (tagEnd === -1) return false;
+      seenHtmlOpen = true;
+      i = tagEnd + 1;
+      continue;
+    }
+
+    return false;
+  }
+
+  return true;
+}
+
 /**
  * Wraps or injects a strict Content-Security-Policy <meta> tag into an HTML document
  * or fragment so a sandboxed iframe (`sandbox="allow-scripts"`) can execute inline
@@ -694,13 +732,17 @@ export function buildSandboxedHtmlSrcDoc(htmlContent: string): string {
   const cleaned = stripExistingCspMetaTags(htmlContent).trim();
 
   const headMatch = findTopLevelTagMatch(cleaned, 'head');
-  if (headMatch) {
+  if (headMatch && hasOnlySafeDocumentPreamble(cleaned.slice(0, headMatch.start), true)) {
     return `${cleaned.slice(0, headMatch.end)}\n${CSP_META_TAG}${cleaned.slice(headMatch.end)}`;
   }
 
   const htmlMatch = findTopLevelTagMatch(cleaned, 'html');
-  if (htmlMatch) {
+  if (htmlMatch && hasOnlySafeDocumentPreamble(cleaned.slice(0, htmlMatch.start), false)) {
     return `${cleaned.slice(0, htmlMatch.end)}\n<head>\n<meta charset="utf-8">\n${CSP_META_TAG}\n</head>${cleaned.slice(htmlMatch.end)}`;
+  }
+
+  if (headMatch || htmlMatch) {
+    return `<head>\n<meta charset="utf-8">\n${CSP_META_TAG}\n</head>\n${cleaned}`;
   }
 
   const bodyMatch = findTopLevelTagMatch(cleaned, 'body');

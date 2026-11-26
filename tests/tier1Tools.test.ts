@@ -676,6 +676,21 @@ test('edit_file handles CRLF, replace_all, deletion, ambiguous basenames, and mi
     assert.equal(deleted.artifact.content, 'alpha\r\n');
   }
 
+  // Single newline replacement inserts exactly 1 blank line (not 2)
+  const singleBlank = executeEditFileTool(
+    JSON.stringify({
+      filename: 'win.txt',
+      start_line: 2,
+      end_line: 2,
+      replacement: '\n',
+    }),
+    [crlfFile],
+  );
+  assert.equal(singleBlank.ok, true);
+  if (singleBlank.ok) {
+    assert.equal(singleBlank.artifact.content, 'alpha\r\n\r\nalpha\r\n');
+  }
+
   // Ambiguous basename across distinct directories
   const ambiguousFiles = [
     makeFileArtifact({ id: 'a1', filename: 'src/index.ts', content: 'export const a = 1;' }),
@@ -737,5 +752,14 @@ test('read_attached_chunk and search_memory handle empty files, bounds, and comp
   if (pinnedOnly.ok) {
     assert.equal(pinnedOnly.count, 1);
     assert.ok(pinnedOnly.results[0].content.length <= 320);
+  }
+
+  const longSaved = executeSaveMemoryNoteTool(
+    JSON.stringify({ title: 'Oversized', content: 'x'.repeat(1200), is_pinned: true }),
+    () => 'caps1234',
+  );
+  assert.equal(longSaved.ok, true);
+  if (longSaved.ok) {
+    assert.ok(longSaved.note.content.length <= 800);
   }
 });

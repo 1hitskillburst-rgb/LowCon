@@ -158,6 +158,26 @@ test('buildSandboxedHtmlSrcDoc injects strict CSP meta tag into documents and fr
   const replaced = buildSandboxedHtmlSrcDoc(permissiveDoc);
   assert.equal(replaced.includes("default-src *"), false);
   assert.ok(replaced.includes(SANDBOX_HTML_CSP));
+
+  const precedingImg = '<img src="https://evil.test/px"><head><title>Late</title></head><body>ok</body>';
+  const guardedImg = buildSandboxedHtmlSrcDoc(precedingImg);
+  assert.ok(guardedImg.indexOf(SANDBOX_HTML_CSP) < guardedImg.indexOf('<img src="https://evil.test/px">'));
+
+  const precedingScript =
+    '<script src="https://evil.test/x.js"></script><html><head><title>Late</title></head><body>ok</body></html>';
+  const guardedScript = buildSandboxedHtmlSrcDoc(precedingScript);
+  assert.ok(
+    guardedScript.indexOf(SANDBOX_HTML_CSP) <
+      guardedScript.indexOf('<script src="https://evil.test/x.js">'),
+  );
+
+  const imgInsideHtmlBeforeHead =
+    '<!DOCTYPE html><html><img src="https://evil.test/px"><head><title>Late</title></head><body>ok</body></html>';
+  const guardedInsideHtml = buildSandboxedHtmlSrcDoc(imgInsideHtmlBeforeHead);
+  assert.ok(
+    guardedInsideHtml.indexOf(SANDBOX_HTML_CSP) <
+      guardedInsideHtml.indexOf('<img src="https://evil.test/px">'),
+  );
 });
 
 test('RichArtifactPreview renders markdown, csv, sanitized svg, and sandboxed html iframe safely', () => {
