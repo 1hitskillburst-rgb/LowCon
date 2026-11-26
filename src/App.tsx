@@ -43,6 +43,7 @@ import {
   countLines,
   CREATE_FILE_TOOL_DEFINITION,
   CREATE_FILE_TOOL_NAME,
+  DuplicateFileCodeFilter,
   executeCreateFileTool,
   TOOL_CALL_POLICY_INSTRUCTION,
 } from './core/tools';
@@ -700,16 +701,24 @@ export const App: React.FC = () => {
         thinkingStartedAt !== null
           ? Math.max(100, (thinkingFinishedAt ?? performance.now()) - thinkingStartedAt)
           : undefined;
-      updateAssistantMessage((m) => ({
-        ...m,
-        tokenCount: completion.totalTokens,
-        tokensPerSecond:
-          completion.tokensPerSecond > 0 ? completion.tokensPerSecond : m.tokensPerSecond,
-        stopReason: completion.stopReason,
-        thinkingDurationMs: thinkingDurationMs ?? m.thinkingDurationMs,
-        ...(collectedFiles.length > 0 ? { generatedFiles: [...collectedFiles] } : {}),
-        ...(toolActivityLabels.length > 0 ? { toolActivity: [...toolActivityLabels] } : {}),
-      }));
+      updateAssistantMessage((m) => {
+        const cleaned = m.content.replace(/\n{3,}/g, '\n\n').trim();
+        const fallbackSummary =
+          !cleaned && collectedFiles.length > 0
+            ? `Created ${collectedFiles.map((f) => `\`${f.filename}\``).join(', ')}. Open the file card below to preview, copy, or download.`
+            : cleaned;
+        return {
+          ...m,
+          content: fallbackSummary,
+          tokenCount: completion.totalTokens,
+          tokensPerSecond:
+            completion.tokensPerSecond > 0 ? completion.tokensPerSecond : m.tokensPerSecond,
+          stopReason: completion.stopReason,
+          thinkingDurationMs: thinkingDurationMs ?? m.thinkingDurationMs,
+          ...(collectedFiles.length > 0 ? { generatedFiles: [...collectedFiles] } : {}),
+          ...(toolActivityLabels.length > 0 ? { toolActivity: [...toolActivityLabels] } : {}),
+        };
+      });
       setLiveTokensPerSecond(null);
       setLastTurnInspection(null);
       setGeneratingSessionId((curr) => (curr === targetSessionId ? null : curr));
@@ -790,6 +799,14 @@ export const App: React.FC = () => {
     const runStep = (stepInspection: PromptInspection): Promise<StepOutcome> =>
       new Promise((resolve) => {
         let stepRawText = '';
+        const codeFilter = new DuplicateFileCodeFilter(
+          () => collectedFiles,
+          (filteredText) => {
+            if (!dripStopped && filteredText) {
+              pendingWordQueue += filteredText;
+            }
+          },
+        );
         void controllerRef.current!.startGeneration(
           targetSessionId,
           {
@@ -833,7 +850,7 @@ export const App: React.FC = () => {
                 thinkingFinishedAt = performance.now();
               }
               stepRawText += token;
-              pendingWordQueue += token;
+              codeFilter.push(token);
             },
             onProgress: (progress) => {
               if (dripStopped) return;
@@ -846,6 +863,7 @@ export const App: React.FC = () => {
               }
             },
             onComplete: (totalTokens, stopReason, stats) => {
+              codeFilter.flush();
               resolve({
                 status: 'complete',
                 totalTokens,
@@ -856,7 +874,10 @@ export const App: React.FC = () => {
               });
             },
             onCancelled: () => resolve({ status: 'cancelled' }),
-            onError: (message) => resolve({ status: 'error', message }),
+            onError: (message) => {
+              codeFilter.flush();
+              resolve({ status: 'error', message });
+            },
           },
         );
       });

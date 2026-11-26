@@ -16,10 +16,12 @@ import { createDefaultModels } from '../src/core/storage';
 import {
   CREATE_FILE_TOOL_DEFINITION,
   CREATE_FILE_TOOL_NAME,
+  DuplicateFileCodeFilter,
   executeCreateFileTool,
+  isDuplicateGeneratedFileBlock,
   sanitizeGeneratedFilename,
 } from '../src/core/tools';
-import type { ToolCallRecord } from '../src/core/types';
+import type { GeneratedFileArtifact, ToolCallRecord } from '../src/core/types';
 
 function makeSseStream(chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -254,3 +256,62 @@ test('mock harness calls create_file for file requests and uses inline code bloc
   assert.equal(snippetCalls, undefined);
   assert.ok(snippetText.includes('```rust'));
 });
+
+test('DuplicateFileCodeFilter strips redundant code blocks matching created files while keeping CLI examples', () => {
+  const fileContent = [
+    'use std::fmt;',
+    'struct Node<T> {',
+    '    value: T,',
+    '    next: Option<Box<Node<T>>>,',
+    '}',
+    'impl<T> Node<T> {',
+    '    fn new(value: T) -> Self {',
+    '        Node { value, next: None }',
+    '    }',
+    '    fn len(&self) -> usize {',
+    '        1 + self.next.as_ref().map_or(0, |n| n.len())',
+    '    }',
+    '}',
+  ].join('\n');
+
+  const files: GeneratedFileArtifact[] = [
+    {
+      id: 'f1',
+      filename: 'list.rs',
+      title: 'List',
+      language: 'rust',
+      content: fileContent,
+      createdAt: Date.now(),
+    },
+  ];
+
+  assert.equal(isDuplicateGeneratedFileBlock('rust', fileContent, files), true);
+  assert.equal(isDuplicateGeneratedFileBlock('bash', 'rustc list.rs\n./list', files), false);
+
+  let emitted = '';
+  const filter = new DuplicateFileCodeFilter(
+    () => files,
+    (chunk) => {
+      emitted += chunk;
+    },
+  );
+
+  const responseText = [
+    'I created `list.rs` with recursive node traversal.\n\n',
+    '```rust\n',
+    fileContent,
+    '\n```\n\n',
+    'Run it with:\n\n',
+    '```bash\nrustc list.rs && ./list\n```\n',
+  ].join('');
+
+  for (let i = 0; i < responseText.length; i += 7) {
+    filter.push(responseText.slice(i, i + 7));
+  }
+  filter.flush();
+
+  assert.equal(emitted.includes('struct Node<T>'), false);
+  assert.equal(emitted.includes('I created `list.rs`'), true);
+  assert.equal(emitted.includes('rustc list.rs && ./list'), true);
+});
+
