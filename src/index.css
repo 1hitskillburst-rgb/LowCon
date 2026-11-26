@@ -39,6 +39,10 @@
   --lc-success: #1D7A4E;
   --lc-danger: #D9383A;
   --lc-warn: #B45309;
+  --lc-tps-red: #DC2626;
+  --lc-tps-orange: #EA580C;
+  --lc-tps-yellow: #CA8A04;
+  --lc-tps-green: #16A34A;
 }
 
 @layer base {

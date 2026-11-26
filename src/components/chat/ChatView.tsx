@@ -12,7 +12,9 @@ import {
 } from 'lucide-react';
 import { getPackedTokens } from '../../core/context';
 import { formatNumber, formatRelativeTime } from '../../core/privacy';
+import { getTpsColorVar } from '../../core/theme';
 import type {
+  ChatWidthPreset,
   ContextSegmentKey,
   EffortLevel,
   ModelProfile,
@@ -29,6 +31,13 @@ const EFFORT_OPTIONS: Array<{ id: EffortLevel; label: string }> = [
   { id: 'xhigh', label: 'Extra High' },
 ];
 
+const CHAT_WIDTH_CLASSES: Record<ChatWidthPreset, { outerPad: string; innerMax: string }> = {
+  default: { outerPad: 'px-6', innerMax: 'max-w-[660px]' },
+  medium: { outerPad: 'px-6', innerMax: 'max-w-[840px]' },
+  wide: { outerPad: 'px-6', innerMax: 'max-w-[1060px]' },
+  fill: { outerPad: 'px-2.5', innerMax: 'max-w-none' },
+};
+
 interface ChatViewProps {
   session: Session;
   models: ModelProfile[];
@@ -38,6 +47,7 @@ interface ChatViewProps {
   selectedLmModel: string;
   onSelectLmModel: (modelName: string) => void;
   effortLevel: EffortLevel;
+  chatWidth?: ChatWidthPreset;
   onChangeEffortLevel: (level: EffortLevel) => void;
   backendLabel: string;
   workerStatus: WorkerStatus;
@@ -69,6 +79,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   selectedLmModel,
   onSelectLmModel,
   effortLevel,
+  chatWidth = 'default',
   onChangeEffortLevel,
   backendLabel,
   workerStatus,
@@ -92,6 +103,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
+  const transcriptScrollRef = useRef<HTMLDivElement | null>(null);
+  const shouldAutoScrollRef = useRef(true);
+  const prevMessageCountRef = useRef(session.messages.length);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [savedNoteMsgId, setSavedNoteMsgId] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -99,9 +113,49 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [expandedThinkingIds, setExpandedThinkingIds] = useState<Record<string, boolean>>({});
   const [showModelEffortMenu, setShowModelEffortMenu] = useState(false);
 
+  const widthLayout = CHAT_WIDTH_CLASSES[chatWidth] ?? CHAT_WIDTH_CLASSES.default;
+  const lastMessage = session.messages[session.messages.length - 1];
+  const lastMessageId = lastMessage?.id;
+
   useEffect(() => {
     setSummaryCreatedNotice(false);
-  }, [session.id]);
+    shouldAutoScrollRef.current = true;
+    prevMessageCountRef.current = session.messages.length;
+    const el = transcriptScrollRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [session.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const el = transcriptScrollRef.current;
+    if (!el) return;
+
+    const messageCountIncreased = session.messages.length > prevMessageCountRef.current;
+    prevMessageCountRef.current = session.messages.length;
+
+    if (messageCountIncreased) {
+      shouldAutoScrollRef.current = true;
+    }
+
+    if (isGenerating && shouldAutoScrollRef.current) {
+      el.scrollTop = el.scrollHeight;
+    } else if (messageCountIncreased && shouldAutoScrollRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [
+    isGenerating,
+    session.messages.length,
+    lastMessage?.content,
+    lastMessage?.thinkingContent,
+  ]);
+
+  const handleTranscriptScroll = () => {
+    const el = transcriptScrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    shouldAutoScrollRef.current = distanceFromBottom <= 80;
+  };
 
   useEffect(() => {
     if (!showModelEffortMenu) return;
@@ -126,15 +180,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
     (m) => (m.role === 'user' || m.role === 'assistant') && !m.isError && m.content.trim().length > 0,
   );
 
-  const lastMessageId = session.messages[session.messages.length - 1]?.id;
-
-  const workerStatusText =
+  const workerStatusLabel =
     workerStatus.state === 'loaded'
       ? 'Worker ready'
       : workerStatus.state === 'generating'
-        ? liveTokensPerSecond && liveTokensPerSecond > 0
-          ? `Streaming · ${liveTokensPerSecond.toFixed(1)} tok/s`
-          : 'Streaming'
+        ? 'Streaming'
         : workerStatus.state === 'loading'
           ? 'Loading model'
           : workerStatus.state === 'error'
@@ -191,7 +241,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
               style={{ backgroundColor: workerDotColor }}
               className="h-[7px] w-[7px] rounded-full"
             />
-            <span>{workerStatusText}</span>
+            <span>{workerStatusLabel}</span>
+            {workerStatus.state === 'generating' &&
+              liveTokensPerSecond !== null &&
+              liveTokensPerSecond !== undefined &&
+              liveTokensPerSecond > 0 && (
+                <>
+                  <span>·</span>
+                  <span
+                    data-testid="live-tps-indicator"
+                    style={{ color: getTpsColorVar(liveTokensPerSecond) }}
+                    className="font-semibold tabular-nums"
+                  >
+                    {liveTokensPerSecond.toFixed(1)} tok/s
+                  </span>
+                </>
+              )}
           </div>
 
           {/* Active Backend Badge */}
@@ -220,8 +285,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
       </header>
 
       {/* Scrollable Transcript Column */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto max-w-[660px]">
+      <div
+        ref={transcriptScrollRef}
+        onScroll={handleTranscriptScroll}
+        data-testid="chat-transcript-scroll"
+        className={`min-h-0 flex-1 overflow-y-auto py-5 ${widthLayout.outerPad}`}
+      >
+        <div className={`mx-auto w-full ${widthLayout.innerMax}`}>
           {/* Session Title Header */}
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
@@ -342,9 +412,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       <span className="text-[12px] text-[var(--lc-mute)]">
                         {formatRelativeTime(msg.createdAt)}
                         {msg.modelInfo ? ` · ${msg.modelInfo}` : ''}
-                        {msg.tokensPerSecond && msg.tokensPerSecond > 0
-                          ? ` · ${msg.tokensPerSecond.toFixed(1)} tok/s`
-                          : ''}
+                        {msg.tokensPerSecond && msg.tokensPerSecond > 0 && (
+                          <>
+                            {' · '}
+                            <span
+                              style={{ color: getTpsColorVar(msg.tokensPerSecond) }}
+                              className="font-semibold tabular-nums"
+                            >
+                              {msg.tokensPerSecond.toFixed(1)} tok/s
+                            </span>
+                          </>
+                        )}
                       </span>
                     </div>
 
@@ -499,8 +577,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
       </div>
 
       {/* Bottom Composer Card */}
-      <div className="shrink-0 px-6 pb-4 pt-2">
-        <div className="mx-auto max-w-[660px] rounded-[12px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-4 py-3 text-[var(--lc-surf-ink)] shadow-xs focus-within:border-[var(--lc-accent)]">
+      <div className={`shrink-0 pb-4 pt-2 ${widthLayout.outerPad}`}>
+        <div
+          data-testid="chat-composer-card"
+          className={`mx-auto w-full ${widthLayout.innerMax} rounded-[12px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-4 py-3 text-[var(--lc-surf-ink)] shadow-xs focus-within:border-[var(--lc-accent)]`}
+        >
           {attachedFile && (
             <div className="mb-2 flex items-center justify-between rounded-[6px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-2.5 py-1 text-[12px] text-[var(--lc-side-ink)]">
               <span className="truncate">

@@ -8,6 +8,7 @@ import {
   getEffectiveContextLimit,
   type AppSettings,
   type BackendType,
+  type ChatWidthPreset,
   type DiagnosticEntry,
   type DiagnosticLevel,
   type EffortLevel,
@@ -37,6 +38,13 @@ const CONTEXT_PRESETS = [
   { label: '64K', value: 65536 },
   { label: '128K', value: 131072 },
 ] as const;
+
+const CHAT_WIDTH_OPTIONS: Array<{ id: ChatWidthPreset; label: string; hint: string }> = [
+  { id: 'default', label: 'Standard', hint: '660px' },
+  { id: 'medium', label: 'Medium', hint: '840px' },
+  { id: 'wide', label: 'Wide', hint: '1060px' },
+  { id: 'fill', label: 'Fill', hint: 'Edge to edge' },
+];
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   settings,
@@ -208,6 +216,53 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   />
                 </label>
               ))}
+            </div>
+
+            <div className="mt-4 border-t border-[var(--lc-line-soft)] pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-[13px] font-semibold text-[var(--lc-surf-ink)]">
+                    Chat &amp; Composer Width
+                  </div>
+                  <p className="text-[12px] text-[var(--lc-surf-mute)]">
+                    Choose how wide the chat messages and input box stretch between the left
+                    sidebar and right token panel.
+                  </p>
+                </div>
+              </div>
+
+              <div
+                className="mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-4"
+                role="group"
+                aria-label="Chat width presets"
+              >
+                {CHAT_WIDTH_OPTIONS.map((opt) => {
+                  const activeWidth = settings.chatWidth ?? 'default';
+                  const isActive = activeWidth === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      data-testid={`chat-width-${opt.id}`}
+                      onClick={() => onUpdateSettings({ chatWidth: opt.id })}
+                      className={`rounded-[6px] border px-3 py-2 text-left transition-colors ${
+                        isActive
+                          ? 'border-[var(--lc-accent)] bg-[var(--lc-accent)] text-[var(--lc-accent-contrast)]'
+                          : 'border-[var(--lc-surf-line)] bg-[var(--lc-surface)] text-[var(--lc-surf-ink)] hover:bg-[var(--lc-surf-hover)]'
+                      }`}
+                    >
+                      <div className="text-[12.5px] font-semibold">{opt.label}</div>
+                      <div
+                        className={`text-[11px] ${
+                          isActive ? 'opacity-85' : 'text-[var(--lc-surf-mute)]'
+                        }`}
+                      >
+                        {opt.hint}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </section>
 

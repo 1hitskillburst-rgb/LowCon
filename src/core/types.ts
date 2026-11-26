@@ -10,6 +10,8 @@ export type DiagnosticLevel = 'disabled' | 'minimal_redacted' | 'debug_redacted'
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh';
 
+export type ChatWidthPreset = 'default' | 'medium' | 'wide' | 'fill';
+
 export type PromptEffortPrompts = Record<EffortLevel, string>;
 
 export type ContextSegmentKey =
@@ -179,6 +181,7 @@ export interface AppSettings {
   connectionStatus: string;
   storageNamespace: string;
   theme?: ThemeSettings;
+  chatWidth?: ChatWidthPreset;
   effortLevel: EffortLevel;
   promptEffortEnabled: boolean;
   promptEffortPrompts: PromptEffortPrompts;

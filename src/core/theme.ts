@@ -182,9 +182,25 @@ export function computeThemeCssVariables(rawTheme?: Partial<ThemeSettings>): {
     '--lc-success': bgDark ? '#4ADE80' : '#1D7A4E',
     '--lc-danger': bgDark ? '#F87171' : '#D9383A',
     '--lc-warn': bgDark ? '#FBBF24' : '#B45309',
+    '--lc-tps-red': bgDark ? '#F87171' : '#DC2626',
+    '--lc-tps-orange': bgDark ? '#FB923C' : '#EA580C',
+    '--lc-tps-yellow': bgDark ? '#FACC15' : '#CA8A04',
+    '--lc-tps-green': bgDark ? '#4ADE80' : '#16A34A',
   };
 
   return { mode, vars };
+}
+
+export function getTpsTier(tps: number): 'red' | 'orange' | 'yellow' | 'green' {
+  if (tps < 10) return 'red';
+  if (tps < 25) return 'orange';
+  if (tps < 50) return 'yellow';
+  return 'green';
+}
+
+export function getTpsColorVar(tps: number): string {
+  const tier = getTpsTier(tps);
+  return `var(--lc-tps-${tier})`;
 }
 
 export function applyThemeToDocument(theme?: Partial<ThemeSettings>): void {

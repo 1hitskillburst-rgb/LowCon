@@ -1215,6 +1215,7 @@ export const App: React.FC = () => {
                 selectedLmModel={workspace.settings.selectedLmModel}
                 onSelectLmModel={handleSelectLmModel}
                 effortLevel={workspace.settings.effortLevel}
+                chatWidth={workspace.settings.chatWidth ?? 'default'}
                 onChangeEffortLevel={(level) => {
                   setLastTurnInspection(null);
                   setWorkspace((prev) => ({

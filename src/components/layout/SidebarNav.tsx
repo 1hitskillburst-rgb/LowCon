@@ -72,17 +72,17 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
               type="button"
               onClick={() => onSelectTab(item.id)}
               aria-current={isSelected ? 'page' : undefined}
-              className={`flex h-[34px] w-full items-center justify-between rounded-[6px] px-2.5 text-left text-[14px] ${
+              className={`flex h-[34px] w-full items-center justify-between rounded-[6px] border px-2.5 text-left text-[14px] transition-colors ${
                 isSelected
-                  ? 'bg-[var(--lc-active-pill-bg)] font-medium text-[var(--lc-active-pill-fg)]'
-                  : 'bg-transparent text-[var(--lc-side-ink2)] hover:bg-[var(--lc-hover)] hover:text-[var(--lc-side-ink)]'
+                  ? 'border-[var(--lc-active-pill-bg)] bg-transparent font-semibold text-[var(--lc-side-ink)]'
+                  : 'border-transparent bg-transparent text-[var(--lc-side-ink2)] hover:bg-[var(--lc-hover)] hover:text-[var(--lc-side-ink)]'
               }`}
             >
               <span>{item.label}</span>
               {typeof item.count === 'number' && (
                 <span
                   className={`text-[12.5px] ${
-                    isSelected ? 'opacity-75' : 'text-[var(--lc-side-mute)]'
+                    isSelected ? 'text-[var(--lc-side-ink2)]' : 'text-[var(--lc-side-mute)]'
                   }`}
                 >
                   {item.count}

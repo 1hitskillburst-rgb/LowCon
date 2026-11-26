@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   computeThemeCssVariables,
   createDefaultTheme,
+  getTpsColorVar,
+  getTpsTier,
   isDarkColor,
   THEME_PRESETS,
 } from '../src/core/theme.ts';
@@ -43,4 +45,27 @@ test('custom theme normalizes hex values and falls back cleanly on invalid input
   assert.equal(custom.vars['--lc-side'], '#1C1F26');
   assert.equal(custom.vars['--lc-accent'], '#FF5500');
   assert.equal(custom.mode, 'dark');
+});
+
+test('tokens per second tiers map slow->red, orange, yellow, fast->green', () => {
+  assert.equal(getTpsTier(0.5), 'red');
+  assert.equal(getTpsTier(9.9), 'red');
+  assert.equal(getTpsTier(10), 'orange');
+  assert.equal(getTpsTier(24.9), 'orange');
+  assert.equal(getTpsTier(25), 'yellow');
+  assert.equal(getTpsTier(49.9), 'yellow');
+  assert.equal(getTpsTier(50), 'green');
+  assert.equal(getTpsTier(140), 'green');
+
+  assert.equal(getTpsColorVar(4), 'var(--lc-tps-red)');
+  assert.equal(getTpsColorVar(18), 'var(--lc-tps-orange)');
+  assert.equal(getTpsColorVar(35), 'var(--lc-tps-yellow)');
+  assert.equal(getTpsColorVar(85), 'var(--lc-tps-green)');
+
+  const lightVars = computeThemeCssVariables(THEME_PRESETS[0].colors).vars;
+  const darkVars = computeThemeCssVariables(THEME_PRESETS[2].colors).vars;
+  for (const key of ['--lc-tps-red', '--lc-tps-orange', '--lc-tps-yellow', '--lc-tps-green']) {
+    assert.ok(lightVars[key]);
+    assert.ok(darkVars[key]);
+  }
 });

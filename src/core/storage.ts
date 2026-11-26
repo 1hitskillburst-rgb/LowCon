@@ -44,6 +44,7 @@ export function createDefaultSettings(): AppSettings {
     connectionStatus: 'Not tested yet',
     storageNamespace: 'localStorage://lowcon.workspace.v1 (Encrypted on Vault Lock)',
     theme: createDefaultTheme(),
+    chatWidth: 'default',
     effortLevel: 'medium',
     promptEffortEnabled: false,
     promptEffortPrompts: { ...DEFAULT_PROMPT_EFFORT_PROMPTS },
