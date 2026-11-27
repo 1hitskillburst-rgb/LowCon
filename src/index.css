@@ -59,11 +59,11 @@
   --lc-tps-orange: #EA580C;
   --lc-tps-yellow: #CA8A04;
   --lc-tps-green: #16A34A;
-  --lc-contrib-0: #EBEDF0;
-  --lc-contrib-1: #9BE9A8;
-  --lc-contrib-2: #40C463;
-  --lc-contrib-3: #30A14E;
-  --lc-contrib-4: #216E39;
+  --lc-contrib-0: #EAECEF;
+  --lc-contrib-1: #C6E2FF;
+  --lc-contrib-2: #7AB8FF;
+  --lc-contrib-3: #2B85F5;
+  --lc-contrib-4: #0B63E5;
 }
 
 @layer base {

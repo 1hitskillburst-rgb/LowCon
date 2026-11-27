@@ -178,7 +178,7 @@ export const EDIT_FILE_TOOL_DEFINITION: ToolDefinition = {
   function: {
     name: EDIT_FILE_TOOL_NAME,
     description:
-      'Patch an existing file in place. Choose ONE style per edit: exact-text {filename, old_text, new_text} (preferred) OR line-range {filename, start_line, end_line, replacement}, or pass multiple edits in edits[]. Do NOT include unused mode fields.',
+      'Patch an existing file (attached, Files-tab, or generated). Preferred: {filename, old_text, new_text} (never include "12: " line-number prefixes from read_attached_chunk). Also supports {filename, start_line, end_line, replacement}, multiple edits in edits[], or full-file {filename, content}.',
     parameters: {
       type: 'object',
       properties: {
@@ -195,7 +195,6 @@ export const EDIT_FILE_TOOL_DEFINITION: ToolDefinition = {
               new_text: { type: 'string' },
               replace_all: { type: 'boolean' },
             },
-            additionalProperties: false,
           },
         },
         start_line: { type: 'integer', minimum: 1 },
@@ -206,7 +205,6 @@ export const EDIT_FILE_TOOL_DEFINITION: ToolDefinition = {
         replace_all: { type: 'boolean' },
       },
       required: ['filename'],
-      additionalProperties: false,
     },
   },
 };
@@ -364,7 +362,8 @@ export function selectToolsForPromptBudget(
   // On ultra-low ~2K context windows, keep a lean contextual tool subset so
   // pinned notes + indexed attachments + active tools always fit inside promptBudget.
   const hasReadable = options.hasAttachments || Boolean(options.hasWorkspaceFiles);
-  const hasEditable = options.hasGeneratedFiles || Boolean(options.hasWorkspaceFiles);
+  const hasEditable =
+    options.hasAttachments || options.hasGeneratedFiles || Boolean(options.hasWorkspaceFiles);
   if (hasReadable && hasEditable) {
     return filterEditable([READ_ATTACHED_CHUNK_TOOL_DEFINITION, EDIT_FILE_TOOL_DEFINITION]);
   }
@@ -1415,9 +1414,148 @@ interface ExactTextEditOp {
   oldText: string;
   newText: string;
   replaceAll: boolean;
+  hintStartLine?: number;
+  hintEndLine?: number;
 }
 
-type ParsedEditOp = LineRangeEditOp | ExactTextEditOp;
+interface FullContentEditOp {
+  kind: 'full_content';
+  content: string;
+}
+
+interface UnifiedPatchEditOp {
+  kind: 'unified_patch';
+  patch: string;
+}
+
+type ParsedEditOp =
+  | LineRangeEditOp
+  | ExactTextEditOp
+  | FullContentEditOp
+  | UnifiedPatchEditOp;
+
+function parsePositiveIntLike(val: unknown): number | null {
+  if (typeof val === 'number' && Number.isInteger(val) && val >= 1) {
+    return val;
+  }
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const n = Number(trimmed);
+      if (Number.isSafeInteger(n) && n >= 1) {
+        return n;
+      }
+    }
+  }
+  return null;
+}
+
+function parseBooleanLike(val: unknown): boolean | null {
+  if (typeof val === 'boolean') return val;
+  if (typeof val === 'string') {
+    const lower = val.trim().toLowerCase();
+    if (lower === 'true') return true;
+    if (lower === 'false') return false;
+  }
+  return null;
+}
+
+function pickFirstStringField(
+  rec: Record<string, unknown>,
+  keys: readonly string[],
+): { key: string; value: string } | null {
+  for (const key of keys) {
+    const v = rec[key];
+    if (typeof v === 'string') {
+      return { key, value: v };
+    }
+  }
+  return null;
+}
+
+function pickFirstNonEmptyStringField(
+  rec: Record<string, unknown>,
+  keys: readonly string[],
+): { key: string; value: string } | null {
+  for (const key of keys) {
+    const v = rec[key];
+    if (typeof v === 'string' && v.length > 0) {
+      return { key, value: v };
+    }
+  }
+  return null;
+}
+
+function pickFirstDefinedField(
+  rec: Record<string, unknown>,
+  keys: readonly string[],
+): { key: string; value: unknown } | null {
+  for (const key of keys) {
+    if (rec[key] !== undefined && rec[key] !== null) {
+      return { key, value: rec[key] };
+    }
+  }
+  return null;
+}
+
+const FILENAME_ALIAS_KEYS = [
+  'filename',
+  'file',
+  'file_path',
+  'filepath',
+  'filePath',
+  'path',
+  'target_file',
+  'targetFile',
+  'name',
+] as const;
+
+const OLD_TEXT_ALIAS_KEYS = [
+  'old_text',
+  'old_string',
+  'oldText',
+  'oldString',
+  'search',
+  'find',
+  'target',
+  'original',
+  'original_text',
+  'before',
+] as const;
+
+const NEW_TEXT_ALIAS_KEYS = [
+  'new_text',
+  'new_string',
+  'newText',
+  'newString',
+  'replace',
+  'replace_with',
+  'updated',
+  'updated_text',
+  'after',
+] as const;
+
+const REPLACEMENT_ALIAS_KEYS = ['replacement', 'text', 'code', 'new_content', 'content'] as const;
+
+const START_LINE_ALIAS_KEYS = [
+  'start_line',
+  'startLine',
+  'from_line',
+  'fromLine',
+  'line',
+  'line_number',
+  'lineNumber',
+] as const;
+
+const END_LINE_ALIAS_KEYS = ['end_line', 'endLine', 'to_line', 'toLine'] as const;
+
+const REPLACE_ALL_ALIAS_KEYS = ['replace_all', 'replaceAll', 'all'] as const;
+
+export function extractEditTargetFilename(args: Record<string, unknown> | null): string {
+  if (!args) return '';
+  const hit = pickFirstNonEmptyStringField(args, FILENAME_ALIAS_KEYS);
+  return hit ? hit.value.trim() : '';
+}
 
 function parseSingleEditOp(raw: unknown, indexLabel: string): ParsedEditOp | string {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -1425,83 +1563,121 @@ function parseSingleEditOp(raw: unknown, indexLabel: string): ParsedEditOp | str
   }
   const rec = raw as Record<string, unknown>;
 
-  const hasNonEmptyString = (val: unknown): val is string =>
-    typeof val === 'string' && val.length > 0;
-  const hasAnyString = (val: unknown): val is string => typeof val === 'string';
-  const hasPositiveInt = (val: unknown): val is number =>
-    typeof val === 'number' && Number.isInteger(val) && val >= 1;
+  const oldTextHit = pickFirstNonEmptyStringField(rec, OLD_TEXT_ALIAS_KEYS);
+  const newTextHit = pickFirstStringField(rec, NEW_TEXT_ALIAS_KEYS);
+  const replacementHit = pickFirstStringField(rec, REPLACEMENT_ALIAS_KEYS);
+  const startLineField = pickFirstDefinedField(rec, START_LINE_ALIAS_KEYS);
+  const endLineField = pickFirstDefinedField(rec, END_LINE_ALIAS_KEYS);
+  const parsedStartLine = startLineField ? parsePositiveIntLike(startLineField.value) : null;
+  const parsedEndLine = endLineField ? parsePositiveIntLike(endLineField.value) : null;
 
-  // Ignore null/undefined schema-filler fields; also tolerate empty string / 0 defaults
-  // when the other mode is populated with real values.
-  const hasRealOldText = hasNonEmptyString(rec.old_text);
-  const hasRealNewText = hasNonEmptyString(rec.new_text);
-  const hasRealReplacement = hasNonEmptyString(rec.replacement);
-  const hasRealLineStart = hasPositiveInt(rec.start_line);
-
-  // 1. Exact-text mode (preferred when old_text is non-empty).
-  // Tolerates null/empty/default line-range fields or start_line/end_line location hints
-  // as long as a conflicting non-empty `replacement` wasn't ALSO given alongside `new_text`.
-  if (hasRealOldText) {
-    if (hasAnyString(rec.new_text) && hasRealReplacement && rec.new_text !== rec.replacement) {
-      return `${indexLabel} has both "new_text" and "replacement". Pass ONLY {"old_text": "...", "new_text": "..."} (without start_line/end_line/replacement).`;
+  // 1. Exact-text mode (preferred when old_text / alias is non-empty).
+  // Tolerates null/empty/default line-range fields and uses start_line/end_line as
+  // location hints to disambiguate multiple matches.
+  if (oldTextHit) {
+    const hasExplicitNewText = newTextHit !== null;
+    const hasNonEmptyReplacement =
+      replacementHit !== null &&
+      replacementHit.key === 'replacement' &&
+      replacementHit.value.length > 0;
+    if (
+      hasExplicitNewText &&
+      hasNonEmptyReplacement &&
+      newTextHit.value !== replacementHit.value
+    ) {
+      return `${indexLabel} has both "new_text" and "replacement". Pass ONLY {"old_text": "...", "new_text": "..."}.`;
     }
-    const targetNewText = hasAnyString(rec.new_text)
-      ? rec.new_text
-      : hasAnyString(rec.replacement)
-        ? rec.replacement
+    const targetNewText = hasExplicitNewText
+      ? newTextHit.value
+      : replacementHit !== null
+        ? replacementHit.value
         : null;
     if (targetNewText === null) {
       return `${indexLabel} requires a string "new_text" field alongside "old_text".`;
     }
-    if (
-      rec.replace_all !== undefined &&
-      rec.replace_all !== null &&
-      typeof rec.replace_all !== 'boolean'
-    ) {
-      return `${indexLabel} optional "replace_all" must be a boolean.`;
+
+    const replaceAllField = pickFirstDefinedField(rec, REPLACE_ALL_ALIAS_KEYS);
+    let replaceAll = false;
+    if (replaceAllField !== null) {
+      const parsedBool = parseBooleanLike(replaceAllField.value);
+      if (parsedBool === null) {
+        return `${indexLabel} optional "replace_all" must be a boolean.`;
+      }
+      replaceAll = parsedBool;
     }
+
     return {
       kind: 'exact_text',
-      oldText: rec.old_text as string,
+      oldText: oldTextHit.value,
       newText: targetNewText,
-      replaceAll: rec.replace_all === true,
+      replaceAll,
+      ...(parsedStartLine ? { hintStartLine: parsedStartLine } : {}),
+      ...(parsedEndLine ? { hintEndLine: parsedEndLine } : {}),
     };
   }
 
   // 2. Line-range mode (start_line provided and old_text is absent/empty)
-  if (hasRealLineStart || rec.start_line !== undefined || rec.end_line !== undefined || hasRealReplacement) {
-    if (hasRealNewText && !hasRealReplacement && !hasRealLineStart) {
+  if (
+    parsedStartLine !== null ||
+    startLineField !== null ||
+    endLineField !== null ||
+    (replacementHit !== null && replacementHit.key === 'replacement' && replacementHit.value.length > 0)
+  ) {
+    if (
+      newTextHit !== null &&
+      newTextHit.value.length > 0 &&
+      !(replacementHit !== null && replacementHit.value.length > 0) &&
+      parsedStartLine === null
+    ) {
       return `${indexLabel} provided "new_text" without a non-empty "old_text". Example: {"filename": "...", "old_text": "...", "new_text": "..."}.`;
     }
-    if (!hasRealLineStart) {
+    if (parsedStartLine === null) {
       return `${indexLabel} requires a positive integer "start_line" (or non-empty "old_text" + "new_text").`;
     }
-    const startLine = rec.start_line as number;
-    const rawEnd = rec.end_line === undefined || rec.end_line === null ? startLine : rec.end_line;
-    if (typeof rawEnd !== 'number' || !Number.isInteger(rawEnd) || rawEnd < startLine) {
-      return `${indexLabel} "end_line" must be an integer >= start_line (${startLine}).`;
+    let endLine = parsedStartLine;
+    if (endLineField !== null) {
+      if (parsedEndLine === null || parsedEndLine < parsedStartLine) {
+        return `${indexLabel} "end_line" must be an integer >= start_line (${parsedStartLine}).`;
+      }
+      endLine = parsedEndLine;
     }
-    const replacementStr = hasAnyString(rec.replacement)
-      ? rec.replacement
-      : hasAnyString(rec.new_text)
-        ? rec.new_text
-        : null;
+    const replacementStr =
+      replacementHit !== null
+        ? replacementHit.value
+        : newTextHit !== null
+          ? newTextHit.value
+          : null;
     if (replacementStr === null) {
       return `${indexLabel} requires a string "replacement" field alongside "start_line".`;
     }
     return {
       kind: 'line_range',
-      startLine,
-      endLine: rawEnd,
+      startLine: parsedStartLine,
+      endLine,
       replacement: replacementStr,
     };
   }
 
-  if (rec.old_text !== undefined || rec.new_text !== undefined) {
+  // 3. Unified diff / patch string fallback (e.g. { filename, patch: "@@ ... @@\n-old\n+new" })
+  const patchHit = pickFirstNonEmptyStringField(rec, ['patch', 'diff', 'unified_diff']);
+  if (patchHit) {
+    return { kind: 'unified_patch', patch: patchHit.value };
+  }
+
+  // 4. Full-file content replacement fallback (e.g. { filename, content: "..." })
+  const fullContentHit = pickFirstStringField(rec, ['content', 'new_content', 'full_content']);
+  if (fullContentHit && indexLabel === 'edit_file') {
+    return { kind: 'full_content', content: fullContentHit.value };
+  }
+
+  if (
+    pickFirstDefinedField(rec, OLD_TEXT_ALIAS_KEYS) !== null ||
+    pickFirstDefinedField(rec, NEW_TEXT_ALIAS_KEYS) !== null
+  ) {
     return `${indexLabel} requires a non-empty string "old_text" and string "new_text". Example: {"old_text": "old", "new_text": "new"}.`;
   }
 
-  return `${indexLabel} must specify either {"old_text": "...", "new_text": "..."} OR {"start_line": 1, "end_line": 1, "replacement": "..."}.`;
+  return `${indexLabel} must specify {"old_text": "...", "new_text": "..."} OR {"start_line": 1, "end_line": 1, "replacement": "..."}.`;
 }
 
 function splitReplacementLines(replacement: string): string[] {
@@ -1513,18 +1689,6 @@ function splitReplacementLines(replacement: string): string[] {
     ? normalized.slice(0, -1)
     : normalized;
   return trimmedSingleTrailing.split('\n');
-}
-
-function countOccurrences(haystack: string, needle: string): number {
-  let count = 0;
-  let pos = 0;
-  while (true) {
-    const idx = haystack.indexOf(needle, pos);
-    if (idx === -1) break;
-    count += 1;
-    pos = idx + needle.length;
-  }
-  return count;
 }
 
 interface DiffLineOp {
@@ -1698,6 +1862,402 @@ function makeEditFileError(error: string): EditFileToolResult {
   };
 }
 
+/**
+ * Strips `read_attached_chunk` line-number prefixes like `12: code` or `  12: code`
+ * when EVERY non-empty line in a block carries a plausible numeric prefix (sequential
+ * for multi-line blocks, or matching a given expected start line).
+ */
+function stripReadChunkLineNumberPrefixes(
+  text: string,
+  expectedStartLine?: number,
+): { stripped: string; didStrip: boolean; firstLineNum?: number } {
+  const normalized = text.replace(/\r\n/g, '\n');
+  const lines = normalized.split('\n');
+  const nonEmptyEntries: Array<{ idx: number; lineNum: number; rest: string }> = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === '') continue;
+    const m = /^\s*(\d+):\s?(.*)$/.exec(line);
+    if (!m) {
+      return { stripped: text, didStrip: false };
+    }
+    const lineNum = Number(m[1]);
+    if (!Number.isSafeInteger(lineNum) || lineNum < 1) {
+      return { stripped: text, didStrip: false };
+    }
+    nonEmptyEntries.push({ idx: i, lineNum, rest: m[2] });
+  }
+
+  if (nonEmptyEntries.length === 0) {
+    return { stripped: text, didStrip: false };
+  }
+
+  const firstNum = nonEmptyEntries[0].lineNum;
+  if (expectedStartLine !== undefined && firstNum !== expectedStartLine) {
+    return { stripped: text, didStrip: false };
+  }
+
+  // For multi-line blocks, verify line numbers are strictly increasing and match line offsets
+  if (nonEmptyEntries.length >= 2) {
+    for (let k = 1; k < nonEmptyEntries.length; k++) {
+      const prev = nonEmptyEntries[k - 1];
+      const curr = nonEmptyEntries[k];
+      if (curr.lineNum <= prev.lineNum || curr.lineNum - prev.lineNum > curr.idx - prev.idx + 1) {
+        return { stripped: text, didStrip: false };
+      }
+    }
+  } else if (expectedStartLine === undefined) {
+    // Single line: only treat as a line-number prefix if it's clearly "12: ..." (not e.g. JSON/YAML `"12":` or `8080:`)
+    if (!/^\s*\d+:\s/.test(lines[nonEmptyEntries[0].idx])) {
+      return { stripped: text, didStrip: false };
+    }
+  }
+
+  const outLines = [...lines];
+  for (const entry of nonEmptyEntries) {
+    outLines[entry.idx] = entry.rest;
+  }
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  return {
+    stripped: outLines.join(eol),
+    didStrip: true,
+    firstLineNum: firstNum,
+  };
+}
+
+interface TextMatchSpan {
+  start: number;
+  end: number;
+  lineNumber: number; // 1-indexed
+  indentDelta?: string;
+  removeIndentCols?: number;
+}
+
+function lineNumberAtOffset(text: string, offset: number): number {
+  let line = 1;
+  for (let i = 0; i < offset && i < text.length; i++) {
+    if (text[i] === '\n') line += 1;
+  }
+  return line;
+}
+
+function findExactSpans(haystack: string, needle: string): TextMatchSpan[] {
+  const spans: TextMatchSpan[] = [];
+  if (!needle) return spans;
+  let pos = 0;
+  while (true) {
+    const idx = haystack.indexOf(needle, pos);
+    if (idx === -1) break;
+    spans.push({
+      start: idx,
+      end: idx + needle.length,
+      lineNumber: lineNumberAtOffset(haystack, idx),
+    });
+    pos = idx + needle.length;
+  }
+  return spans;
+}
+
+function computeLineOffsets(text: string): Array<{ start: number; end: number; raw: string }> {
+  const result: Array<{ start: number; end: number; raw: string }> = [];
+  let start = 0;
+  for (let i = 0; i <= text.length; i++) {
+    if (i === text.length || text[i] === '\n') {
+      const endWithoutNl = i > start && text[i - 1] === '\r' ? i - 1 : i;
+      result.push({
+        start,
+        end: endWithoutNl,
+        raw: text.slice(start, endWithoutNl),
+      });
+      start = i + 1;
+    }
+  }
+  // Drop trailing synthetic empty entry when file ends with \n
+  if (text.endsWith('\n') && result.length > 0 && result[result.length - 1].raw === '') {
+    result.pop();
+  }
+  return result;
+}
+
+function getLeadingWhitespace(line: string): string {
+  const m = /^[ \t]*/.exec(line);
+  return m ? m[0] : '';
+}
+
+/**
+ * Matches a multi-line (or single-line) needle against file lines with normalized
+ * trailing whitespace or normalized leading indentation.
+ */
+function findLineNormalizedSpans(
+  haystack: string,
+  needle: string,
+  mode: 'trim_end' | 'trim_both',
+): TextMatchSpan[] {
+  const needleNorm = needle.replace(/\r\n/g, '\n');
+  const hadTrailingNl = needleNorm.endsWith('\n');
+  const rawNeedleLines = (hadTrailingNl ? needleNorm.slice(0, -1) : needleNorm).split('\n');
+  if (rawNeedleLines.length === 0) return [];
+
+  const fileLines = computeLineOffsets(haystack);
+  if (fileLines.length < rawNeedleLines.length) return [];
+
+  const normFn = (s: string) =>
+    mode === 'trim_end' ? s.replace(/[ \t]+$/, '') : s.trim();
+
+  const normNeedle = rawNeedleLines.map(normFn);
+  // Avoid matching purely blank lines in trim_both mode
+  if (mode === 'trim_both' && normNeedle.every((l) => l === '')) {
+    return [];
+  }
+
+  const spans: TextMatchSpan[] = [];
+  const winLen = normNeedle.length;
+
+  for (let i = 0; i <= fileLines.length - winLen; i++) {
+    let matched = true;
+    for (let j = 0; j < winLen; j++) {
+      if (normFn(fileLines[i + j].raw) !== normNeedle[j]) {
+        matched = false;
+        break;
+      }
+    }
+    if (!matched) continue;
+
+    const firstFileLine = fileLines[i];
+    const lastFileLine = fileLines[i + winLen - 1];
+    let endPos = lastFileLine.end;
+    if (hadTrailingNl) {
+      if (haystack.slice(endPos, endPos + 2) === '\r\n') endPos += 2;
+      else if (haystack[endPos] === '\n') endPos += 1;
+    }
+
+    let indentDelta: string | undefined;
+    let removeIndentCols: number | undefined;
+    if (mode === 'trim_both') {
+      // Compute indentation adjustment from the first non-empty line in the match
+      const firstNonEmptyIdx = rawNeedleLines.findIndex((l) => l.trim().length > 0);
+      if (firstNonEmptyIdx !== -1) {
+        const needleIndent = getLeadingWhitespace(rawNeedleLines[firstNonEmptyIdx]);
+        const fileIndent = getLeadingWhitespace(fileLines[i + firstNonEmptyIdx].raw);
+        if (fileIndent.length > needleIndent.length && fileIndent.endsWith(needleIndent)) {
+          indentDelta = fileIndent.slice(0, fileIndent.length - needleIndent.length);
+        } else if (needleIndent.length > fileIndent.length && needleIndent.endsWith(fileIndent)) {
+          removeIndentCols = needleIndent.length - fileIndent.length;
+        } else if (fileIndent !== needleIndent) {
+          // Different indent chars (e.g. tabs vs spaces): replace needleIndent prefix with fileIndent
+          removeIndentCols = needleIndent.length;
+          indentDelta = fileIndent;
+        }
+      }
+    }
+
+    spans.push({
+      start: firstFileLine.start,
+      end: endPos,
+      lineNumber: i + 1,
+      ...(indentDelta ? { indentDelta } : {}),
+      ...(removeIndentCols ? { removeIndentCols } : {}),
+    });
+  }
+
+  return spans;
+}
+
+function adjustReplacementIndentation(
+  replacement: string,
+  span: TextMatchSpan,
+  eol: '\r\n' | '\n',
+): string {
+  const normalized = replacement.replace(/\r?\n/g, '\n');
+  const adjusted =
+    !span.indentDelta && !span.removeIndentCols
+      ? normalized
+      : normalized
+          .split('\n')
+          .map((line) => {
+            if (line.trim() === '') return line;
+            let next = line;
+            if (span.removeIndentCols && span.removeIndentCols > 0) {
+              const leading = getLeadingWhitespace(next);
+              const cut = Math.min(leading.length, span.removeIndentCols);
+              next = next.slice(cut);
+            }
+            if (span.indentDelta) {
+              next = span.indentDelta + next;
+            }
+            return next;
+          })
+          .join('\n');
+  return eol === '\r\n' ? adjusted.replace(/\n/g, '\r\n') : adjusted;
+}
+
+/**
+ * Finds the closest matching line window in a file when `old_text` is not found,
+ * returning a compact 1-indexed numbered preview so the LLM can self-correct on Round 2.
+ */
+function buildClosestMatchHint(content: string, oldText: string): string {
+  const { lines } = splitFileLines(content);
+  if (lines.length === 0) return ' (File is currently empty.)';
+
+  const needleLines = oldText
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const tokens = new Set(
+    needleLines
+      .join(' ')
+      .toLowerCase()
+      .split(/[^a-z0-9_]+/)
+      .filter((t) => t.length >= 2),
+  );
+
+  let bestLineIdx = 0;
+  let bestScore = -1;
+  if (tokens.size > 0) {
+    for (let i = 0; i < lines.length; i++) {
+      const lowerLine = lines[i].toLowerCase();
+      let score = 0;
+      for (const tok of tokens) {
+        if (lowerLine.includes(tok)) score += tok.length;
+      }
+      // Bonus for exact trimmed first-line match
+      if (needleLines[0] && lines[i].trim() === needleLines[0]) {
+        score += 100;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestLineIdx = i;
+      }
+    }
+  }
+
+  const windowRadius = 3;
+  const startIdx = bestScore > 0 ? Math.max(0, bestLineIdx - 1) : 0;
+  const endIdx = Math.min(lines.length, startIdx + Math.max(6, needleLines.length + windowRadius));
+  const snippet = lines
+    .slice(startIdx, endIdx)
+    .map((line, offset) => `${startIdx + offset + 1}: ${safeTruncateChars(line, 120)}`)
+    .join('\n');
+
+  return `\nClosest lines in file (do NOT include "N: " line-number prefixes in old_text):\n${snippet}`;
+}
+
+/**
+ * Applies a simple unified diff patch (`@@ -oldStart,oldCount +newStart,newCount @@` or `-`/`+` hunk)
+ * to file content.
+ */
+function applyUnifiedDiffPatch(
+  content: string,
+  rawPatch: string,
+): { ok: true; content: string } | { ok: false; error: string } {
+  const { lines, hasTrailingNewline, eol } = splitFileLines(content);
+  const patchLines = rawPatch.replace(/\r\n/g, '\n').split('\n');
+
+  interface Hunk {
+    oldStart?: number;
+    entries: Array<{ op: ' ' | '-' | '+'; text: string }>;
+  }
+
+  const hunks: Hunk[] = [];
+  let current: Hunk | null = null;
+
+  for (const rawLine of patchLines) {
+    if (rawLine.startsWith('--- ') || rawLine.startsWith('+++ ') || rawLine.startsWith('diff ')) {
+      continue;
+    }
+    const header = /^@@\s*-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s*@@/.exec(rawLine);
+    if (header) {
+      current = { oldStart: Number(header[1]), entries: [] };
+      hunks.push(current);
+      continue;
+    }
+    if (rawLine === '\\ No newline at end of file') {
+      continue;
+    }
+    if (rawLine.startsWith('+') || rawLine.startsWith('-') || rawLine.startsWith(' ')) {
+      if (!current) {
+        current = { entries: [] };
+        hunks.push(current);
+      }
+      current.entries.push({ op: rawLine[0] as ' ' | '-' | '+', text: rawLine.slice(1) });
+    }
+  }
+
+  if (hunks.length === 0 || hunks.every((h) => h.entries.length === 0)) {
+    return { ok: false, error: 'edit_file "patch" did not contain any valid unified diff hunks.' };
+  }
+
+  const working = [...lines];
+  let lineOffset = 0;
+
+  for (const hunk of hunks) {
+    const expectedOld = hunk.entries.filter((e) => e.op !== '+').map((e) => e.text);
+    const replacementNew = hunk.entries.filter((e) => e.op !== '-').map((e) => e.text);
+
+    if (expectedOld.length === 0) {
+      const insertAt = Math.min(
+        working.length,
+        Math.max(0, (hunk.oldStart ?? working.length + 1) - 1 + lineOffset),
+      );
+      working.splice(insertAt, 0, ...replacementNew);
+      lineOffset += replacementNew.length;
+      continue;
+    }
+
+    const findMatchAt = (strict: boolean): number => {
+      const matches: number[] = [];
+      for (let i = 0; i <= working.length - expectedOld.length; i++) {
+        let ok = true;
+        for (let j = 0; j < expectedOld.length; j++) {
+          const a = strict ? working[i + j] : working[i + j].trim();
+          const b = strict ? expectedOld[j] : expectedOld[j].trim();
+          if (a !== b) {
+            ok = false;
+            break;
+          }
+        }
+        if (ok) matches.push(i);
+      }
+      if (matches.length === 0) return -1;
+      if (matches.length === 1) return matches[0];
+      if (hunk.oldStart !== undefined) {
+        const expectedIdx = Math.max(0, hunk.oldStart - 1 + lineOffset);
+        matches.sort((a, b) => Math.abs(a - expectedIdx) - Math.abs(b - expectedIdx));
+        return matches[0];
+      }
+      return -2; // ambiguous
+    };
+
+    let idx = findMatchAt(true);
+    if (idx === -1) idx = findMatchAt(false);
+    if (idx === -1) {
+      return {
+        ok: false,
+        error: `Unified diff hunk did not match file content.${buildClosestMatchHint(
+          joinFileLines(working, hasTrailingNewline, eol),
+          expectedOld.join('\n'),
+        )}`,
+      };
+    }
+    if (idx === -2) {
+      return {
+        ok: false,
+        error: 'Unified diff hunk matched multiple locations; add @@ line headers or more context.',
+      };
+    }
+
+    working.splice(idx, expectedOld.length, ...replacementNew);
+    lineOffset += replacementNew.length - expectedOld.length;
+  }
+
+  return {
+    ok: true,
+    content: joinFileLines(working, hasTrailingNewline, eol),
+  };
+}
+
 export function executeEditFileTool(
   rawArguments: string,
   existingFiles: GeneratedFileArtifact[],
@@ -1709,13 +2269,13 @@ export function executeEditFileTool(
     );
   }
 
-  const requestedFilename = typeof args.filename === 'string' ? args.filename : '';
+  const requestedFilename = extractEditTargetFilename(args);
   const match = resolveFileByName(
     existingFiles,
-    requestedFilename,
+    requestedFilename || undefined,
     (f) => f.filename,
-    'No generated files exist in this session yet. Use create_file first.',
-    false,
+    'No editable files exist in this session yet. Attach a file, add one in the Files tab, or use create_file first.',
+    true,
   );
   if (!match.ok) {
     return makeEditFileError(match.error);
@@ -1724,12 +2284,28 @@ export function executeEditFileTool(
   const target = match.item;
   const parsedOps: ParsedEditOp[] = [];
 
-  if (args.edits !== undefined) {
-    if (!Array.isArray(args.edits) || args.edits.length === 0) {
+  if (args.edits !== undefined && args.edits !== null) {
+    let rawEdits: unknown = args.edits;
+    // Recover stringified JSON array or single edit object passed in `edits`
+    if (typeof rawEdits === 'string') {
+      const trimmedEdits = rawEdits.trim();
+      try {
+        rawEdits = JSON.parse(trimmedEdits) as unknown;
+      } catch {
+        const recovered = parseToolArgumentsJson(trimmedEdits);
+        if (recovered) {
+          rawEdits = [recovered];
+        }
+      }
+    } else if (rawEdits && typeof rawEdits === 'object' && !Array.isArray(rawEdits)) {
+      rawEdits = [rawEdits];
+    }
+
+    if (!Array.isArray(rawEdits) || rawEdits.length === 0) {
       return makeEditFileError('edit_file "edits" must be a non-empty array of edit operations.');
     }
-    for (let i = 0; i < args.edits.length; i++) {
-      const op = parseSingleEditOp(args.edits[i], `edits[${i}]`);
+    for (let i = 0; i < rawEdits.length; i++) {
+      const op = parseSingleEditOp(rawEdits[i], `edits[${i}]`);
       if (typeof op === 'string') {
         return makeEditFileError(op);
       }
@@ -1745,6 +2321,8 @@ export function executeEditFileTool(
 
   const lineOps = parsedOps.filter((op): op is LineRangeEditOp => op.kind === 'line_range');
   const textOps = parsedOps.filter((op): op is ExactTextEditOp => op.kind === 'exact_text');
+  const fullOps = parsedOps.filter((op): op is FullContentEditOp => op.kind === 'full_content');
+  const patchOps = parsedOps.filter((op): op is UnifiedPatchEditOp => op.kind === 'unified_patch');
 
   if (lineOps.length > 0 && textOps.length > 0) {
     return makeEditFileError(
@@ -1753,21 +2331,61 @@ export function executeEditFileTool(
   }
 
   let updatedContent = target.content;
+  const targetEol: '\r\n' | '\n' =
+    target.content.includes('\r\n') && !target.content.replace(/\r\n/g, '').includes('\n')
+      ? '\r\n'
+      : '\n';
 
-  // Apply line-range edits first, validated against original line bounds and applied bottom-to-top
+  // Full-file replacement fallback
+  if (fullOps.length > 0) {
+    const nextRaw = fullOps[fullOps.length - 1].content;
+    updatedContent = targetEol === '\r\n' ? nextRaw.replace(/\r?\n/g, '\r\n') : nextRaw;
+  }
+
+  // Unified diff patch fallback
+  for (const op of patchOps) {
+    const patched = applyUnifiedDiffPatch(updatedContent, op.patch);
+    if (!patched.ok) {
+      return makeEditFileError(patched.error);
+    }
+    updatedContent = patched.content;
+  }
+
+  // Apply line-range edits validated against original line bounds and applied bottom-to-top
   if (lineOps.length > 0) {
     const { lines, hasTrailingNewline, eol } = splitFileLines(updatedContent);
     const total = lines.length;
 
+    const normalizedLineOps: LineRangeEditOp[] = [];
     for (const op of lineOps) {
-      if (total === 0 || op.endLine > total) {
+      // Allow appending right after EOF (start_line === total + 1) or inserting into empty file (start_line === 1)
+      if (total === 0) {
+        if (op.startLine !== 1) {
+          return makeEditFileError(
+            `Line range ${op.startLine}-${op.endLine} is out of bounds for empty file '${target.filename}' (use start_line: 1).`,
+          );
+        }
+        normalizedLineOps.push({ ...op, startLine: 1, endLine: 0 });
+        continue;
+      }
+
+      if (op.startLine > total + 1) {
         return makeEditFileError(
           `Line range ${op.startLine}-${op.endLine} is out of bounds for '${target.filename}' (${total} lines).`,
         );
       }
+
+      const clampedEnd = op.startLine === total + 1 ? total : Math.min(op.endLine, total);
+      // Automatically strip accidental `read_attached_chunk` "12: " prefixes if they match startLine
+      const prefixCheck = stripReadChunkLineNumberPrefixes(op.replacement, op.startLine);
+      normalizedLineOps.push({
+        ...op,
+        endLine: clampedEnd,
+        replacement: prefixCheck.didStrip ? prefixCheck.stripped : op.replacement,
+      });
     }
 
-    const sortedByStart = [...lineOps].sort((a, b) => a.startLine - b.startLine);
+    const sortedByStart = [...normalizedLineOps].sort((a, b) => a.startLine - b.startLine);
     for (let i = 1; i < sortedByStart.length; i++) {
       const prev = sortedByStart[i - 1];
       const curr = sortedByStart[i];
@@ -1782,7 +2400,12 @@ export function executeEditFileTool(
     const descending = [...sortedByStart].reverse();
     for (const op of descending) {
       const replacementLines = splitReplacementLines(op.replacement);
-      workingLines.splice(op.startLine - 1, op.endLine - op.startLine + 1, ...replacementLines);
+      if (op.endLine < op.startLine) {
+        // Pure insertion (empty file or append at total + 1)
+        workingLines.splice(op.startLine - 1, 0, ...replacementLines);
+      } else {
+        workingLines.splice(op.startLine - 1, op.endLine - op.startLine + 1, ...replacementLines);
+      }
     }
 
     updatedContent = joinFileLines(
@@ -1792,34 +2415,117 @@ export function executeEditFileTool(
     );
   }
 
-  // Apply exact-text edits sequentially
+  // Apply exact-text edits sequentially with multi-tier local-LLM resilience:
+  // 1. Exact match (with CRLF alignment)
+  // 2. Strip accidental `read_attached_chunk` "12: " prefixes
+  // 3. Trailing-whitespace normalized line match
+  // 4. Indentation-agnostic trimmed line-block match (preserving file base indentation)
   for (const op of textOps) {
-    let needle = op.oldText;
-    let replacementText = op.newText;
+    const fileHasCrlf = updatedContent.includes('\r\n');
+    const alignEol = (s: string) => (fileHasCrlf ? s.replace(/\r?\n/g, '\r\n') : s.replace(/\r\n/g, '\n'));
 
-    if (!updatedContent.includes(needle) && updatedContent.includes('\r\n')) {
-      const crlfNeedle = needle.replace(/\r?\n/g, '\r\n');
-      if (updatedContent.includes(crlfNeedle)) {
-        needle = crlfNeedle;
-        replacementText = replacementText.replace(/\r?\n/g, '\r\n');
+    let effectiveOld = op.oldText;
+    let effectiveNew = op.newText;
+
+    // Tier 1: Exact substring match (raw, then EOL-aligned)
+    let spans = findExactSpans(updatedContent, effectiveOld);
+    if (spans.length === 0) {
+      const eolOld = alignEol(effectiveOld);
+      if (eolOld !== effectiveOld) {
+        const eolSpans = findExactSpans(updatedContent, eolOld);
+        if (eolSpans.length > 0) {
+          spans = eolSpans;
+          effectiveOld = eolOld;
+          effectiveNew = alignEol(effectiveNew);
+        }
       }
     }
 
-    const hits = countOccurrences(updatedContent, needle);
-    if (hits === 0) {
-      return makeEditFileError(
-        `old_text was not found in '${target.filename}'. Verify exact whitespace and indentation.`,
-      );
+    // Tier 2: Strip accidental `read_attached_chunk` "12: " line-number prefixes
+    let inferredStartHint = op.hintStartLine;
+    if (spans.length === 0) {
+      const strippedOld = stripReadChunkLineNumberPrefixes(effectiveOld);
+      if (strippedOld.didStrip) {
+        const strippedNew = stripReadChunkLineNumberPrefixes(effectiveNew);
+        const candidateOld = alignEol(strippedOld.stripped);
+        const candidateNew = strippedNew.didStrip
+          ? alignEol(strippedNew.stripped)
+          : alignEol(effectiveNew);
+        let candidateSpans = findExactSpans(updatedContent, candidateOld);
+        if (candidateSpans.length === 0) {
+          candidateSpans = findLineNormalizedSpans(updatedContent, candidateOld, 'trim_end');
+        }
+        if (candidateSpans.length === 0) {
+          candidateSpans = findLineNormalizedSpans(updatedContent, candidateOld, 'trim_both');
+        }
+        if (candidateSpans.length > 0) {
+          spans = candidateSpans;
+          effectiveOld = candidateOld;
+          effectiveNew = candidateNew;
+          if (!inferredStartHint && strippedOld.firstLineNum) {
+            inferredStartHint = strippedOld.firstLineNum;
+          }
+        }
+      }
     }
-    if (hits > 1 && !op.replaceAll) {
+
+    // Tier 3: Trailing-whitespace normalized line-block match
+    if (spans.length === 0) {
+      const trimEndSpans = findLineNormalizedSpans(updatedContent, effectiveOld, 'trim_end');
+      if (trimEndSpans.length > 0) {
+        spans = trimEndSpans;
+        effectiveNew = alignEol(effectiveNew);
+      }
+    }
+
+    // Tier 4: Indentation-agnostic trimmed line-block match (re-indents replacement)
+    if (spans.length === 0) {
+      const trimBothSpans = findLineNormalizedSpans(updatedContent, effectiveOld, 'trim_both');
+      if (trimBothSpans.length > 0) {
+        spans = trimBothSpans;
+      }
+    }
+
+    if (spans.length === 0) {
       return makeEditFileError(
-        `old_text matched ${hits} locations in '${target.filename}'. Include more context to make it unique or set replace_all: true.`,
+        `old_text was not found in '${target.filename}'.${buildClosestMatchHint(updatedContent, op.oldText)}`,
       );
     }
 
-    updatedContent = op.replaceAll
-      ? updatedContent.split(needle).join(replacementText)
-      : updatedContent.replace(needle, () => replacementText);
+    // Disambiguate multiple matches using start_line hint if available
+    if (spans.length > 1 && !op.replaceAll) {
+      if (inferredStartHint !== undefined) {
+        const ranked = [...spans].sort(
+          (a, b) =>
+            Math.abs(a.lineNumber - inferredStartHint!) -
+            Math.abs(b.lineNumber - inferredStartHint!),
+        );
+        const bestDist = Math.abs(ranked[0].lineNumber - inferredStartHint);
+        const secondDist = Math.abs(ranked[1].lineNumber - inferredStartHint);
+        if (bestDist <= 15 && bestDist < secondDist) {
+          spans = [ranked[0]];
+        }
+      }
+
+      if (spans.length > 1) {
+        const locations = spans.slice(0, 6).map((s) => `L${s.lineNumber}`).join(', ');
+        return makeEditFileError(
+          `old_text matched ${spans.length} locations in '${target.filename}' (${locations}). Include more surrounding context, pass start_line to pick one, or set replace_all: true.`,
+        );
+      }
+    }
+
+    // Apply replacements from end to start so offsets stay valid
+    const targets = op.replaceAll ? [...spans].reverse() : [spans[0]];
+    const currentEol: '\r\n' | '\n' = fileHasCrlf ? '\r\n' : '\n';
+    for (const span of targets) {
+      const replacementPiece =
+        span.indentDelta || span.removeIndentCols
+          ? adjustReplacementIndentation(effectiveNew, span, currentEol)
+          : alignEol(effectiveNew);
+      updatedContent =
+        updatedContent.slice(0, span.start) + replacementPiece + updatedContent.slice(span.end);
+    }
   }
 
   const updatedArtifact: GeneratedFileArtifact = {
@@ -1930,13 +2636,14 @@ export function executeReadAttachedChunkTool(
     );
   }
 
-  if (args.filename !== undefined && typeof args.filename !== 'string') {
+  const requestedReadFilename = extractEditTargetFilename(args);
+  if (args.filename !== undefined && args.filename !== null && typeof args.filename !== 'string') {
     return makeReadChunkError('read_attached_chunk "filename" must be a string when provided.');
   }
 
   const match = resolveFileByName(
     attachedFiles,
-    typeof args.filename === 'string' ? args.filename : undefined,
+    requestedReadFilename || undefined,
     (f) => f.name,
     'No attached files are available in this conversation.',
     true,
@@ -1946,21 +2653,22 @@ export function executeReadAttachedChunkTool(
   }
 
   const target = match.item;
-  const startLine = args.start_line === undefined ? 1 : args.start_line;
-  if (typeof startLine !== 'number' || !Number.isInteger(startLine) || startLine < 1) {
+  const startField = pickFirstDefinedField(args, START_LINE_ALIAS_KEYS);
+  const startLine = startField === null ? 1 : parsePositiveIntLike(startField.value);
+  if (startLine === null) {
     return makeReadChunkError('read_attached_chunk "start_line" must be a positive integer (>= 1).');
   }
 
-  if (args.end_line !== undefined) {
-    if (
-      typeof args.end_line !== 'number' ||
-      !Number.isInteger(args.end_line) ||
-      args.end_line < startLine
-    ) {
+  const endField = pickFirstDefinedField(args, END_LINE_ALIAS_KEYS);
+  let parsedEndLine: number | undefined;
+  if (endField !== null) {
+    const candidateEnd = parsePositiveIntLike(endField.value);
+    if (candidateEnd === null || candidateEnd < startLine) {
       return makeReadChunkError(
         `read_attached_chunk "end_line" must be an integer >= start_line (${startLine}).`,
       );
     }
+    parsedEndLine = candidateEnd;
   }
 
   const { lines } = splitFileLines(target.content);
@@ -2002,8 +2710,7 @@ export function executeReadAttachedChunkTool(
   }
 
   const maxAllowedEnd = startLine + MAX_ATTACHED_CHUNK_LINES - 1;
-  const requestedEnd =
-    typeof args.end_line === 'number' ? args.end_line : maxAllowedEnd;
+  const requestedEnd = parsedEndLine ?? maxAllowedEnd;
   const capped = requestedEnd - startLine + 1 > MAX_ATTACHED_CHUNK_LINES;
   const effectiveEnd = Math.min(totalLines, requestedEnd, maxAllowedEnd);
 

@@ -1,13 +1,13 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Calendar, Sparkles, User } from 'lucide-react';
+import { Sparkles, User } from 'lucide-react';
 import { estimateTokensConservative } from '../../core/context';
 import { formatNumber } from '../../core/privacy';
 import {
-  buildTokenCalendarGrid,
+  buildRecentTokenHeatmapGrid,
+  computeTokenUsageStats,
   formatCalendarTooltipText,
   formatCompactTokens,
-  getAvailableCalendarYears,
-  toLocalDateKey,
+  formatStreakDays,
   type CalendarDayCell,
 } from '../../core/tokenUsage';
 import type { TokenUsageHistory, UserProfileSettings } from '../../core/types';
@@ -18,8 +18,7 @@ interface ProfileViewProps {
   onUpdateProfile: (patch: Partial<UserProfileSettings>) => void;
 }
 
-const WEEK_STEP_PX = 13; // 10px cell + 3px gap
-const WEEKDAY_COL_PX = 32; // 28px label + 4px margin
+const HEATMAP_WEEKS = 26;
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
   profile,
@@ -27,13 +26,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onUpdateProfile,
 }) => {
   const now = useMemo(() => new Date(), []);
-  const currentYear = now.getFullYear();
-  const availableYears = useMemo(
-    () => getAvailableCalendarYears(tokenUsage.dailyTokens, now),
-    [tokenUsage.dailyTokens, now],
-  );
-  const [selectedYear, setSelectedYear] = useState<number>(currentYear);
-  const calendarCardRef = useRef<HTMLDivElement | null>(null);
+  const heatmapCardRef = useRef<HTMLDivElement | null>(null);
   const [hoveredCell, setHoveredCell] = useState<{
     cell: CalendarDayCell;
     dayIndex: number;
@@ -44,7 +37,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   } | null>(null);
 
   const handleCellActivate = (el: HTMLButtonElement, cell: CalendarDayCell, dayIndex: number) => {
-    const cardEl = calendarCardRef.current;
+    const cardEl = heatmapCardRef.current;
     if (!cardEl) return;
     const cardRect = cardEl.getBoundingClientRect();
     const cellRect = el.getBoundingClientRect();
@@ -58,21 +51,19 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     });
   };
 
-  const effectiveYear = availableYears.includes(selectedYear) ? selectedYear : currentYear;
-  const isRollingCurrentYear = effectiveYear === currentYear;
-
-  const calendarGrid = useMemo(
-    () => buildTokenCalendarGrid(tokenUsage.dailyTokens, effectiveYear, now),
-    [tokenUsage.dailyTokens, effectiveYear, now],
+  const heatmapGrid = useMemo(
+    () => buildRecentTokenHeatmapGrid(tokenUsage.dailyTokens, HEATMAP_WEEKS, now),
+    [tokenUsage.dailyTokens, now],
   );
 
-  const todayKey = toLocalDateKey(now);
-  const todayTokens = tokenUsage.dailyTokens[todayKey] ?? 0;
+  const stats = useMemo(
+    () => computeTokenUsageStats(tokenUsage, now),
+    [tokenUsage, now],
+  );
+
   const customPromptTokens = profile.customSystemPrompt.trim()
     ? estimateTokensConservative(profile.customSystemPrompt.trim())
     : 0;
-
-  const periodLabel = isRollingCurrentYear ? 'the last year' : String(effectiveYear);
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--lc-bg)] text-[var(--lc-ink)]">
@@ -98,7 +89,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </div>
 
           {/* 1. User Identity & Custom System Prompt */}
-          <section className="rounded-[8px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] p-5 text-[var(--lc-surf-ink)]">
+          <section className="rounded-[10px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] p-5 text-[var(--lc-surf-ink)]">
             <div className="flex items-center gap-2">
               <User className="h-4 w-4 text-[var(--lc-surf-ink)]" />
               <h2 className="text-[15px] font-bold text-[var(--lc-surf-ink)]">
@@ -145,7 +136,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   <div className="flex items-center gap-2">
                     <span
                       data-testid="profile-system-prompt-tokens"
-                      className="rounded-[5px] border border-[var(--lc-surf-line)] bg-[var(--lc-surf-hover)]/50 px-2 py-0.5 text-[11px] font-medium text-[var(--lc-surf-ink2)] tabular-nums"
+                      className="text-[11.5px] font-medium text-[var(--lc-surf-mute)] tabular-nums"
                     >
                       ~{formatNumber(customPromptTokens)} tokens
                     </span>
@@ -177,238 +168,138 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             </div>
           </section>
 
-          {/* 2. Token Usage & GitHub-Style Activity Calendar */}
-          <section className="rounded-[8px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] p-5 text-[var(--lc-surf-ink)]">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <Calendar className="h-4 w-4 text-[var(--lc-surf-ink)]" />
-                <h2 className="text-[15px] font-bold text-[var(--lc-surf-ink)]">
-                  Token Activity
-                </h2>
-              </div>
-
+          {/* 2. Token Activity Heatmap & 4-Stat Strip */}
+          <section
+            ref={heatmapCardRef}
+            onMouseLeave={() => setHoveredCell(null)}
+            aria-label="Token usage tracker"
+            data-testid="token-tracker-card"
+            className="relative rounded-[12px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] p-6 text-[var(--lc-surf-ink)]"
+          >
+            {/* Floating Hover Tooltip */}
+            {hoveredCell && (
               <div
-                data-testid="lifetime-tokens-badge"
-                className="inline-flex items-center gap-2 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-bg)] px-3 py-1 text-[12.5px]"
+                role="status"
+                data-testid="calendar-tooltip"
+                style={{
+                  left: `${Math.min(
+                    Math.max(115, hoveredCell.centerX),
+                    Math.max(115, hoveredCell.cardWidth - 115),
+                  )}px`,
+                  top:
+                    hoveredCell.dayIndex <= 1
+                      ? `${hoveredCell.bottomY + 8}px`
+                      : `${hoveredCell.topY - 8}px`,
+                }}
+                className={`pointer-events-none absolute z-30 -translate-x-1/2 rounded-[6px] border border-[var(--lc-surf-line)] bg-[#1B1E24] px-2.5 py-1 text-[11.5px] font-medium whitespace-nowrap text-white shadow-lg ${
+                  hoveredCell.dayIndex <= 1 ? '' : '-translate-y-full'
+                }`}
               >
-                <span className="text-[var(--lc-surf-mute)]">Total tokens lifetime:</span>
-                <span
-                  data-testid="lifetime-tokens-value"
-                  className="font-bold text-[var(--lc-surf-ink)] tabular-nums"
-                  title={`${formatNumber(tokenUsage.totalLifetimeTokens)} tokens`}
-                >
-                  {formatCompactTokens(tokenUsage.totalLifetimeTokens)}
-                </span>
-                <span className="text-[11px] text-[var(--lc-surf-mute)] tabular-nums">
-                  ({formatNumber(tokenUsage.totalLifetimeTokens)})
-                </span>
+                {formatCalendarTooltipText(hoveredCell.cell.tokens, hoveredCell.cell.date, true)}
               </div>
-            </div>
+            )}
 
-            {/* Summary Stats Strip */}
-            <div className="mt-3.5 grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-              <div className="rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-bg)]/55 px-3.5 py-2.5">
-                <div className="text-[11.5px] font-medium text-[var(--lc-surf-mute)]">
-                  Total tokens lifetime
-                </div>
-                <div className="mt-0.5 text-[18px] font-bold text-[var(--lc-surf-ink)] tabular-nums">
-                  {formatCompactTokens(tokenUsage.totalLifetimeTokens)}
-                </div>
-              </div>
-
-              <div className="rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-bg)]/55 px-3.5 py-2.5">
-                <div className="text-[11.5px] font-medium text-[var(--lc-surf-mute)]">
-                  Tokens used in {periodLabel}
-                </div>
-                <div
-                  data-testid="period-tokens-value"
-                  className="mt-0.5 text-[18px] font-bold text-[var(--lc-surf-ink)] tabular-nums"
-                >
-                  {formatCompactTokens(calendarGrid.totalTokensInRange)}
-                </div>
-              </div>
-
-              <div className="rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-bg)]/55 px-3.5 py-2.5">
-                <div className="text-[11.5px] font-medium text-[var(--lc-surf-mute)]">
-                  Today · Active days ({periodLabel})
-                </div>
-                <div className="mt-0.5 text-[18px] font-bold text-[var(--lc-surf-ink)] tabular-nums">
-                  {formatCompactTokens(todayTokens)}{' '}
-                  <span className="text-[12.5px] font-normal text-[var(--lc-surf-mute)]">
-                    · {calendarGrid.activeDaysCount}{' '}
-                    {calendarGrid.activeDaysCount === 1 ? 'day' : 'days'}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Calendar Header + Grid + Year Rail */}
-            <div className="mt-5">
+            {/* 26x7 Rounded-Square Heatmap */}
+            <div className="overflow-x-auto pb-1">
               <div
-                data-testid="calendar-period-heading"
-                className="mb-2 text-[13.5px] font-semibold text-[var(--lc-surf-ink)] tabular-nums"
+                role="grid"
+                aria-label="Daily token usage heatmap for the last 26 weeks"
+                className="grid min-w-[540px] grid-cols-[repeat(26,minmax(0,1fr))] gap-[5px] sm:gap-[6px]"
               >
-                {formatCompactTokens(calendarGrid.totalTokensInRange)} tokens used in {periodLabel}
-              </div>
-
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
-                {/* Calendar Card */}
-                <div
-                  ref={calendarCardRef}
-                  onMouseLeave={() => setHoveredCell(null)}
-                  className="relative min-w-0 flex-1 rounded-[8px] border border-[var(--lc-surf-line)] bg-[var(--lc-bg)]/45 p-3.5"
-                >
-                  {/* Floating GitHub-style Hover Tooltip (outside overflow-x-auto so never clipped) */}
-                  {hoveredCell && (
-                    <div
-                      role="status"
-                      data-testid="calendar-tooltip"
-                      style={{
-                        left: `${Math.min(
-                          Math.max(115, hoveredCell.centerX),
-                          Math.max(115, hoveredCell.cardWidth - 115),
-                        )}px`,
-                        top:
-                          hoveredCell.dayIndex <= 2
-                            ? `${hoveredCell.bottomY + 8}px`
-                            : `${hoveredCell.topY - 8}px`,
-                      }}
-                      className={`pointer-events-none absolute z-30 -translate-x-1/2 rounded-[6px] border border-[var(--lc-surf-line)] bg-[#1F2328] px-2.5 py-1 text-[11.5px] font-medium whitespace-nowrap text-white shadow-lg ${
-                        hoveredCell.dayIndex <= 2 ? '' : '-translate-y-full'
-                      }`}
-                    >
-                      {formatCalendarTooltipText(
-                        hoveredCell.cell.tokens,
-                        hoveredCell.cell.date,
-                        !isRollingCurrentYear,
-                      )}
-                    </div>
-                  )}
-
-                  <div className="overflow-x-auto pb-1">
-                    <div className="relative inline-block min-w-max pt-1">
-                      {/* Month Labels */}
-                      <div
-                        className="relative mb-1.5 h-[15px] text-[11px] text-[var(--lc-surf-mute)]"
-                        style={{ marginLeft: `${WEEKDAY_COL_PX}px` }}
-                      >
-                        {calendarGrid.monthLabels.map((m) => (
+                {heatmapGrid.weeks.map((week, wIdx) => (
+                  <div
+                    key={week[0]?.dateKey ?? wIdx}
+                    className="flex flex-col gap-[5px] sm:gap-[6px]"
+                  >
+                    {week.map((cell, dIdx) => {
+                      if (!cell.inRange) {
+                        return (
                           <span
-                            key={`${m.label}-${m.weekIndex}`}
-                            style={{ left: `${m.weekIndex * WEEK_STEP_PX}px` }}
-                            className="absolute top-0 leading-none"
-                          >
-                            {m.label}
-                          </span>
-                        ))}
-                      </div>
-
-                      {/* Weekday Labels + 7xN Grid */}
-                      <div className="flex items-start">
-                        <div
-                          aria-hidden="true"
-                          className="mr-[4px] flex w-[28px] shrink-0 flex-col gap-[3px] text-[10.5px] leading-[10px] text-[var(--lc-surf-mute)]"
-                        >
-                          <span className="h-[10px]" />
-                          <span className="flex h-[10px] items-center">Mon</span>
-                          <span className="h-[10px]" />
-                          <span className="flex h-[10px] items-center">Wed</span>
-                          <span className="h-[10px]" />
-                          <span className="flex h-[10px] items-center">Fri</span>
-                          <span className="h-[10px]" />
-                        </div>
-
-                        <div
-                          className="flex gap-[3px]"
-                          role="grid"
-                          aria-label={`Daily token usage calendar for ${periodLabel}`}
-                        >
-                          {calendarGrid.weeks.map((week, wIdx) => (
-                            <div key={week[0]?.dateKey ?? wIdx} className="flex flex-col gap-[3px]">
-                              {week.map((cell, dIdx) => {
-                                if (!cell.inRange) {
-                                  return (
-                                    <span
-                                      key={cell.dateKey}
-                                      aria-hidden="true"
-                                      className="block h-[10px] w-[10px]"
-                                    />
-                                  );
-                                }
-                                const tooltip = formatCalendarTooltipText(
-                                  cell.tokens,
-                                  cell.date,
-                                  !isRollingCurrentYear,
-                                );
-                                return (
-                                  <button
-                                    key={cell.dateKey}
-                                    type="button"
-                                    data-testid={`calendar-day-${cell.dateKey}`}
-                                    data-level={cell.level}
-                                    aria-label={tooltip}
-                                    onMouseEnter={(e) => handleCellActivate(e.currentTarget, cell, dIdx)}
-                                    onFocus={(e) => handleCellActivate(e.currentTarget, cell, dIdx)}
-                                    onBlur={() => setHoveredCell(null)}
-                                    style={{
-                                      backgroundColor: `var(--lc-contrib-${cell.level})`,
-                                    }}
-                                    className="block h-[10px] w-[10px] rounded-[2px] border border-black/5 transition-transform hover:ring-1 hover:ring-[var(--lc-surf-ink)]/60 focus:ring-1 focus:ring-[var(--lc-accent)] focus:outline-none"
-                                  />
-                                );
-                              })}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Calendar Footer & Legend */}
-                  <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--lc-surf-mute)]">
-                    <span>Tracks local prompt + completion tokens across all models</span>
-                    <div className="flex items-center gap-1">
-                      <span>Less</span>
-                      {([0, 1, 2, 3, 4] as const).map((lvl) => (
-                        <span
-                          key={lvl}
-                          aria-hidden="true"
-                          style={{ backgroundColor: `var(--lc-contrib-${lvl})` }}
-                          className="inline-block h-[10px] w-[10px] rounded-[2px] border border-black/5"
+                            key={cell.dateKey}
+                            aria-hidden="true"
+                            className="block aspect-square w-full"
+                          />
+                        );
+                      }
+                      const tooltip = formatCalendarTooltipText(cell.tokens, cell.date, true);
+                      return (
+                        <button
+                          key={cell.dateKey}
+                          type="button"
+                          data-testid={`calendar-day-${cell.dateKey}`}
+                          data-level={cell.level}
+                          aria-label={tooltip}
+                          onMouseEnter={(e) => handleCellActivate(e.currentTarget, cell, dIdx)}
+                          onFocus={(e) => handleCellActivate(e.currentTarget, cell, dIdx)}
+                          onBlur={() => setHoveredCell(null)}
+                          style={{
+                            backgroundColor: `var(--lc-contrib-${cell.level})`,
+                          }}
+                          className="block aspect-square w-full rounded-[5px] transition-[filter,transform] duration-150 hover:brightness-110 focus-visible:ring-2 focus-visible:ring-[var(--lc-accent)] focus-visible:outline-none sm:rounded-[6px]"
                         />
-                      ))}
-                      <span>More</span>
-                    </div>
+                      );
+                    })}
                   </div>
-                </div>
+                ))}
+              </div>
+            </div>
 
-                {/* Year Selector Rail (matches GitHub right-hand year pills) */}
+            {/* 4-Column Centered Stat Row */}
+            <div
+              data-testid="token-tracker-stats"
+              className="mt-7 grid grid-cols-2 gap-y-5 sm:grid-cols-4 sm:gap-y-0 sm:divide-x sm:divide-[var(--lc-surf-line)]/55"
+            >
+              <div className="px-3 text-center">
                 <div
-                  className="flex shrink-0 flex-row gap-1.5 lg:w-[82px] lg:flex-col"
-                  role="group"
-                  aria-label="Select calendar year"
+                  data-testid="lifetime-tokens-value"
+                  title={`${formatNumber(stats.lifetimeTokens)} tokens`}
+                  className="text-[26px] leading-tight font-semibold tracking-tight text-[var(--lc-surf-ink)] tabular-nums sm:text-[28px]"
                 >
-                  {availableYears.map((yr) => {
-                    const isSelected = yr === effectiveYear;
-                    return (
-                      <button
-                        key={yr}
-                        type="button"
-                        data-testid={`calendar-year-${yr}`}
-                        onClick={() => {
-                          setHoveredCell(null);
-                          setSelectedYear(yr);
-                        }}
-                        className={`rounded-[6px] px-3 py-1.5 text-left text-[12px] font-medium transition-colors tabular-nums ${
-                          isSelected
-                            ? 'bg-[var(--lc-accent)] font-semibold text-[var(--lc-accent-contrast)]'
-                            : 'text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]'
-                        }`}
-                      >
-                        {yr}
-                      </button>
-                    );
-                  })}
+                  {formatCompactTokens(stats.lifetimeTokens)}
+                </div>
+                <div className="mt-1.5 text-[13.5px] font-normal text-[var(--lc-surf-mute)]">
+                  lifetime tokens
+                </div>
+              </div>
+
+              <div className="px-3 text-center">
+                <div
+                  data-testid="peak-day-tokens-value"
+                  title={
+                    stats.peakDayDateKey
+                      ? `${formatNumber(stats.peakDayTokens)} tokens on ${stats.peakDayDateKey}`
+                      : 'No peak day recorded yet'
+                  }
+                  className="text-[26px] leading-tight font-semibold tracking-tight text-[var(--lc-surf-ink)] tabular-nums sm:text-[28px]"
+                >
+                  {formatCompactTokens(stats.peakDayTokens)}
+                </div>
+                <div className="mt-1.5 text-[13.5px] font-normal text-[var(--lc-surf-mute)]">
+                  peak day
+                </div>
+              </div>
+
+              <div className="px-3 text-center">
+                <div
+                  data-testid="current-streak-value"
+                  className="text-[26px] leading-tight font-semibold tracking-tight text-[var(--lc-surf-ink)] tabular-nums sm:text-[28px]"
+                >
+                  {formatStreakDays(stats.currentStreakDays)}
+                </div>
+                <div className="mt-1.5 text-[13.5px] font-normal text-[var(--lc-surf-mute)]">
+                  current streak
+                </div>
+              </div>
+
+              <div className="px-3 text-center">
+                <div
+                  data-testid="longest-streak-value"
+                  className="text-[26px] leading-tight font-semibold tracking-tight text-[var(--lc-surf-ink)] tabular-nums sm:text-[28px]"
+                >
+                  {formatStreakDays(stats.longestStreakDays)}
+                </div>
+                <div className="mt-1.5 text-[13.5px] font-normal text-[var(--lc-surf-mute)]">
+                  longest streak
                 </div>
               </div>
             </div>
@@ -418,3 +309,4 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     </div>
   );
 };
+

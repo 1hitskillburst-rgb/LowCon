@@ -222,11 +222,11 @@ export function computeThemeCssVariables(rawTheme?: Partial<ThemeSettings>): {
     '--lc-tps-orange': bgDark ? '#FB923C' : '#EA580C',
     '--lc-tps-yellow': bgDark ? '#FACC15' : '#CA8A04',
     '--lc-tps-green': bgDark ? '#4ADE80' : '#16A34A',
-    '--lc-contrib-0': surfDark ? mixHex(surface, '#FFFFFF', 0.08) : mixHex(surface, '#161B26', 0.07),
-    '--lc-contrib-1': surfDark ? '#0E4429' : '#9BE9A8',
-    '--lc-contrib-2': surfDark ? '#006D32' : '#40C463',
-    '--lc-contrib-3': surfDark ? '#26A641' : '#30A14E',
-    '--lc-contrib-4': surfDark ? '#39D353' : '#216E39',
+    '--lc-contrib-0': surfDark ? mixHex(surface, '#FFFFFF', 0.09) : mixHex(surface, '#161B26', 0.08),
+    '--lc-contrib-1': surfDark ? '#183A5E' : '#C6E2FF',
+    '--lc-contrib-2': surfDark ? '#1F5A96' : '#7AB8FF',
+    '--lc-contrib-3': surfDark ? '#267CD6' : '#2B85F5',
+    '--lc-contrib-4': surfDark ? '#339BFF' : '#0B63E5',
   };
 
   return { mode, codeMode, vars };

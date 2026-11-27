@@ -322,3 +322,164 @@ export function buildTokenCalendarGrid(
     activeDaysCount,
   };
 }
+
+export interface TokenUsageStats {
+  lifetimeTokens: number;
+  peakDayTokens: number;
+  peakDayDateKey: string | null;
+  currentStreakDays: number;
+  longestStreakDays: number;
+}
+
+export function formatStreakDays(days: number): string {
+  const safe = Math.max(0, Math.round(Number.isFinite(days) ? days : 0));
+  return safe === 1 ? '1 day' : `${safe} days`;
+}
+
+function parseDateKeyUtcDayNumber(dateKey: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
+  if (!match) return null;
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10) - 1;
+  const day = Number.parseInt(match[3], 10);
+  return Math.floor(Date.UTC(year, month, day) / 86_400_000);
+}
+
+export function computeTokenUsageStats(
+  tokenUsage: TokenUsageHistory,
+  now = new Date(),
+): TokenUsageStats {
+  const dailyTokens = tokenUsage.dailyTokens ?? {};
+  let peakDayTokens = 0;
+  let peakDayDateKey: string | null = null;
+  const activeDayNumbers: number[] = [];
+
+  for (const [key, rawVal] of Object.entries(dailyTokens)) {
+    const tokens = typeof rawVal === 'number' && Number.isFinite(rawVal) ? Math.round(rawVal) : 0;
+    if (tokens <= 0) continue;
+
+    const dayNum = parseDateKeyUtcDayNumber(key);
+    if (dayNum === null) continue;
+    activeDayNumbers.push(dayNum);
+
+    if (tokens > peakDayTokens || (tokens === peakDayTokens && (!peakDayDateKey || key > peakDayDateKey))) {
+      peakDayTokens = tokens;
+      peakDayDateKey = key;
+    }
+  }
+
+  activeDayNumbers.sort((a, b) => a - b);
+
+  // Longest streak across all recorded history
+  let longestStreakDays = 0;
+  let run = 0;
+  let prevDay: number | null = null;
+  for (const dayNum of activeDayNumbers) {
+    if (prevDay !== null && dayNum === prevDay) continue;
+    if (prevDay !== null && dayNum === prevDay + 1) {
+      run += 1;
+    } else {
+      run = 1;
+    }
+    if (run > longestStreakDays) {
+      longestStreakDays = run;
+    }
+    prevDay = dayNum;
+  }
+
+  // Current streak: consecutive active days ending today, or ending yesterday if today has no usage yet
+  const activeSet = new Set(activeDayNumbers);
+  const todayDayNum = Math.floor(
+    Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86_400_000,
+  );
+  let cursor = activeSet.has(todayDayNum)
+    ? todayDayNum
+    : activeSet.has(todayDayNum - 1)
+      ? todayDayNum - 1
+      : null;
+
+  let currentStreakDays = 0;
+  while (cursor !== null && activeSet.has(cursor)) {
+    currentStreakDays += 1;
+    cursor -= 1;
+  }
+
+  return {
+    lifetimeTokens: Math.max(0, Math.round(tokenUsage.totalLifetimeTokens ?? 0)),
+    peakDayTokens,
+    peakDayDateKey,
+    currentStreakDays,
+    longestStreakDays,
+  };
+}
+
+/**
+ * Builds a compact N-week (default 26 weeks = 6 months) 7-row (Sun..Sat) heatmap grid
+ * ending on the current week, leaving future days after today empty in the final column.
+ */
+export function buildRecentTokenHeatmapGrid(
+  dailyTokens: Record<string, number>,
+  weekCount = 26,
+  now = new Date(),
+): TokenCalendarGrid {
+  const safeWeeks = Math.max(1, Math.round(weekCount));
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  const currentWeekSunday = new Date(today);
+  currentWeekSunday.setDate(currentWeekSunday.getDate() - currentWeekSunday.getDay());
+
+  const gridStart = new Date(currentWeekSunday);
+  gridStart.setDate(gridStart.getDate() - (safeWeeks - 1) * 7);
+
+  const gridEnd = new Date(currentWeekSunday);
+  gridEnd.setDate(gridEnd.getDate() + 6);
+
+  const rawWeeks: Array<Array<Omit<CalendarDayCell, 'level'>>> = [];
+  let totalTokensInRange = 0;
+  let maxDailyTokens = 0;
+  let activeDaysCount = 0;
+
+  const cursor = new Date(gridStart);
+  while (cursor <= gridEnd) {
+    const week: Array<Omit<CalendarDayCell, 'level'>> = [];
+    for (let dow = 0; dow < 7; dow++) {
+      const cellDate = new Date(cursor);
+      const inRange = cellDate >= gridStart && cellDate <= today;
+      const dateKey = toLocalDateKey(cellDate);
+      const tokens = inRange ? Math.max(0, Math.round(dailyTokens[dateKey] ?? 0)) : 0;
+
+      if (inRange && tokens > 0) {
+        totalTokensInRange += tokens;
+        activeDaysCount += 1;
+        if (tokens > maxDailyTokens) {
+          maxDailyTokens = tokens;
+        }
+      }
+
+      week.push({
+        dateKey,
+        date: cellDate,
+        tokens,
+        inRange,
+      });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    rawWeeks.push(week);
+  }
+
+  const weeks: CalendarDayCell[][] = rawWeeks.map((week) =>
+    week.map((cell) => ({
+      ...cell,
+      level: cell.inRange ? computeIntensityLevel(cell.tokens, maxDailyTokens) : 0,
+    })),
+  );
+
+  return {
+    weeks,
+    monthLabels: [],
+    totalTokensInRange,
+    maxDailyTokens,
+    activeDaysCount,
+  };
+}
+

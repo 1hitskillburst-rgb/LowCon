@@ -59,6 +59,7 @@ import {
   executeSaveMemoryNoteTool,
   executeSaveWorkspaceFileTool,
   executeSearchMemoryTool,
+  extractEditTargetFilename,
   formatAttachedFileForPrompt,
   getToolPendingActivityLabel,
   READ_ATTACHED_CHUNK_TOOL_NAME,
@@ -78,6 +79,9 @@ import {
   CREATE_FILE_TOOL_NAME,
   DuplicateFileCodeFilter,
   executeCreateFileTool,
+  formatTitleFromFilename,
+  inferLanguageFromFilename,
+  normalizeToolArgumentsJsonString,
   parseToolArgumentsJson,
 } from './core/tools';
 import {
@@ -1031,7 +1035,10 @@ export const App: React.FC = () => {
       | { status: 'cancelled' }
       | { status: 'error'; message: string };
 
-    const runStep = (stepInspection: PromptInspection): Promise<StepOutcome> =>
+    const runStep = (
+      stepInspection: PromptInspection,
+      isFinalRound: boolean,
+    ): Promise<StepOutcome> =>
       new Promise((resolve) => {
         let stepRawText = '';
         const codeFilter = new DuplicateFileCodeFilter(
@@ -1057,7 +1064,11 @@ export const App: React.FC = () => {
               ? undefined
               : workspace.settings.effortLevel,
             tools: stepInspection.tools,
-            toolChoice: stepInspection.tools?.length ? 'auto' : undefined,
+            toolChoice: stepInspection.tools?.length
+              ? isFinalRound
+                ? 'none'
+                : 'auto'
+              : undefined,
           },
           {
             onThinkingToken: (token) => {
@@ -1130,7 +1141,7 @@ export const App: React.FC = () => {
     let latestTps = 0;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const outcome = await runStep(currentInspection);
+      const outcome = await runStep(currentInspection, round === MAX_TOOL_ROUNDS - 1);
 
       if (outcome.status === 'cancelled') {
         stopDrip();
@@ -1203,13 +1214,22 @@ export const App: React.FC = () => {
 
       // Discard any partial tool-preamble whitespace if nothing meaningful streamed, or let it finish naturally
       const roundToolCalls = outcome.toolCalls!;
+      // Re-serialize tool_call arguments to guaranteed-valid JSON strings before echoing
+      // back to LM Studio / llama.cpp on Round 2+ (prevents Jinja `fromjson` crashes).
+      const normalizedRoundToolCalls: ToolCallRecord[] = roundToolCalls.map((tc) => ({
+        ...tc,
+        function: {
+          name: tc.function.name,
+          arguments: normalizeToolArgumentsJsonString(tc.function.arguments),
+        },
+      }));
       const compactCallsForBudget: ToolCallRecord[] = [];
 
       inTurnToolTurns.push({
         id: `tool_req_${round}_${createUuid().slice(0, 6)}`,
         role: 'assistant',
         content: outcome.rawText,
-        toolCalls: roundToolCalls,
+        toolCalls: normalizedRoundToolCalls,
       });
 
       for (const tc of roundToolCalls) {
@@ -1237,7 +1257,13 @@ export const App: React.FC = () => {
           } else {
             toolActivityLabels.push(`Failed create_file: ${exec.error}`);
             logger.warn('chat', `Tool create_file error: ${exec.error}`);
-            compactCallsForBudget.push(tc);
+            compactCallsForBudget.push({
+              ...tc,
+              function: {
+                name: tc.function.name,
+                arguments: normalizeToolArgumentsJsonString(tc.function.arguments),
+              },
+            });
           }
           inTurnToolTurns.push({
             id: `tool_res_${tc.id}`,
@@ -1248,8 +1274,7 @@ export const App: React.FC = () => {
           });
         } else if (tc.function.name === EDIT_FILE_TOOL_NAME) {
           const parsedEditArgs = parseToolArgumentsJson(tc.function.arguments);
-          const requestedEditName =
-            typeof parsedEditArgs?.filename === 'string' ? parsedEditArgs.filename.trim() : '';
+          const requestedEditName = extractEditTargetFilename(parsedEditArgs);
           const liveWorkspaceFiles = workspaceRef.current.workspaceFiles;
           const allowEditsOverall = workspaceRef.current.settings.allowAiFileEdits;
           const liveLockedMatch = requestedEditName
@@ -1258,13 +1283,42 @@ export const App: React.FC = () => {
               )
             : undefined;
 
-          // Sync turnWorkspaceFiles with any user lock toggles or uploads performed concurrently
+          // Sync any newly added or updated Files-tab entries from live state
+          const turnWfById = new Map(turnWorkspaceFiles.map((wf) => [wf.id, wf]));
+          for (const liveWf of liveWorkspaceFiles) {
+            const existingTurnWf = turnWfById.get(liveWf.id);
+            if (!existingTurnWf || liveWf.updatedAt > existingTurnWf.updatedAt) {
+              turnWfById.set(liveWf.id, liveWf);
+            } else if (existingTurnWf.lockedByUser !== liveWf.lockedByUser) {
+              turnWfById.set(liveWf.id, { ...existingTurnWf, lockedByUser: liveWf.lockedByUser });
+            }
+          }
+          turnWorkspaceFiles = Array.from(turnWfById.values());
+
+          // Build editable file map across ALL local sources in precedence order:
+          // 1. Chat-attached files  2. Prior generated files  3. Live Files-tab files  4. In-turn edits
           const mergedEditableByLower = new Map<string, GeneratedFileArtifact>();
+          for (let attIdx = 0; attIdx < sessionAttachedFiles.length; attIdx++) {
+            const att = sessionAttachedFiles[attIdx];
+            mergedEditableByLower.set(att.name.toLowerCase(), {
+              id: `att_${attIdx}_${att.name}`,
+              filename: att.name,
+              title: formatTitleFromFilename(att.name),
+              language: inferLanguageFromFilename(att.name),
+              content: att.content,
+              createdAt: now,
+            });
+          }
+          for (const msg of activeSession.messages) {
+            for (const gen of msg.generatedFiles ?? []) {
+              mergedEditableByLower.set(gen.filename.toLowerCase(), gen);
+            }
+          }
           for (const wf of turnWorkspaceFiles) {
             mergedEditableByLower.set(wf.filename.toLowerCase(), workspaceFileToArtifact(wf));
           }
-          for (const gen of getSessionGeneratedFiles()) {
-            mergedEditableByLower.set(gen.filename.toLowerCase(), gen);
+          for (const file of collectedFiles) {
+            mergedEditableByLower.set(file.filename.toLowerCase(), file);
           }
 
           let exec: ReturnType<typeof executeEditFileTool>;
@@ -1433,7 +1487,13 @@ export const App: React.FC = () => {
           } else {
             toolActivityLabels.push(`Failed edit_file: ${exec.error}`);
             logger.warn('chat', `Tool edit_file error: ${exec.error}`);
-            compactCallsForBudget.push(tc);
+            compactCallsForBudget.push({
+              ...tc,
+              function: {
+                name: tc.function.name,
+                arguments: normalizeToolArgumentsJsonString(tc.function.arguments),
+              },
+            });
           }
           inTurnToolTurns.push({
             id: `tool_res_${tc.id}`,
@@ -1451,7 +1511,13 @@ export const App: React.FC = () => {
             toolActivityLabels.push(`Failed calculate: ${exec.error}`);
             logger.warn('chat', `Tool calculate error: ${exec.error}`);
           }
-          compactCallsForBudget.push(tc);
+          compactCallsForBudget.push({
+            ...tc,
+            function: {
+              name: tc.function.name,
+              arguments: normalizeToolArgumentsJsonString(tc.function.arguments),
+            },
+          });
           inTurnToolTurns.push({
             id: `tool_res_${tc.id}`,
             role: 'tool',
@@ -1461,16 +1527,24 @@ export const App: React.FC = () => {
           });
         } else if (tc.function.name === READ_ATTACHED_CHUNK_TOOL_NAME) {
           const readableByLower = new Map<string, AttachedFileAttachment>();
+          for (const att of sessionAttachedFiles) {
+            readableByLower.set(att.name.toLowerCase(), att);
+          }
+          for (const msg of activeSession.messages) {
+            for (const gen of msg.generatedFiles ?? []) {
+              readableByLower.set(gen.filename.toLowerCase(), {
+                name: gen.filename,
+                content: gen.content,
+              });
+            }
+          }
           for (const wf of turnWorkspaceFiles) {
             readableByLower.set(wf.filename.toLowerCase(), {
               name: wf.filename,
               content: wf.content,
             });
           }
-          for (const att of sessionAttachedFiles) {
-            readableByLower.set(att.name.toLowerCase(), att);
-          }
-          for (const gen of getSessionGeneratedFiles()) {
+          for (const gen of collectedFiles) {
             readableByLower.set(gen.filename.toLowerCase(), {
               name: gen.filename,
               content: gen.content,
@@ -1661,11 +1735,30 @@ export const App: React.FC = () => {
       );
 
       if (!nextAssembly.ok && nextAssembly.code === 'MANDATORY_EXCEEDS_BUDGET') {
-        const compactedTurns = inTurnToolTurns.map((t) =>
-          t.role === 'assistant' && t.toolCalls === roundToolCalls
-            ? { ...t, toolCalls: compactCallsForBudget }
-            : t,
+        const lastToolTurnStartIdx = inTurnToolTurns.findIndex(
+          (t) => t.role === 'assistant' && t.toolCalls === normalizedRoundToolCalls,
         );
+        const compactedTurns = inTurnToolTurns.map((t, idx) => {
+          if (t.role === 'assistant' && t.toolCalls === normalizedRoundToolCalls) {
+            return { ...t, toolCalls: compactCallsForBudget };
+          }
+          // Compact earlier large chunk-read outputs from prior rounds while keeping the latest round intact
+          if (
+            idx < lastToolTurnStartIdx &&
+            t.role === 'tool' &&
+            t.name === READ_ATTACHED_CHUNK_TOOL_NAME &&
+            t.content.length > 400
+          ) {
+            return {
+              ...t,
+              content: JSON.stringify({
+                status: 'ok',
+                note: '[earlier chunk content omitted to fit context budget]',
+              }),
+            };
+          }
+          return t;
+        });
         nextAssembly = assembleContext(
           {
             ...baseAssemblyCandidates,

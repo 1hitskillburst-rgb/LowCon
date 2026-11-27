@@ -73,6 +73,18 @@ export interface ParsedSseResult {
   error?: string;
 }
 
+function serializeToolArgsValue(raw: unknown): string | undefined {
+  if (typeof raw === 'string') return raw;
+  if (raw && typeof raw === 'object') {
+    try {
+      return JSON.stringify(raw);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 function normalizeToolCallChunks(raw: unknown): DeltaToolCallChunk[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined;
   const out: DeltaToolCallChunk[] = [];
@@ -89,6 +101,7 @@ function normalizeToolCallChunks(raw: unknown): DeltaToolCallChunk[] | undefined
       typeof rec.index === 'number' && Number.isInteger(rec.index) && rec.index >= 0
         ? rec.index
         : i;
+    const serializedArgs = rec.function ? serializeToolArgsValue(rec.function.arguments) : undefined;
     out.push({
       index,
       ...(typeof rec.id === 'string' ? { id: rec.id } : {}),
@@ -97,9 +110,7 @@ function normalizeToolCallChunks(raw: unknown): DeltaToolCallChunk[] | undefined
         ? {
             function: {
               ...(typeof rec.function.name === 'string' ? { name: rec.function.name } : {}),
-              ...(typeof rec.function.arguments === 'string'
-                ? { arguments: rec.function.arguments }
-                : {}),
+              ...(serializedArgs !== undefined ? { arguments: serializedArgs } : {}),
             },
           }
         : {}),
@@ -137,12 +148,14 @@ export function parseSseLine(line: string): ParsedSseResult | null {
         reasoning_content?: string | null;
         reasoning?: string | null;
         tool_calls?: unknown;
+        function_call?: { name?: unknown; arguments?: unknown } | null;
       };
       message?: {
         content?: string | null;
         reasoning_content?: string | null;
         reasoning?: string | null;
         tool_calls?: unknown;
+        function_call?: { name?: unknown; arguments?: unknown } | null;
       };
       finish_reason?: string | null;
     }>;
@@ -167,17 +180,36 @@ export function parseSseLine(line: string): ParsedSseResult | null {
     choice?.message?.reasoning;
   const deltaThinking = typeof rawThinking === 'string' ? rawThinking : undefined;
 
-  const deltaToolCalls = normalizeToolCallChunks(
+  let deltaToolCalls = normalizeToolCallChunks(
     choice?.delta?.tool_calls ?? choice?.message?.tool_calls,
   );
+  if (!deltaToolCalls) {
+    const legacyFn = choice?.delta?.function_call ?? choice?.message?.function_call;
+    if (legacyFn && typeof legacyFn === 'object') {
+      const legacyArgs = serializeToolArgsValue(legacyFn.arguments);
+      if (typeof legacyFn.name === 'string' || legacyArgs !== undefined) {
+        deltaToolCalls = [
+          {
+            index: 0,
+            type: 'function',
+            function: {
+              ...(typeof legacyFn.name === 'string' ? { name: legacyFn.name } : {}),
+              ...(legacyArgs !== undefined ? { arguments: legacyArgs } : {}),
+            },
+          },
+        ];
+      }
+    }
+  }
 
   const finishReason = choice?.finish_reason;
 
   let stopReason: ParsedSseResult['stopReason'];
   if (finishReason === 'stop') stopReason = 'done';
   else if (finishReason === 'length') stopReason = 'max_tokens';
-  else if (finishReason === 'tool_calls') stopReason = 'tool_calls';
-  else if (typeof finishReason === 'string' && finishReason.length > 0) {
+  else if (finishReason === 'tool_calls' || finishReason === 'function_call') {
+    stopReason = 'tool_calls';
+  } else if (typeof finishReason === 'string' && finishReason.length > 0) {
     stopReason = 'stop_sequence';
   }
 
@@ -302,13 +334,45 @@ class TagBlockSplitter {
   }
 }
 
+const KNOWN_WORKSPACE_TOOL_NAMES = new Set<string>([
+  CREATE_FILE_TOOL_NAME,
+  EDIT_FILE_TOOL_NAME,
+  CALCULATE_TOOL_NAME,
+  READ_ATTACHED_CHUNK_TOOL_NAME,
+  SEARCH_MEMORY_TOOL_NAME,
+  SAVE_MEMORY_TOOL_NAME,
+  SAVE_WORKSPACE_FILE_TOOL_NAME,
+]);
+
 function parseTagToolCallPayload(rawJson: string, index: number): ToolCallRecord | null {
   const parsed = parseToolArgumentsJson(rawJson);
   if (!parsed) return null;
-  const name = typeof parsed.name === 'string' ? parsed.name.trim() : '';
+
+  // Support both `{ name, arguments|parameters|args|input }` and `{ function: { name, arguments|parameters } }`
+  const fnObj =
+    parsed.function && typeof parsed.function === 'object' && !Array.isArray(parsed.function)
+      ? (parsed.function as Record<string, unknown>)
+      : null;
+
+  const rawName =
+    typeof parsed.name === 'string'
+      ? parsed.name
+      : typeof fnObj?.name === 'string'
+        ? fnObj.name
+        : typeof parsed.tool === 'string'
+          ? parsed.tool
+          : '';
+  const name = rawName.trim();
   if (!name) return null;
 
-  const rawArgs = parsed.arguments;
+  const rawArgs =
+    parsed.arguments ??
+    parsed.parameters ??
+    parsed.args ??
+    parsed.input ??
+    fnObj?.arguments ??
+    fnObj?.parameters ??
+    fnObj?.args;
   let serializedArgs = '{}';
   if (typeof rawArgs === 'string') {
     serializedArgs = rawArgs;
@@ -350,29 +414,55 @@ export async function consumeSseStream(
   const notifiedToolNames = new Set<string>();
   const tagToolCalls: ToolCallRecord[] = [];
   let activeTagToolBuffer = '';
+  let activeFnTagBuffer = '';
+  let accumulatedVisibleText = '';
+
+  const recordParsedTagTool = (rawPayload: string) => {
+    const parsed = parseTagToolCallPayload(rawPayload, tagToolCalls.length);
+    if (parsed) {
+      tagToolCalls.push(parsed);
+      if (!notifiedToolNames.has(parsed.function.name)) {
+        notifiedToolNames.add(parsed.function.name);
+        callbacks.onToolCallDetected?.(parsed.function.name);
+      }
+    }
+  };
+
+  const fnTagSplitter = new TagBlockSplitter(
+    '<function_call>',
+    '</function_call>',
+    (text) => {
+      if (text) {
+        emittedContentInChunk = true;
+        accumulatedVisibleText += text;
+        callbacks.onToken(text);
+      }
+    },
+    (tagInner) => {
+      activeFnTagBuffer += tagInner;
+    },
+    () => {
+      const payload = activeFnTagBuffer;
+      activeFnTagBuffer = '';
+      recordParsedTagTool(payload);
+    },
+  );
 
   const toolTagSplitter = new TagBlockSplitter(
     TOOL_CALL_OPEN_TAG,
     TOOL_CALL_CLOSE_TAG,
     (text) => {
       if (text) {
-        emittedContentInChunk = true;
-        callbacks.onToken(text);
+        fnTagSplitter.push(text);
       }
     },
     (tagInner) => {
       activeTagToolBuffer += tagInner;
     },
     () => {
-      const parsed = parseTagToolCallPayload(activeTagToolBuffer, tagToolCalls.length);
+      const payload = activeTagToolBuffer;
       activeTagToolBuffer = '';
-      if (parsed) {
-        tagToolCalls.push(parsed);
-        if (!notifiedToolNames.has(parsed.function.name)) {
-          notifiedToolNames.add(parsed.function.name);
-          callbacks.onToolCallDetected?.(parsed.function.name);
-        }
-      }
+      recordParsedTagTool(payload);
     },
   );
 
@@ -424,6 +514,7 @@ export async function consumeSseStream(
   const finalizeAndComplete = () => {
     thinkSplitter.flush();
     toolTagSplitter.flush();
+    fnTagSplitter.flush();
     const collectedNative = [...nativeToolCalls.entries()]
       .sort((a, b) => a[0] - b[0])
       .map(([, call]) => ({
@@ -434,11 +525,30 @@ export async function consumeSseStream(
         },
       }))
       .filter((call) => call.function.name.length > 0);
-    const collectedTools = collectedNative.length > 0 ? collectedNative : tagToolCalls;
-    const finalReason: StreamStopReason =
-      collectedTools.length > 0 && (stopReason === 'done' || stopReason === 'tool_calls')
-        ? 'tool_calls'
-        : stopReason;
+    let collectedTools = collectedNative.length > 0 ? collectedNative : tagToolCalls;
+
+    // Fallback: some local models emit a standalone JSON tool call without <tool_call> tags
+    if (collectedTools.length === 0 && accumulatedVisibleText.trim()) {
+      const trimmedVisible = accumulatedVisibleText
+        .trim()
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim();
+      if (trimmedVisible.startsWith('{') && trimmedVisible.endsWith('}')) {
+        const bareCandidate = parseTagToolCallPayload(trimmedVisible, 0);
+        if (bareCandidate && KNOWN_WORKSPACE_TOOL_NAMES.has(bareCandidate.function.name)) {
+          collectedTools = [bareCandidate];
+        }
+      }
+    }
+
+    // Preserve tool_calls whenever valid tool calls were emitted — even if llama.cpp /
+    // LM Studio ended the turn with finish_reason="stop_sequence" or "eos".
+    const hasValidCollectedTools =
+      collectedTools.length > 0 &&
+      (stopReason !== 'max_tokens' ||
+        collectedTools.every((call) => parseToolArgumentsJson(call.function.arguments) !== null));
+    const finalReason: StreamStopReason = hasValidCollectedTools ? 'tool_calls' : stopReason;
     const finalTokens = latestUsageTokens ?? streamedDeltas;
     callbacks.onComplete(finalTokens, finalReason, {
       tokensPerSecond: calcTokensPerSecond(finalTokens),
@@ -716,6 +826,20 @@ function findGeneratedFilesInMessages(messages: StructuredChatMessage[]): string
         for (const match of block.matchAll(/^- ([^\s(]+)\s*\(/gm)) {
           if (match[1]) pushUnique(match[1]);
         }
+      }
+    }
+    if (msg.role === 'user' && typeof msg.content === 'string') {
+      const inlineAttachMatches = msg.content.matchAll(
+        /\[Attached local file:\s*([^\]]+)\]/gi,
+      );
+      for (const match of inlineAttachMatches) {
+        if (match[1]) pushUnique(match[1]);
+      }
+      const indexedAttachMatches = msg.content.matchAll(
+        /Attached file:\s*([^\s(]+)\s*\(/gi,
+      );
+      for (const match of indexedAttachMatches) {
+        if (match[1]) pushUnique(match[1]);
       }
     }
     if (msg.role === 'tool' && typeof msg.content === 'string') {
@@ -1610,6 +1734,21 @@ export class InferenceController {
         errBody?.error ??
           `Local server at ${endpoint} returned HTTP ${resp.status}. Ensure LM Studio Local Server is running with a model loaded.`,
       );
+    }
+
+    const respContentType = (resp.headers.get('content-type') ?? '').toLowerCase();
+    if (respContentType.includes('application/json')) {
+      const rawJsonText = await resp.text();
+      const syntheticSse = `data: ${rawJsonText.trim()}\n\ndata: [DONE]\n\n`;
+      const encoder = new TextEncoder();
+      const singleStream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(syntheticSse));
+          controller.close();
+        },
+      });
+      await consumeSseStream(singleStream, signal, callbacks);
+      return;
     }
 
     await consumeSseStream(resp.body, signal, callbacks);

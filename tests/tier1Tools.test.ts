@@ -873,3 +873,188 @@ test('read_attached_chunk and search_memory handle empty files, bounds, and comp
     assert.ok(longSaved.note.content.length <= 800);
   }
 });
+
+test('edit_file recovers malformed local-LLM JSON, parameter aliases, stringified edits, and omitted single filename', () => {
+  const file = makeFileArtifact({
+    id: 'f_alias',
+    filename: 'server.py',
+    language: 'python',
+    content: 'def start():\n    port = 8000\n    return port\n',
+  });
+
+  // 1. Raw unescaped literal newlines inside JSON strings + trailing comma + markdown fence
+  const rawMalformed = [
+    '```json',
+    '{',
+    '  "file_path": "./server.py",',
+    '  "old_string": "def start():',
+    '    port = 8000",',
+    '  "new_string": "def start():',
+    '    port = 9000",',
+    '}',
+    '```',
+  ].join('\n');
+  const res1 = executeEditFileTool(rawMalformed, [file]);
+  assert.equal(res1.ok, true, res1.ok ? '' : res1.error);
+  if (res1.ok) {
+    assert.ok(res1.artifact.content.includes('port = 9000'));
+  }
+
+  // 2. Stringified `edits` array + omitted filename with single file + stringified line numbers
+  const res2 = executeEditFileTool(
+    JSON.stringify({
+      edits: JSON.stringify([{ line: '2', replacement: '    port = 3000' }]),
+    }),
+    [file],
+  );
+  assert.equal(res2.ok, true, res2.ok ? '' : res2.error);
+  if (res2.ok) {
+    assert.ok(res2.artifact.content.includes('port = 3000'));
+  }
+
+  // 3. Single edit object passed as `edits` with camelCase aliases
+  const res3 = executeEditFileTool(
+    JSON.stringify({
+      file: 'server.py',
+      edits: { oldText: 'port = 8000', newText: 'port = 4000' },
+    }),
+    [file],
+  );
+  assert.equal(res3.ok, true, res3.ok ? '' : res3.error);
+  if (res3.ok) {
+    assert.ok(res3.artifact.content.includes('port = 4000'));
+  }
+
+  // 4. Full-file content replacement fallback
+  const res4 = executeEditFileTool(
+    JSON.stringify({ filename: 'server.py', content: 'print("rewritten")\n' }),
+    [file],
+  );
+  assert.equal(res4.ok, true, res4.ok ? '' : res4.error);
+  if (res4.ok) {
+    assert.equal(res4.artifact.content, 'print("rewritten")\n');
+  }
+});
+
+test('edit_file strips accidental read_attached_chunk line prefixes, tolerates indentation/trailing-space drift, disambiguates with start_line, and returns closest-line hints on miss', () => {
+  const file = makeFileArtifact({
+    id: 'f_fuzzy',
+    filename: 'game.js',
+    language: 'javascript',
+    content: [
+      'function init() {',
+      '    const speed = 1;  ',
+      '    return speed;',
+      '}',
+      '',
+      'function reset() {',
+      '    const speed = 1;',
+      '    return speed;',
+      '}',
+      '',
+    ].join('\n'),
+  });
+
+  // 1. Model copied "6: " / "7: " / "8: " line numbers straight from read_attached_chunk
+  const prefixed = executeEditFileTool(
+    JSON.stringify({
+      filename: 'game.js',
+      old_text: '6: function reset() {\n7:     const speed = 1;\n8:     return speed;',
+      new_text: '6: function reset() {\n7:     const speed = 5;\n8:     return speed;',
+    }),
+    [file],
+  );
+  assert.equal(prefixed.ok, true, prefixed.ok ? '' : prefixed.error);
+  if (prefixed.ok) {
+    assert.equal(prefixed.artifact.content.includes('7: '), false);
+    assert.ok(prefixed.artifact.content.includes('function reset() {\n    const speed = 5;'));
+  }
+
+  // 2. Line-range replacement with copied "2: " prefix gets cleaned automatically
+  const prefixedLineRange = executeEditFileTool(
+    JSON.stringify({
+      filename: 'game.js',
+      start_line: 2,
+      end_line: 2,
+      replacement: '2:     const speed = 9;',
+    }),
+    [file],
+  );
+  assert.equal(prefixedLineRange.ok, true, prefixedLineRange.ok ? '' : prefixedLineRange.error);
+  if (prefixedLineRange.ok) {
+    assert.equal(prefixedLineRange.artifact.content.includes('2: '), false);
+    assert.ok(prefixedLineRange.artifact.content.includes('    const speed = 9;'));
+  }
+
+  // 3. Indentation drift (2 spaces instead of 4) matches uniquely & preserves 4-space base indent
+  const indentDrift = executeEditFileTool(
+    JSON.stringify({
+      filename: 'game.js',
+      old_text: 'function init() {\n  const speed = 1;\n  return speed;\n}',
+      new_text: 'function init() {\n  const speed = 10;\n  return speed;\n}',
+    }),
+    [file],
+  );
+  assert.equal(indentDrift.ok, true, indentDrift.ok ? '' : indentDrift.error);
+  if (indentDrift.ok) {
+    assert.ok(indentDrift.artifact.content.includes('const speed = 10;'));
+  }
+
+  // 4. Duplicate old_text disambiguated by start_line hint
+  const disambiguated = executeEditFileTool(
+    JSON.stringify({
+      filename: 'game.js',
+      start_line: 7,
+      old_text: '    return speed;',
+      new_text: '    return speed * 2;',
+    }),
+    [file],
+  );
+  assert.equal(disambiguated.ok, true, disambiguated.ok ? '' : disambiguated.error);
+  if (disambiguated.ok) {
+    assert.ok(disambiguated.artifact.content.includes('function init() {\n    const speed = 1;  \n    return speed;'));
+    assert.ok(disambiguated.artifact.content.includes('function reset() {\n    const speed = 1;\n    return speed * 2;'));
+  }
+
+  // 5. Append at EOF (start_line === total + 1) and unified diff patch support
+  const appended = executeEditFileTool(
+    JSON.stringify({
+      filename: 'game.js',
+      start_line: 10,
+      end_line: 10,
+      replacement: 'export { init, reset };',
+    }),
+    [file],
+  );
+  assert.equal(appended.ok, true, appended.ok ? '' : appended.error);
+  if (appended.ok) {
+    assert.ok(appended.artifact.content.includes('export { init, reset };'));
+  }
+
+  const patched = executeEditFileTool(
+    JSON.stringify({
+      filename: 'game.js',
+      patch: '@@ -6,3 +6,3 @@\n function reset() {\n-    const speed = 1;\n+    const speed = 42;\n     return speed;',
+    }),
+    [file],
+  );
+  assert.equal(patched.ok, true, patched.ok ? '' : patched.error);
+  if (patched.ok) {
+    assert.ok(patched.artifact.content.includes('const speed = 42;'));
+  }
+
+  // 6. Miss returns closest matching lines to help the LLM self-correct on Round 2
+  const miss = executeEditFileTool(
+    JSON.stringify({
+      filename: 'game.js',
+      old_text: 'function reset() {\n    const speed = 999;\n}',
+      new_text: 'function reset() {}',
+    }),
+    [file],
+  );
+  assert.equal(miss.ok, false);
+  if (!miss.ok) {
+    assert.ok(miss.error.includes('Closest lines in file'));
+    assert.ok(miss.error.includes('function reset()'));
+  }
+});

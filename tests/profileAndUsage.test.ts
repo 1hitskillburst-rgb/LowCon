@@ -18,9 +18,12 @@ import { computeThemeCssVariables, THEME_PRESETS } from '../src/core/theme.ts';
 import {
   addTokenUsage,
   backfillTokenUsageFromSessions,
+  buildRecentTokenHeatmapGrid,
   buildTokenCalendarGrid,
+  computeTokenUsageStats,
   formatCalendarTooltipText,
   formatCompactTokens,
+  formatStreakDays,
   getAvailableCalendarYears,
   toLocalDateKey,
 } from '../src/core/tokenUsage.ts';
@@ -208,8 +211,14 @@ test('SidebarNav replaces Local boundary active with Profile trigger and Profile
   assert.ok(profileHtml.includes('data-testid="profile-system-prompt-input"'));
   assert.ok(profileHtml.includes('data-testid="lifetime-tokens-value"'));
   assert.ok(profileHtml.includes('128.4k'));
-  assert.ok(profileHtml.includes('data-testid="calendar-period-heading"'));
-  assert.ok(profileHtml.includes('34.1k tokens used in the last year'));
+  assert.ok(profileHtml.includes('lifetime tokens'));
+  assert.ok(profileHtml.includes('data-testid="peak-day-tokens-value"'));
+  assert.ok(profileHtml.includes('peak day'));
+  assert.ok(profileHtml.includes('data-testid="current-streak-value"'));
+  assert.ok(profileHtml.includes('current streak'));
+  assert.ok(profileHtml.includes('data-testid="longest-streak-value"'));
+  assert.ok(profileHtml.includes('longest streak'));
+  assert.ok(profileHtml.includes('1 day'));
   assert.ok(profileHtml.includes(`data-testid="calendar-day-${todayKey}"`));
   assert.ok(profileHtml.includes('34.1k tokens used on '));
 
@@ -220,6 +229,72 @@ test('SidebarNav replaces Local boundary active with Profile trigger and Profile
       assert.ok(computed.vars[`--lc-contrib-${lvl}`]);
     }
   }
+});
+
+test('computeTokenUsageStats and buildRecentTokenHeatmapGrid compute peak day, streaks, and 26-week grid accurately', () => {
+  const now = new Date(2026, 10, 26); // Thu Nov 26, 2026
+  const usage = {
+    totalLifetimeTokens: 435_300_000,
+    dailyTokens: {
+      // Earlier 5-day streak
+      '2026-10-01': 1_200_000,
+      '2026-10-02': 2_500_000,
+      '2026-10-03': 3_100_000,
+      '2026-10-04': 57_100_000,
+      '2026-10-05': 900_000,
+      // Current 8-day streak ending today (Nov 19..Nov 26)
+      '2026-11-19': 4_000_000,
+      '2026-11-20': 12_000_000,
+      '2026-11-21': 8_000_000,
+      '2026-11-22': 19_000_000,
+      '2026-11-23': 25_000_000,
+      '2026-11-24': 14_000_000,
+      '2026-11-25': 33_000_000,
+      '2026-11-26': 41_000_000,
+    },
+  };
+
+  const stats = computeTokenUsageStats(usage, now);
+  assert.equal(stats.lifetimeTokens, 435_300_000);
+  assert.equal(stats.peakDayTokens, 57_100_000);
+  assert.equal(stats.peakDayDateKey, '2026-10-04');
+  assert.equal(stats.currentStreakDays, 8);
+  assert.equal(stats.longestStreakDays, 8);
+  assert.equal(formatStreakDays(stats.currentStreakDays), '8 days');
+  assert.equal(formatStreakDays(1), '1 day');
+  assert.equal(formatStreakDays(0), '0 days');
+
+  // Active streak remains alive if yesterday had usage and today has 0 so far
+  const yesterdayStats = computeTokenUsageStats(
+    {
+      totalLifetimeTokens: 1000,
+      dailyTokens: { '2026-11-24': 400, '2026-11-25': 600 },
+    },
+    now,
+  );
+  assert.equal(yesterdayStats.currentStreakDays, 2);
+  assert.equal(yesterdayStats.longestStreakDays, 2);
+
+  // Broken streak returns 0 current while keeping longest
+  const brokenStats = computeTokenUsageStats(
+    {
+      totalLifetimeTokens: 1000,
+      dailyTokens: { '2026-11-20': 400, '2026-11-21': 600 },
+    },
+    now,
+  );
+  assert.equal(brokenStats.currentStreakDays, 0);
+  assert.equal(brokenStats.longestStreakDays, 2);
+
+  // 26-week grid has exactly 26 columns x 7 rows, future days after Thu Nov 26 are out of range
+  const grid = buildRecentTokenHeatmapGrid(usage.dailyTokens, 26, now);
+  assert.equal(grid.weeks.length, 26);
+  assert.ok(grid.weeks.every((w) => w.length === 7));
+  const lastWeek = grid.weeks[25];
+  assert.equal(lastWeek[4].dateKey, '2026-11-26');
+  assert.equal(lastWeek[4].inRange, true);
+  assert.equal(lastWeek[5].inRange, false); // Fri Nov 27 (future)
+  assert.equal(lastWeek[6].inRange, false); // Sat Nov 28 (future)
 });
 
 test('generateDeterministicMockReply addresses user by profile username and acknowledges custom system prompt', () => {

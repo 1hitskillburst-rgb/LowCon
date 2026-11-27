@@ -598,3 +598,202 @@ test('assembleContext packs ALL_FILE_AND_TIER1_TOOLS and indexed large attachmen
   }
 });
 
+test('consumeSseStream preserves tool_calls on stop_sequence, object arguments, Llama parameters tag, and bare JSON tool calls', async () => {
+  // 1. Native tool_calls with object `arguments` and finish_reason="stop_sequence"
+  const nativeObjStream = makeSseStream([
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_obj","type":"function","function":{"name":"edit_file","arguments":{"filename":"app.py","old_text":"a","new_text":"b"}}}]}}]}\n\n',
+    'data: {"choices":[{"delta":{},"finish_reason":"stop_sequence"}]}\n\n',
+  ]);
+  let reason1: StreamStopReason | null = null;
+  let calls1: ToolCallRecord[] | undefined;
+  await consumeSseStream(nativeObjStream, new AbortController().signal, {
+    onToken: () => {},
+    onComplete: (_t, r, stats) => {
+      reason1 = r;
+      calls1 = stats?.toolCalls;
+    },
+    onCancelled: () => assert.fail('unexpected cancel'),
+    onError: (msg) => assert.fail(msg),
+  });
+  assert.equal(reason1, 'tool_calls');
+  assert.equal(calls1?.[0]?.function.name, 'edit_file');
+  assert.deepEqual(JSON.parse(calls1?.[0]?.function.arguments ?? '{}'), {
+    filename: 'app.py',
+    old_text: 'a',
+    new_text: 'b',
+  });
+
+  // 2. Llama-style `<tool_call>{"name":"edit_file","parameters":{...}}</tool_call>` with stop_sequence
+  const llamaTagStream = makeSseStream([
+    'data: {"choices":[{"delta":{"content":"<tool_call>{\\"name\\":\\"edit_file\\",\\"parameters\\":{\\"filename\\":\\"a.ts\\",\\"old_text\\":\\"x\\",\\"new_text\\":\\"y\\"}}</tool_call>"}}]}\n\n',
+    'data: {"choices":[{"delta":{},"finish_reason":"eos"}]}\n\n',
+  ]);
+  let reason2: StreamStopReason | null = null;
+  let calls2: ToolCallRecord[] | undefined;
+  await consumeSseStream(llamaTagStream, new AbortController().signal, {
+    onToken: () => {},
+    onComplete: (_t, r, stats) => {
+      reason2 = r;
+      calls2 = stats?.toolCalls;
+    },
+    onCancelled: () => assert.fail('unexpected cancel'),
+    onError: (msg) => assert.fail(msg),
+  });
+  assert.equal(reason2, 'tool_calls');
+  assert.equal(calls2?.[0]?.function.name, 'edit_file');
+  assert.deepEqual(JSON.parse(calls2?.[0]?.function.arguments ?? '{}'), {
+    filename: 'a.ts',
+    old_text: 'x',
+    new_text: 'y',
+  });
+
+  // 3. Bare fenced JSON tool call fallback
+  const bareJsonStream = makeSseStream([
+    'data: {"choices":[{"delta":{"content":"```json\\n{\\"name\\":\\"edit_file\\",\\"arguments\\":{\\"filename\\":\\"b.ts\\",\\"old_text\\":\\"1\\",\\"new_text\\":\\"2\\"}}\\n```"}}]}\n\n',
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+  ]);
+  let reason3: StreamStopReason | null = null;
+  let calls3: ToolCallRecord[] | undefined;
+  await consumeSseStream(bareJsonStream, new AbortController().signal, {
+    onToken: () => {},
+    onComplete: (_t, r, stats) => {
+      reason3 = r;
+      calls3 = stats?.toolCalls;
+    },
+    onCancelled: () => assert.fail('unexpected cancel'),
+    onError: (msg) => assert.fail(msg),
+  });
+  assert.equal(reason3, 'tool_calls');
+  assert.equal(calls3?.[0]?.function.name, 'edit_file');
+});
+
+test('assembleContext Stage 3 trims assistant(tool_calls)+tool groups atomically without leaving orphaned tool messages', () => {
+  const res = assembleContext(
+    {
+      coreInstruction: 'You are LowCon.',
+      currentUserMessage: '',
+      pinnedFacts: [],
+      retrievedMemories: [],
+      conversationTurns: [
+        { id: 'u1', role: 'user', content: 'Read and edit demo.py' },
+        {
+          id: 'a1',
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            {
+              id: 'call_read_1',
+              type: 'function',
+              function: { name: 'read_attached_chunk', arguments: '{"filename":"demo.py"}' },
+            },
+          ],
+        },
+        {
+          id: 't1',
+          role: 'tool',
+          toolCallId: 'call_read_1',
+          name: 'read_attached_chunk',
+          content: JSON.stringify({
+            status: 'ok',
+            content: Array.from({ length: 80 }, (_, i) => `${i + 1}: const v_${i} = "${'x'.repeat(24)}";`).join('\n'),
+          }),
+        },
+        {
+          id: 'a2',
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            {
+              id: 'call_edit_2',
+              type: 'function',
+              function: { name: 'edit_file', arguments: '{"filename":"demo.py","old_text":"a","new_text":"b"}' },
+            },
+          ],
+        },
+        {
+          id: 't2',
+          role: 'tool',
+          toolCallId: 'call_edit_2',
+          name: 'edit_file',
+          content: '{"status":"ok","filename":"demo.py","linesChanged":1}',
+        },
+      ],
+      summaries: [],
+      tools: [EDIT_FILE_TOOL_DEFINITION],
+    },
+    {
+      modelContextLimit: 1024,
+      outputReservePct: 20,
+      safetyMarginPct: 5,
+      templateType: 'ChatML',
+      allowEmptyUserMessage: true,
+    },
+  );
+
+  assert.equal(res.ok, true);
+  if (res.ok) {
+    const msgs = res.inspection.structuredMessages;
+    // Verify NO `role: 'tool'` message appears without a preceding `assistant` with matching `tool_calls`
+    for (let i = 0; i < msgs.length; i++) {
+      if (msgs[i].role === 'tool') {
+        let foundOwner = false;
+        for (let j = i - 1; j >= 0; j--) {
+          if (msgs[j].role === 'tool') continue;
+          if (
+            msgs[j].role === 'assistant' &&
+            msgs[j].tool_calls?.some((tc) => tc.id === msgs[i].tool_call_id)
+          ) {
+            foundOwner = true;
+          }
+          break;
+        }
+        assert.equal(
+          foundOwner,
+          true,
+          `Orphaned tool message found at index ${i} (${msgs[i].tool_call_id})`,
+        );
+      }
+    }
+    // Latest edit_file round is preserved
+    assert.equal(msgs[msgs.length - 1]?.role, 'tool');
+    assert.equal(msgs[msgs.length - 1]?.name, 'edit_file');
+  }
+});
+
+test('mock harness and 2K tool selector support editing attached files directly', async () => {
+  const tools2kAttached = selectToolsForPromptBudget(2048, {
+    hasAttachments: true,
+    hasGeneratedFiles: false,
+  });
+  assert.ok(
+    tools2kAttached.some((t) => t.function.name === EDIT_FILE_TOOL_NAME),
+    'Expected edit_file to be available on 2K window when a file is attached',
+  );
+
+  const logger = new DiagnosticLogger('disabled');
+  const controller = new InferenceController(logger, () => {});
+  const mockModel = createDefaultModels()[0];
+  assert.equal(controller.loadModel(mockModel).ok, true);
+
+  const attachedPrompt = formatAttachedFileForPrompt({
+    name: 'notes.txt',
+    content: 'status = draft\nowner = alice\n',
+  });
+  const step = await runMockStep(controller, 't_attach_edit', [
+    {
+      role: 'user',
+      content: `Edit this file to replace 'draft' with 'final'\n\n${attachedPrompt.promptBlock}`,
+    },
+  ]);
+  assert.equal(step.stopReason, 'tool_calls');
+  assert.equal(step.toolCalls?.[0]?.function.name, EDIT_FILE_TOOL_NAME);
+  const args = JSON.parse(step.toolCalls![0].function.arguments) as {
+    filename: string;
+    old_text: string;
+    new_text: string;
+  };
+  assert.equal(args.filename, 'notes.txt');
+  assert.equal(args.old_text, 'draft');
+  assert.equal(args.new_text, 'final');
+});
+

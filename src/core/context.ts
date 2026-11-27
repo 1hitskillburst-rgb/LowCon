@@ -595,20 +595,40 @@ export function assembleContext(
     currentTokens = estimateTokensConservative(rendered.exactRenderedPrompt) + toolsTokens;
   }
 
-  // Stage 3: Drop oldest unpinned conversation turns
+  // Stage 3: Drop oldest unpinned conversation turns (keeping assistant tool_calls + tool results atomic)
   while (currentTokens > promptBudget) {
     const removeIdx = workingTurns.findIndex((t) => !t.isPinned);
     if (removeIdx === -1) break;
 
-    const [removed] = workingTurns.splice(removeIdx, 1);
-    const removedPreview = removed.content || removed.toolCalls?.map((c) => c.function.name).join(', ') || 'tool';
-    excludedCandidates.push({
-      id: removed.id,
-      kind: 'conversation_turn',
-      label: `Turn (${removed.role}): ${safeTruncateChars(removedPreview, 28)}`,
-      estimatedTokens: estimateTokensConservative(formatTurnForTemplate(removed).content),
-      reason: `Trimmed during Stage 3 overflow pass: oldest unpinned turn removed to preserve newer turns within ${promptBudget} token budget.`,
-    });
+    let removeCount = 1;
+    const candidate = workingTurns[removeIdx];
+    if (candidate.role === 'assistant' && candidate.toolCalls && candidate.toolCalls.length > 0) {
+      while (
+        removeIdx + removeCount < workingTurns.length &&
+        workingTurns[removeIdx + removeCount].role === 'tool' &&
+        !workingTurns[removeIdx + removeCount].isPinned
+      ) {
+        removeCount += 1;
+      }
+    }
+
+    const removedGroup = workingTurns.splice(removeIdx, removeCount);
+    // Never leave orphaned leading `role: 'tool'` turns without a preceding assistant tool_calls turn
+    while (workingTurns.length > 0 && workingTurns[0].role === 'tool' && !workingTurns[0].isPinned) {
+      removedGroup.push(workingTurns.shift()!);
+    }
+
+    for (const removed of removedGroup) {
+      const removedPreview =
+        removed.content || removed.toolCalls?.map((c) => c.function.name).join(', ') || 'tool';
+      excludedCandidates.push({
+        id: removed.id,
+        kind: 'conversation_turn',
+        label: `Turn (${removed.role}): ${safeTruncateChars(removedPreview, 28)}`,
+        estimatedTokens: estimateTokensConservative(formatTurnForTemplate(removed).content),
+        reason: `Trimmed during Stage 3 overflow pass: oldest unpinned turn removed to preserve newer turns within ${promptBudget} token budget.`,
+      });
+    }
 
     rendered = renderStructuredAndPrompt(
       options.templateType,
