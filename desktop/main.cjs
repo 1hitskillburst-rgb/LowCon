@@ -1,7 +1,9 @@
-const { app, BrowserWindow, dialog, shell } = require('electron');
+const { app, BrowserWindow, dialog, nativeTheme, session, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { startDesktopServer, unloadAllLocalModels } = require('./server.cjs');
+
+const ALLOWED_ELECTRON_LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
 let mainWindow = null;
 let embeddedServer = null;
@@ -77,6 +79,24 @@ function buildStartupErrorHtml(title, detail, hint) {
         font-size: 12px;
         color: #161B26;
       }
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: #11141A;
+          color: #F3F6FA;
+        }
+        .card {
+          background: #181C24;
+          border-color: #2B3240;
+          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+        }
+        p {
+          color: #C2CAD8;
+        }
+        pre {
+          background: #141820;
+          color: #E2E8F0;
+        }
+      }
     </style>
   </head>
   <body>
@@ -123,7 +143,7 @@ async function createMainWindow() {
     minWidth: 1024,
     minHeight: 680,
     title: 'LowCon — Local Model Workbench',
-    backgroundColor: '#F7F8F9',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#11141A' : '#F7F8F9',
     autoHideMenuBar: true,
     ...(iconPath ? { icon: iconPath } : {}),
     webPreferences: {
@@ -209,6 +229,27 @@ if (!gotSingleInstanceLock) {
   });
 
   app.whenReady().then(() => {
+    // Defense-in-depth egress guard: block any non-loopback network request from the desktop renderer
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+      try {
+        const parsed = new URL(details.url);
+        if (
+          parsed.protocol === 'http:' ||
+          parsed.protocol === 'https:' ||
+          parsed.protocol === 'ws:' ||
+          parsed.protocol === 'wss:'
+        ) {
+          const allowed = ALLOWED_ELECTRON_LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase());
+          callback({ cancel: !allowed });
+          return;
+        }
+      } catch {
+        callback({ cancel: true });
+        return;
+      }
+      callback({ cancel: false });
+    });
+
     createMainWindow().catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[LowCon Desktop] Fatal startup error:', msg);
@@ -243,7 +284,7 @@ app.on('before-quit', (event) => {
   if (isUnloadingOnQuit) return;
   isUnloadingOnQuit = true;
 
-  const timeout = new Promise((resolve) => setTimeout(resolve, 2500));
+  const timeout = new Promise((resolve) => setTimeout(resolve, 4500));
   Promise.race([unloadAllLocalModels().catch(() => {}), timeout]).finally(() => {
     quitUnloadDone = true;
     closeEmbeddedServer();

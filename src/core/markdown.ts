@@ -41,6 +41,7 @@ export type InlineToken =
   | { type: 'bold_italic'; children: InlineToken[] }
   | { type: 'strike'; children: InlineToken[] }
   | { type: 'link'; label: InlineToken[]; href: string }
+  | { type: 'image'; alt: string; src: string; isInlineSafe: boolean }
   | { type: 'kbd'; text: string }
   | { type: 'br' };
 
@@ -54,7 +55,7 @@ const CALLOUT_LABELS: Record<CalloutKind, string> = {
 
 export function sanitizeHref(raw: string): string | null {
   const trimmed = raw.trim();
-  if (!trimmed) return null;
+  if (!trimmed || trimmed.startsWith('//')) return null;
   if (trimmed.startsWith('#') || trimmed.startsWith('/')) {
     return trimmed;
   }
@@ -67,6 +68,59 @@ export function sanitizeHref(raw: string): string | null {
   } catch {
     return null;
   }
+}
+
+export function sanitizeImageSrc(raw: string): { src: string; isInlineSafe: boolean } | null {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.startsWith('//')) return null;
+  if (trimmed.startsWith('/')) {
+    return { src: trimmed, isInlineSafe: true };
+  }
+  if (
+    /^data:image\/(?:png|jpeg|jpg|gif|webp|bmp|x-icon|vnd\.microsoft\.icon|svg\+xml)(?:;|,)/i.test(
+      trimmed,
+    )
+  ) {
+    return { src: trimmed, isInlineSafe: true };
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return { src: parsed.toString(), isInlineSafe: false };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function findBalancedBracketEnd(input: string, openIdx: number): number {
+  let depth = 0;
+  let pos = openIdx;
+  while (pos < input.length) {
+    const c = input[pos];
+    if (c === '\\') {
+      pos += 2;
+      continue;
+    }
+    if (c === '`') {
+      let ticks = 0;
+      while (pos + ticks < input.length && input[pos + ticks] === '`') ticks += 1;
+      const closer = '`'.repeat(ticks);
+      const end = input.indexOf(closer, pos + ticks);
+      if (end !== -1) {
+        pos = end + ticks;
+        continue;
+      }
+    }
+    if (c === '[') depth += 1;
+    else if (c === ']') {
+      depth -= 1;
+      if (depth === 0) return pos;
+    }
+    pos += 1;
+  }
+  return -1;
 }
 
 function splitTableRow(line: string): string[] {
@@ -600,14 +654,55 @@ export function parseInlineTokens(input: string): InlineToken[] {
       }
     }
 
+    // Images: ![alt](src)
+    if (ch === '!' && input[i + 1] === '[') {
+      const closeBracket = findBalancedBracketEnd(input, i + 1);
+      if (closeBracket !== -1 && input[closeBracket + 1] === '(') {
+        let depth = 1;
+        let urlEnd = closeBracket + 2;
+        while (urlEnd < input.length && depth > 0) {
+          if (input[urlEnd] === '\\') {
+            urlEnd += 2;
+            continue;
+          }
+          if (input[urlEnd] === '(') depth += 1;
+          else if (input[urlEnd] === ')') depth -= 1;
+          if (depth === 0) break;
+          urlEnd += 1;
+        }
+        if (depth === 0) {
+          const rawAlt = input.slice(i + 2, closeBracket);
+          const rawSrc = input.slice(closeBracket + 2, urlEnd).split(/\s+/)[0] ?? '';
+          const safeImg = sanitizeImageSrc(rawSrc);
+          flushText();
+          if (safeImg) {
+            tokens.push({
+              type: 'image',
+              alt: rawAlt,
+              src: safeImg.src,
+              isInlineSafe: safeImg.isInlineSafe,
+            });
+          } else {
+            tokens.push({ type: 'text', text: rawAlt || '[image]' });
+          }
+          i = urlEnd + 1;
+          continue;
+        }
+      }
+    }
+
     // Links: [label](url)
     if (ch === '[') {
-      const closeBracket = input.indexOf(']', i + 1);
+      const closeBracket = findBalancedBracketEnd(input, i);
       if (closeBracket !== -1 && input[closeBracket + 1] === '(') {
         // Balance parentheses inside URL
         let depth = 1;
         let urlEnd = closeBracket + 2;
         while (urlEnd < input.length && depth > 0) {
+          if (input[urlEnd] === '\\') {
+            urlEnd += 2;
+            continue;
+          }
           if (input[urlEnd] === '(') depth += 1;
           else if (input[urlEnd] === ')') depth -= 1;
           if (depth === 0) break;

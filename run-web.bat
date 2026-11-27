@@ -27,7 +27,8 @@ if not exist "node_modules" (
   )
 )
 
-start "" /min cmd /c "timeout /t 2 /nobreak >nul & start http://localhost:3000"
+if not defined HOST set HOST=127.0.0.1
+start "" /min cmd /c "timeout /t 2 /nobreak >nul & start http://127.0.0.1:3000"
 call npm run dev >nul 2>&1
 if errorlevel 1 (
   powershell -NoProfile -WindowStyle Hidden -Command "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('LowCon web server exited unexpectedly.', 'LowCon', 0, 16)"

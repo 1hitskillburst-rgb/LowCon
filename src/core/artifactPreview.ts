@@ -260,7 +260,16 @@ function isUnsafeUrlValue(rawValue: string): boolean {
   // eslint-disable-next-line no-control-regex
   const compact = decoded.replace(/[\u0000-\u0020\u007f]+/g, '').toLowerCase();
 
-  if (compact.startsWith('javascript:') || compact.startsWith('vbscript:')) {
+  if (
+    compact.startsWith('javascript:') ||
+    compact.startsWith('vbscript:') ||
+    compact.startsWith('http:') ||
+    compact.startsWith('https:') ||
+    compact.startsWith('//') ||
+    compact.startsWith('ftp:') ||
+    compact.startsWith('ws:') ||
+    compact.startsWith('wss:')
+  ) {
     return true;
   }
 
@@ -679,10 +688,15 @@ function findTopLevelTagMatch(html: string, tagName: string): { start: number; e
 }
 
 function stripExistingCspMetaTags(html: string): string {
-  return html.replace(
-    /<meta\b[^>]*\bhttp-equiv\s*=\s*(?:"Content-Security-Policy"|'Content-Security-Policy'|Content-Security-Policy)[^>]*>/gi,
-    '',
-  );
+  return html
+    .replace(
+      /<meta\b[^>]*\bhttp-equiv\s*=\s*(?:"Content-Security-Policy"|'Content-Security-Policy'|Content-Security-Policy)[^>]*>/gi,
+      '',
+    )
+    .replace(
+      /<meta\b[^>]*\bhttp-equiv\s*=\s*(?:"refresh"|'refresh'|refresh)(?=[\s/>])[^>]*>/gi,
+      '',
+    );
 }
 
 function hasOnlySafeDocumentPreamble(prefix: string, allowHtmlOpenTag: boolean): boolean {

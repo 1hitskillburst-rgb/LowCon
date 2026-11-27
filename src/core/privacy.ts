@@ -61,6 +61,15 @@ export function formatRelativeTime(timestampMs: number, nowMs = Date.now()): str
 export function sanitizeDiagnosticMessage(input: string): string {
   let text = input;
 
+  // JSON-formatted secrets / sensitive fields ("api_key": "...", "password": "...", "prompt": "...")
+  text = text.replace(
+    /("(?:password|passphrase|token|api_key|apiKey|secret|authorization|prompt|content|memory_text|user_message|assistant_response)"\s*:\s*")([^"\\]*(?:\\.[^"\\]*)*)(")/gi,
+    '$1[REDACTED]$3',
+  );
+
+  // Authorization header lines
+  text = text.replace(/(authorization\s*:\s*)[^\n]+/gi, '$1[REDACTED]');
+
   // Line-scoped sensitive fields (prompt/content/passphrase)
   const linePrefixes = [
     'password=',
@@ -84,9 +93,15 @@ export function sanitizeDiagnosticMessage(input: string): string {
   const tokenKeywords = ['bearer ', 'token=', 'api_key=', 'secret='];
   for (const kw of tokenKeywords) {
     const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(`(${escaped})[^\\s,&]+`, 'gi');
+    const regex = new RegExp(`(${escaped})[^\\s,&"']+`, 'gi');
     text = text.replace(regex, '$1[REDACTED]');
   }
+
+  // Common standalone API key / access token patterns
+  text = text.replace(
+    /\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{12,}|AIza[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g,
+    '[REDACTED_KEY]',
+  );
 
   return text;
 }

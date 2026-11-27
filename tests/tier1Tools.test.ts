@@ -241,6 +241,28 @@ test('calculate supports json_validate, regex_test, and date_diff modes', () => 
   );
   assert.equal(badRegex.ok, false);
 
+  // catastrophic backtracking regex patterns must be rejected before executing
+  for (const unsafePattern of ['(a+)+', '(a|aa)+', '([a-z]+)*', '(a+){2,10}']) {
+    const blocked = executeCalculateTool(
+      JSON.stringify({
+        mode: 'regex_test',
+        pattern: unsafePattern,
+        input: `${'a'.repeat(35)}!`,
+      }),
+    );
+    assert.equal(blocked.ok, false, `Expected catastrophic pattern '${unsafePattern}' to be blocked`);
+  }
+
+  // safe grouped alternation regex still succeeds
+  const safeGrouped = executeCalculateTool(
+    JSON.stringify({
+      mode: 'regex_test',
+      pattern: '(foo|bar)+',
+      input: 'foobar',
+    }),
+  );
+  assert.equal(safeGrouped.ok, true);
+
   // date_diff valid
   const dateDiff = executeCalculateTool(
     JSON.stringify({

@@ -96,6 +96,7 @@ export function isDarkColor(hex: string): boolean {
 
 export function computeThemeCssVariables(rawTheme?: Partial<ThemeSettings>): {
   mode: 'light' | 'dark';
+  codeMode: 'light' | 'dark';
   vars: Record<string, string>;
 } {
   const defaults = createDefaultTheme();
@@ -109,8 +110,10 @@ export function computeThemeCssVariables(rawTheme?: Partial<ThemeSettings>): {
   const sideDark = isDarkColor(sidebar);
   const accentDark = isDarkColor(accent);
   const mode: 'light' | 'dark' = bgDark ? 'dark' : 'light';
+  const codeMode: 'light' | 'dark' = surfDark ? 'dark' : 'light';
 
   const panel = mixHex(sidebar, bg, 0.36);
+  const panelDark = isDarkColor(panel);
   const line = bgDark ? mixHex(bg, '#FFFFFF', 0.14) : mixHex(bg, '#161B26', 0.14);
   const lineSoft = bgDark ? mixHex(bg, '#FFFFFF', 0.08) : mixHex(bg, '#161B26', 0.07);
   const hover = sideDark ? mixHex(sidebar, '#FFFFFF', 0.1) : mixHex(sidebar, '#161B26', 0.06);
@@ -131,17 +134,34 @@ export function computeThemeCssVariables(rawTheme?: Partial<ThemeSettings>): {
   const sideInk2 = sideDark ? '#B3BDCE' : '#444D5C';
   const sideMute = sideDark ? '#838FA3' : '#778091';
 
+  const panelInk = panelDark ? '#E8EDF5' : '#161B26';
+  const panelInk2 = panelDark ? '#B3BDCE' : '#444D5C';
+  const panelMute = panelDark ? '#838FA3' : '#778091';
+  const panelLine = panelDark ? mixHex(panel, '#FFFFFF', 0.14) : mixHex(panel, '#161B26', 0.14);
+
   const accentHover = accentDark ? mixHex(accent, '#FFFFFF', 0.14) : mixHex(accent, '#000000', 0.15);
   const accentContrast = accentDark ? '#FFFFFF' : '#111827';
   const activePillBg = sideDark ? '#E8EDF5' : '#161B26';
   const activePillFg = sideDark ? '#11141A' : '#FFFFFF';
+  const surfActiveBg = surfDark ? '#E8EDF5' : '#161B26';
+  const surfActiveFg = surfDark ? '#11141A' : '#FFFFFF';
+  const surfActiveBadgeBg = surfDark ? 'rgba(17, 20, 26, 0.16)' : 'rgba(255, 255, 255, 0.22)';
 
-  const codeBg = surfDark ? mixHex(surface, '#000000', 0.22) : mixHex(bg, surface, 0.35);
-  const codeHeader = surfDark ? mixHex(surface, '#FFFFFF', 0.06) : mixHex(sidebar, bg, 0.55);
-  const codeBorder = surfDark ? mixHex(surface, '#FFFFFF', 0.14) : line;
+  // Derive code block surfaces solely from `surface` polarity so mixed custom themes never produce muddy mid-grays
+  const codeBg = surfDark ? mixHex(surface, '#000000', 0.22) : mixHex(surface, '#161B26', 0.05);
+  const codeHeader = surfDark ? mixHex(surface, '#FFFFFF', 0.06) : mixHex(surface, '#161B26', 0.09);
+  const codeBorder = surfLine;
   const codeText = surfDark ? '#E6EDF3' : '#161B26';
   const codeMute = surfDark ? '#9BA7B9' : '#57606A';
-  const inlineCodeBg = surfDark ? mixHex(surface, '#FFFFFF', 0.1) : mixHex(sidebar, bg, 0.45);
+  const inlineCodeBg = bgDark ? mixHex(bg, '#FFFFFF', 0.1) : mixHex(bg, '#161B26', 0.07);
+
+  const success = bgDark ? '#4ADE80' : '#1D7A4E';
+  const danger = bgDark ? '#F87171' : '#C8232C';
+  const warn = bgDark ? '#FBBF24' : '#B45309';
+
+  const successContrast = isDarkColor(success) ? '#FFFFFF' : '#0B1A10';
+  const dangerContrast = isDarkColor(danger) ? '#FFFFFF' : '#1F0708';
+  const warnContrast = isDarkColor(warn) ? '#FFFFFF' : '#1C1104';
 
   const vars: Record<string, string> = {
     '--lc-bg': bg,
@@ -159,9 +179,16 @@ export function computeThemeCssVariables(rawTheme?: Partial<ThemeSettings>): {
     '--lc-surf-mute': surfMute,
     '--lc-surf-line': surfLine,
     '--lc-surf-hover': surfHover,
+    '--lc-surf-active-bg': surfActiveBg,
+    '--lc-surf-active-fg': surfActiveFg,
+    '--lc-surf-active-badge-bg': surfActiveBadgeBg,
     '--lc-side-ink': sideInk,
     '--lc-side-ink2': sideInk2,
     '--lc-side-mute': sideMute,
+    '--lc-panel-ink': panelInk,
+    '--lc-panel-ink2': panelInk2,
+    '--lc-panel-mute': panelMute,
+    '--lc-panel-line': panelLine,
     '--lc-line': line,
     '--lc-line-soft': lineSoft,
     '--lc-hover': hover,
@@ -171,6 +198,7 @@ export function computeThemeCssVariables(rawTheme?: Partial<ThemeSettings>): {
     '--lc-seg-mem': '#8F9CF3',
     '--lc-seg-recent': '#F2D452',
     '--lc-seg-tpl': sideDark ? '#7E8899' : '#AAB2BF',
+    '--lc-quote-bar': bgDark ? '#FACC15' : '#D9A700',
     '--lc-active-pill-bg': activePillBg,
     '--lc-active-pill-fg': activePillFg,
     '--lc-code-bg': codeBg,
@@ -179,16 +207,24 @@ export function computeThemeCssVariables(rawTheme?: Partial<ThemeSettings>): {
     '--lc-code-text': codeText,
     '--lc-code-mute': codeMute,
     '--lc-inline-code-bg': inlineCodeBg,
-    '--lc-success': bgDark ? '#4ADE80' : '#1D7A4E',
-    '--lc-danger': bgDark ? '#F87171' : '#D9383A',
-    '--lc-warn': bgDark ? '#FBBF24' : '#B45309',
+    '--lc-success': success,
+    '--lc-success-contrast': successContrast,
+    '--lc-danger': danger,
+    '--lc-danger-contrast': dangerContrast,
+    '--lc-warn': warn,
+    '--lc-warn-contrast': warnContrast,
+    '--lc-callout-note': bgDark ? '#7B96FF' : '#2A3FE0',
+    '--lc-callout-tip': bgDark ? '#4ADE80' : '#1D7A4E',
+    '--lc-callout-important': bgDark ? '#C084FC' : '#6D28D9',
+    '--lc-callout-warning': bgDark ? '#FBBF24' : '#B45309',
+    '--lc-callout-caution': bgDark ? '#F87171' : '#C8232C',
     '--lc-tps-red': bgDark ? '#F87171' : '#DC2626',
     '--lc-tps-orange': bgDark ? '#FB923C' : '#EA580C',
     '--lc-tps-yellow': bgDark ? '#FACC15' : '#CA8A04',
     '--lc-tps-green': bgDark ? '#4ADE80' : '#16A34A',
   };
 
-  return { mode, vars };
+  return { mode, codeMode, vars };
 }
 
 export function getTpsTier(tps: number): 'red' | 'orange' | 'yellow' | 'green' {
@@ -205,9 +241,10 @@ export function getTpsColorVar(tps: number): string {
 
 export function applyThemeToDocument(theme?: Partial<ThemeSettings>): void {
   if (typeof document === 'undefined') return;
-  const { mode, vars } = computeThemeCssVariables(theme);
+  const { mode, codeMode, vars } = computeThemeCssVariables(theme);
   const root = document.documentElement;
   root.dataset.themeMode = mode;
+  root.dataset.codeMode = codeMode;
   root.style.colorScheme = mode;
   for (const [key, value] of Object.entries(vars)) {
     root.style.setProperty(key, value);

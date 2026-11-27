@@ -24,7 +24,7 @@ async function fetchLoadedInstanceIds(origin, timeoutMs = 1500) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const resp = await fetch(url, { signal: controller.signal });
+      const resp = await fetch(url, { signal: controller.signal, redirect: 'error' });
       if (!resp.ok) {
         await resp.body?.cancel().catch(() => {});
         continue;
@@ -129,6 +129,7 @@ async function unloadAllLocalModels(rawEndpoint, fallbackModels = []) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ instance_id: instanceId }),
             signal: controller.signal,
+            redirect: 'error',
           });
           await r.body?.cancel().catch(() => {});
           if (r.ok) return instanceId;
@@ -216,6 +217,54 @@ function sendJson(res, status, payload) {
   }
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.end(JSON.stringify(payload));
+}
+
+function sanitizeUpstreamErrorSnippet(raw) {
+  const singleLine = String(raw || '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/"(?:prompt|content|messages|api[_-]?key|password|token)"\s*:\s*"[^"]*"/gi, '"[redacted]"')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return singleLine.length > 120 ? `${singleLine.slice(0, 117)}...` : singleLine;
+}
+
+function validateProxyRequestOrigin(req, res) {
+  const fetchSite = String(req.headers['sec-fetch-site'] || '').trim().toLowerCase();
+  if (fetchSite === 'cross-site') {
+    sendJson(res, 403, {
+      error: 'LowCon privacy boundary: Cross-site requests to local model proxy are blocked.',
+    });
+    return false;
+  }
+
+  const originHeader = req.headers.origin;
+  if (typeof originHeader === 'string' && originHeader.trim()) {
+    const hostHeader = String(req.headers.host || '').trim().toLowerCase();
+    try {
+      const parsedOrigin = new URL(originHeader);
+      if (!hostHeader || parsedOrigin.host.toLowerCase() !== hostHeader) {
+        sendJson(res, 403, {
+          error: 'LowCon privacy boundary: Cross-origin requests to local model proxy are blocked.',
+        });
+        return false;
+      }
+    } catch {
+      sendJson(res, 403, {
+        error: 'LowCon privacy boundary: Invalid request Origin header rejected.',
+      });
+      return false;
+    }
+  }
+
+  const contentType = String(req.headers['content-type'] || '').trim().toLowerCase();
+  if (!contentType.startsWith('application/json')) {
+    sendJson(res, 415, {
+      error: 'Unsupported Content-Type: expected application/json.',
+    });
+    return false;
+  }
+
+  return true;
 }
 
 function readJsonBody(req, maxBytes = 2 * 1024 * 1024) {
@@ -436,7 +485,7 @@ async function handleModelsProxy(req, res) {
       controller.signal.addEventListener('abort', onParentAbort, { once: true });
       const timer = setTimeout(() => attemptController.abort(), 5000);
       try {
-        const r = await fetch(url, { signal: attemptController.signal });
+        const r = await fetch(url, { signal: attemptController.signal, redirect: 'error' });
         if (r.ok) {
           upstream = r;
           break;
@@ -529,7 +578,7 @@ async function handleChatProxy(req, res) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: typeof body.model === 'string' && body.model.trim() ? body.model.trim() : 'local-model',
+        model: modelName,
         messages,
         temperature:
           typeof body.temperature === 'number' && Number.isFinite(body.temperature)
@@ -552,12 +601,14 @@ async function handleChatProxy(req, res) {
         ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
       }),
       signal: controller.signal,
+      redirect: 'error',
     });
 
     if (!upstream.ok || !upstream.body) {
       const text = await upstream.text().catch(() => '');
+      const snippet = sanitizeUpstreamErrorSnippet(text);
       sendJson(res, upstream.status || 502, {
-        error: `Local server ${url} returned HTTP ${upstream.status}: ${text.slice(0, 200)}`,
+        error: `Local server ${url} returned HTTP ${upstream.status}${snippet ? `: ${snippet}` : ''}`,
       });
       return;
     }
@@ -682,15 +733,21 @@ function startDesktopServer(distDir, options = {}) {
       return;
     }
     if (urlPath === '/api/local-llm/models' && req.method === 'POST') {
-      void handleModelsProxy(req, res);
+      if (validateProxyRequestOrigin(req, res)) {
+        void handleModelsProxy(req, res);
+      }
       return;
     }
     if (urlPath === '/api/local-llm/chat' && req.method === 'POST') {
-      void handleChatProxy(req, res);
+      if (validateProxyRequestOrigin(req, res)) {
+        void handleChatProxy(req, res);
+      }
       return;
     }
     if (urlPath === '/api/local-llm/unload-all' && req.method === 'POST') {
-      void handleUnloadAllProxy(req, res);
+      if (validateProxyRequestOrigin(req, res)) {
+        void handleUnloadAllProxy(req, res);
+      }
       return;
     }
     if (urlPath === '/api' || urlPath.startsWith('/api/')) {

@@ -885,6 +885,170 @@ function parseStrictDateMs(raw: string): number | null {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
+export function detectUnsafeRegexPattern(pattern: string): string | null {
+  const MAX_QUANTIFIERS = 30;
+  let quantifierCount = 0;
+  let inCharClass = false;
+  let escaped = false;
+
+  interface GroupFrame {
+    startIdx: number;
+    hasQuantifier: boolean;
+    hasAlternation: boolean;
+    hasBackref: boolean;
+    branches: string[];
+    currentBranchStart: number;
+  }
+
+  const stack: GroupFrame[] = [];
+
+  const readQuantifierAt = (idx: number): { endIdx: number; isRepeating: boolean } | null => {
+    const c = pattern[idx];
+    if (c === '*' || c === '+') {
+      const next = pattern[idx + 1] === '?' ? idx + 2 : idx + 1;
+      return { endIdx: next, isRepeating: true };
+    }
+    if (c === '?') {
+      const next = pattern[idx + 1] === '?' ? idx + 2 : idx + 1;
+      return { endIdx: next, isRepeating: false };
+    }
+    if (c === '{') {
+      const match = /^\{(\d+)(?:,(\d*))?\}\??/.exec(pattern.slice(idx));
+      if (match) {
+        const min = Number(match[1]);
+        const hasComma = match[0].includes(',');
+        const maxStr = match[2];
+        const max = !hasComma ? min : maxStr === '' ? Infinity : Number(maxStr);
+        return { endIdx: idx + match[0].length, isRepeating: max > 1 };
+      }
+    }
+    return null;
+  };
+
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      const next = pattern[i + 1];
+      if (!inCharClass && next && next >= '1' && next <= '9' && stack.length > 0) {
+        stack[stack.length - 1].hasBackref = true;
+      }
+      escaped = true;
+      continue;
+    }
+    if (inCharClass) {
+      if (ch === ']') inCharClass = false;
+      continue;
+    }
+    if (ch === '[') {
+      inCharClass = true;
+      continue;
+    }
+    if (ch === '(') {
+      let bodyStart = i + 1;
+      if (pattern[bodyStart] === '?') {
+        if (
+          pattern.startsWith('?:', bodyStart) ||
+          pattern.startsWith('?=', bodyStart) ||
+          pattern.startsWith('?!', bodyStart)
+        ) {
+          bodyStart += 2;
+        } else if (
+          pattern.startsWith('?<=', bodyStart) ||
+          pattern.startsWith('?<!', bodyStart)
+        ) {
+          bodyStart += 3;
+        } else if (pattern[bodyStart + 1] === '<') {
+          const closeName = pattern.indexOf('>', bodyStart + 2);
+          if (closeName !== -1) bodyStart = closeName + 1;
+        }
+      }
+      stack.push({
+        startIdx: i,
+        hasQuantifier: false,
+        hasAlternation: false,
+        hasBackref: false,
+        branches: [],
+        currentBranchStart: bodyStart,
+      });
+      continue;
+    }
+    if (ch === '|' && stack.length > 0) {
+      const top = stack[stack.length - 1];
+      top.hasAlternation = true;
+      top.branches.push(pattern.slice(top.currentBranchStart, i));
+      top.currentBranchStart = i + 1;
+      continue;
+    }
+    if (ch === ')' && stack.length > 0) {
+      const closed = stack.pop()!;
+      closed.branches.push(pattern.slice(closed.currentBranchStart, i));
+      const quant = readQuantifierAt(i + 1);
+      if (quant) {
+        quantifierCount += 1;
+        if (quantifierCount > MAX_QUANTIFIERS) {
+          return `Regex pattern exceeds maximum complexity (${MAX_QUANTIFIERS} quantifiers).`;
+        }
+        if (quant.isRepeating) {
+          if (closed.hasQuantifier) {
+            return 'Unsafe regex pattern rejected: nested quantifiers can cause catastrophic backtracking.';
+          }
+          if (closed.hasBackref) {
+            return 'Unsafe regex pattern rejected: backreference inside a repeated group.';
+          }
+          if (closed.hasAlternation) {
+            const normalized = closed.branches.map((b) => b.trim());
+            const hasEmptyBranch = normalized.some((b) => b.length === 0);
+            if (hasEmptyBranch) {
+              return 'Unsafe regex pattern rejected: empty alternation inside a repeated group.';
+            }
+            for (let a = 0; a < normalized.length; a += 1) {
+              for (let b = a + 1; b < normalized.length; b += 1) {
+                const ba = normalized[a];
+                const bb = normalized[b];
+                if (
+                  ba === bb ||
+                  ba.startsWith(bb) ||
+                  bb.startsWith(ba) ||
+                  ba.includes('.') ||
+                  bb.includes('.') ||
+                  /\\[wdsWDS]/.test(ba) ||
+                  /\\[wdsWDS]/.test(bb)
+                ) {
+                  return 'Unsafe regex pattern rejected: overlapping alternation inside a repeated group.';
+                }
+              }
+            }
+          }
+        }
+        if (stack.length > 0 && quant.isRepeating) {
+          stack[stack.length - 1].hasQuantifier = true;
+        }
+        i = quant.endIdx - 1;
+      } else if (stack.length > 0 && closed.hasQuantifier) {
+        stack[stack.length - 1].hasQuantifier = true;
+      }
+      continue;
+    }
+    const quant = readQuantifierAt(i);
+    if (quant) {
+      quantifierCount += 1;
+      if (quantifierCount > MAX_QUANTIFIERS) {
+        return `Regex pattern exceeds maximum complexity (${MAX_QUANTIFIERS} quantifiers).`;
+      }
+      if (quant.isRepeating && stack.length > 0) {
+        stack[stack.length - 1].hasQuantifier = true;
+      }
+      i = quant.endIdx - 1;
+    }
+  }
+
+  return null;
+}
+
 export function executeCalculateTool(rawArguments: string): CalculateToolResult {
   const args = parseToolArgumentsJson(rawArguments);
   if (!args) {
@@ -993,6 +1157,11 @@ export function executeCalculateTool(rawArguments: string): CalculateToolResult 
     }
     if (args.flags !== undefined && typeof args.flags !== 'string') {
       return makeCalculateError('regex_test', 'Optional "flags" field must be a string.');
+    }
+
+    const unsafeReason = detectUnsafeRegexPattern(pattern);
+    if (unsafeReason) {
+      return makeCalculateError('regex_test', unsafeReason);
     }
 
     let regex: RegExp;

@@ -58,24 +58,24 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
     <>
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h2 className="text-[15px] font-bold text-[var(--lc-side-ink)]">Context window</h2>
-        <span className="text-[12.5px] text-[var(--lc-side-mute)]">{limitLabel}</span>
+        <h2 className="text-[15px] font-bold text-[var(--lc-panel-ink)]">Context window</h2>
+        <span className="text-[12.5px] text-[var(--lc-panel-mute)]">{limitLabel}</span>
       </div>
 
       {/* Big Total Tokens Packed */}
       <div className="mt-3.5 flex flex-wrap items-baseline gap-1.5">
         <span
           data-testid="context-packed-tokens"
-          className="text-[32px] leading-none font-bold tracking-tight text-[var(--lc-side-ink)] tabular-nums"
+          className="text-[32px] leading-none font-bold tracking-tight text-[var(--lc-panel-ink)] tabular-nums"
         >
           {formatNumber(packed)}
         </span>
-        <span className="text-[13px] text-[var(--lc-side-mute)]">
+        <span className="text-[13px] text-[var(--lc-panel-mute)]">
           of {formatNumber(budget.totalLimit)} tokens packed · {Math.round(pct)}%
         </span>
       </div>
 
-      <p className="mt-1.5 text-[13px] text-[var(--lc-side-ink2)]">
+      <p className="mt-1.5 text-[13px] text-[var(--lc-panel-ink2)]">
         {formatNumber(free)} still free for more history or memory.
       </p>
 
@@ -117,16 +117,16 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
       </button>
 
       {/* Active Session Task Goal */}
-      <div className="mt-6 border-t border-[var(--lc-line)] pt-4">
+      <div className="mt-6 border-t border-[var(--lc-panel-line)] pt-4">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-[14px] font-bold text-[var(--lc-side-ink)]">Active task goal</h3>
+          <h3 className="text-[14px] font-bold text-[var(--lc-panel-ink)]">Active task goal</h3>
           {!isEditingGoal && (
             <div className="flex items-center gap-2">
               {taskGoal?.trim() && (
                 <button
                   type="button"
                   onClick={() => onUpdateTaskGoal('')}
-                  className="text-[11.5px] font-medium text-[var(--lc-side-mute)] hover:text-[var(--lc-danger)]"
+                  className="text-[11.5px] font-medium text-[var(--lc-panel-mute)] hover:text-[var(--lc-danger)]"
                 >
                   Clear
                 </button>
@@ -192,7 +192,7 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
             {taskGoal}
           </p>
         ) : (
-          <p className="mt-1.5 text-[12.5px] italic text-[var(--lc-side-mute)]">
+          <p className="mt-1.5 text-[12.5px] italic text-[var(--lc-panel-mute)]">
             No task goal set for this session.
           </p>
         )}
@@ -201,15 +201,15 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
       {/* Memory in this prompt */}
       <div className="mt-6">
         <div className="flex items-center justify-between">
-          <h3 className="text-[14px] font-bold text-[var(--lc-side-ink)]">Memory in this prompt</h3>
-          <span className="text-[12px] text-[var(--lc-side-mute)]">
+          <h3 className="text-[14px] font-bold text-[var(--lc-panel-ink)]">Memory in this prompt</h3>
+          <span className="text-[12px] text-[var(--lc-panel-mute)]">
             {activeNotesInPrompt.length} of {memoryNotes.length} notes
           </span>
         </div>
 
         <div className="mt-2.5 space-y-2.5">
           {activeNotesInPrompt.length === 0 ? (
-            <p className="text-[12.5px] italic text-[var(--lc-side-mute)]">
+            <p className="text-[12.5px] italic text-[var(--lc-panel-mute)]">
               No memory excerpts injected for this prompt.
             </p>
           ) : (
@@ -217,18 +217,18 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
               <div
                 key={note.id}
                 className="border-l-[3px] pl-3"
-                style={{ borderColor: note.isPinned ? 'var(--lc-side-ink)' : 'var(--lc-seg-mem)' }}
+                style={{ borderColor: note.isPinned ? 'var(--lc-panel-ink)' : 'var(--lc-seg-mem)' }}
               >
-                <div className="text-[11.5px] text-[var(--lc-side-mute)]">
+                <div className="text-[11.5px] text-[var(--lc-panel-mute)]">
                   {note.isSummary
                     ? 'Approved history summary'
                     : note.isPinned
                       ? 'Pinned project rule (always included)'
                       : 'Retrieved as relevant'}
                 </div>
-                <div className="text-[13px] font-medium text-[var(--lc-side-ink)]">{note.title}</div>
-                <div className="line-clamp-2 text-[12px] text-[var(--lc-side-ink2)]">{note.content}</div>
-                <div className="mt-0.5 text-[11px] text-[var(--lc-side-mute)]">{note.sourceReference}</div>
+                <div className="text-[13px] font-medium text-[var(--lc-panel-ink)]">{note.title}</div>
+                <div className="line-clamp-2 text-[12px] text-[var(--lc-panel-ink2)]">{note.content}</div>
+                <div className="mt-0.5 text-[11px] text-[var(--lc-panel-mute)]">{note.sourceReference}</div>
               </div>
             ))
           )}
@@ -236,8 +236,8 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
       </div>
 
       {/* Memory Retrieval Toggle */}
-      <div className="mt-5 flex items-center justify-between border-t border-[var(--lc-line)] pt-4">
-        <span className="text-[13px] text-[var(--lc-side-ink2)]">Memory retrieval</span>
+      <div className="mt-5 flex items-center justify-between border-t border-[var(--lc-panel-line)] pt-4">
+        <span className="text-[13px] text-[var(--lc-panel-ink2)]">Memory retrieval</span>
         <button
           type="button"
           role="switch"
@@ -249,8 +249,10 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
           }`}
         >
           <span
-            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-              memoryRetrievalEnabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
+            className={`inline-block h-3.5 w-3.5 transform rounded-full shadow-sm transition-transform ${
+              memoryRetrievalEnabled
+                ? 'translate-x-[18px] bg-[var(--lc-accent-contrast)]'
+                : 'translate-x-[3px] bg-[var(--lc-surface)]'
             }`}
           />
         </button>
@@ -260,7 +262,7 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
 
   if (embedded) {
     return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-4 pb-7 text-[var(--lc-side-ink)]">
+      <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-4 pb-7 text-[var(--lc-panel-ink)]">
         {content}
       </div>
     );
@@ -269,7 +271,7 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
   return (
     <aside
       aria-label="Context window and active memory"
-      className="flex h-full w-[344px] shrink-0 flex-col overflow-y-auto border-l border-[var(--lc-line)] bg-[var(--lc-panel)] px-[22px] pt-[22px] pb-7 text-[var(--lc-side-ink)]"
+      className="flex h-full w-[344px] shrink-0 flex-col overflow-y-auto border-l border-[var(--lc-panel-line)] bg-[var(--lc-panel)] px-[22px] pt-[22px] pb-7 text-[var(--lc-panel-ink)]"
     >
       {content}
     </aside>

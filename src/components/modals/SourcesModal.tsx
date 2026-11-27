@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { BookOpen, X } from 'lucide-react';
 
 interface SourcesModalProps {
@@ -7,6 +7,17 @@ interface SourcesModalProps {
 }
 
 export const SourcesModal: React.FC<SourcesModalProps> = ({ sources, onClose }) => {
+  useEffect(() => {
+    if (!sources) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [sources, onClose]);
+
   if (!sources) return null;
 
   return (
@@ -14,6 +25,9 @@ export const SourcesModal: React.FC<SourcesModalProps> = ({ sources, onClose }) 
       role="dialog"
       aria-modal="true"
       aria-labelledby="sources-modal-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
     >
       <div className="w-full max-w-[480px] rounded-[10px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] text-[var(--lc-surf-ink)] shadow-xl">

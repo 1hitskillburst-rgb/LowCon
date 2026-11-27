@@ -145,8 +145,8 @@ export const FilesPanel: React.FC<FilesPanelProps> = ({
       {/* Header & Upload */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <h2 className="text-[15px] font-bold text-[var(--lc-side-ink)]">Local Files</h2>
-          <p className="mt-0.5 text-[11.5px] leading-snug text-[var(--lc-side-mute)]">
+          <h2 className="text-[15px] font-bold text-[var(--lc-panel-ink)]">Local Files</h2>
+          <p className="mt-0.5 text-[11.5px] leading-snug text-[var(--lc-panel-mute)]">
             {files.length === 0
               ? 'Persistent across all chats'
               : `${files.length} ${files.length === 1 ? 'file' : 'files'} · ${formatWorkspaceFileSize(totalBytes)}`}
@@ -241,7 +241,7 @@ export const FilesPanel: React.FC<FilesPanelProps> = ({
 
       {/* Sort Bar */}
       <div className="mt-2 flex items-center gap-1.5">
-        <label htmlFor="files-sort-select" className="text-[11.5px] text-[var(--lc-side-mute)]">
+        <label htmlFor="files-sort-select" className="text-[11.5px] text-[var(--lc-panel-mute)]">
           Sort:
         </label>
         <select
@@ -303,7 +303,7 @@ export const FilesPanel: React.FC<FilesPanelProps> = ({
                     className="flex min-w-0 flex-1 items-center gap-2 text-left hover:opacity-85"
                     title={`Open ${file.filename}`}
                   >
-                    <span className="shrink-0 rounded-[4px] border border-[var(--lc-surf-line)] bg-[var(--lc-panel)] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[var(--lc-side-ink2)]">
+                    <span className="shrink-0 rounded-[4px] border border-[var(--lc-surf-line)] bg-[var(--lc-surf-hover)] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[var(--lc-surf-ink2)]">
                       {ext}
                     </span>
                     <span className="truncate font-mono text-[12.5px] font-semibold text-[var(--lc-surf-ink)]">
@@ -325,7 +325,7 @@ export const FilesPanel: React.FC<FilesPanelProps> = ({
                     className={`inline-flex shrink-0 items-center gap-1 rounded-[5px] border px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors ${
                       file.lockedByUser
                         ? 'border-[var(--lc-warn)]/45 bg-[var(--lc-warn)]/12 text-[var(--lc-warn)]'
-                        : 'border-[var(--lc-surf-line)] bg-[var(--lc-panel)]/70 text-[var(--lc-side-mute)] hover:text-[var(--lc-surf-ink)]'
+                        : 'border-[var(--lc-surf-line)] bg-[var(--lc-surf-hover)]/75 text-[var(--lc-surf-ink2)] hover:text-[var(--lc-surf-ink)]'
                     }`}
                   >
                     {file.lockedByUser ? (
@@ -349,8 +349,8 @@ export const FilesPanel: React.FC<FilesPanelProps> = ({
                   </span>
                 </div>
 
-                <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--lc-line-soft)] pt-1.5">
-                  <span className="text-[10.5px] text-[var(--lc-side-mute)]">
+                <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--lc-surf-line)] pt-1.5">
+                  <span className="text-[10.5px] text-[var(--lc-surf-mute)]">
                     {SOURCE_LABELS[file.source]}
                   </span>
                   <div className="flex items-center gap-1">

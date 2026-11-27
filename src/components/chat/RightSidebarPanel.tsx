@@ -60,10 +60,10 @@ export const RightSidebarPanel: React.FC<RightSidebarPanelProps> = ({
   return (
     <aside
       aria-label="Context and local files sidebar"
-      className="flex h-full w-[344px] shrink-0 flex-col border-l border-[var(--lc-line)] bg-[var(--lc-panel)] text-[var(--lc-side-ink)]"
+      className="flex h-full w-[344px] shrink-0 flex-col border-l border-[var(--lc-panel-line)] bg-[var(--lc-panel)] text-[var(--lc-panel-ink)]"
     >
       {/* Top Tab Bar */}
-      <div className="shrink-0 border-b border-[var(--lc-line)] px-4 pt-3 pb-2.5">
+      <div className="shrink-0 border-b border-[var(--lc-panel-line)] px-4 pt-3 pb-2.5">
         <div
           role="tablist"
           aria-label="Right sidebar tabs"
@@ -77,8 +77,8 @@ export const RightSidebarPanel: React.FC<RightSidebarPanelProps> = ({
             onClick={() => onSelectTab('context')}
             className={`rounded-[6px] px-2.5 py-1 text-[12.5px] font-semibold transition-colors ${
               activeTab === 'context'
-                ? 'bg-[var(--lc-active-pill-bg)] text-[var(--lc-active-pill-fg)]'
-                : 'text-[var(--lc-side-ink2)] hover:text-[var(--lc-side-ink)]'
+                ? 'bg-[var(--lc-surf-active-bg)] text-[var(--lc-surf-active-fg)]'
+                : 'text-[var(--lc-surf-ink2)] hover:text-[var(--lc-surf-ink)]'
             }`}
           >
             Context
@@ -91,8 +91,8 @@ export const RightSidebarPanel: React.FC<RightSidebarPanelProps> = ({
             onClick={() => onSelectTab('files')}
             className={`inline-flex items-center justify-center gap-1.5 rounded-[6px] px-2.5 py-1 text-[12.5px] font-semibold transition-colors ${
               activeTab === 'files'
-                ? 'bg-[var(--lc-active-pill-bg)] text-[var(--lc-active-pill-fg)]'
-                : 'text-[var(--lc-side-ink2)] hover:text-[var(--lc-side-ink)]'
+                ? 'bg-[var(--lc-surf-active-bg)] text-[var(--lc-surf-active-fg)]'
+                : 'text-[var(--lc-surf-ink2)] hover:text-[var(--lc-surf-ink)]'
             }`}
           >
             <span>Files</span>
@@ -100,8 +100,8 @@ export const RightSidebarPanel: React.FC<RightSidebarPanelProps> = ({
               <span
                 className={`rounded-full px-1.5 py-[1px] text-[10.5px] tabular-nums ${
                   activeTab === 'files'
-                    ? 'bg-white/20 text-[var(--lc-active-pill-fg)]'
-                    : 'bg-[var(--lc-panel)] text-[var(--lc-side-mute)]'
+                    ? 'bg-[var(--lc-surf-active-badge-bg)] text-[var(--lc-surf-active-fg)]'
+                    : 'bg-[var(--lc-surf-hover)] text-[var(--lc-surf-ink2)]'
                 }`}
               >
                 {workspaceFiles.length}

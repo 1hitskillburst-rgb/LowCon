@@ -92,6 +92,9 @@ class BinaryCursor {
     this.ensure(8);
     const big = this.view.getBigUint64(this.offset, true);
     this.offset += 8;
+    if (big > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error(`Corrupt GGUF header: uint64 value ${big.toString()} exceeds safe integer bound.`);
+    }
     return Number(big);
   }
 
@@ -99,6 +102,9 @@ class BinaryCursor {
     this.ensure(8);
     const big = this.view.getBigInt64(this.offset, true);
     this.offset += 8;
+    if (big > BigInt(Number.MAX_SAFE_INTEGER) || big < BigInt(Number.MIN_SAFE_INTEGER)) {
+      throw new Error(`Corrupt GGUF header: int64 value ${big.toString()} exceeds safe integer bound.`);
+    }
     return Number(big);
   }
 
@@ -159,6 +165,12 @@ function readGgufValue(cursor: BinaryCursor, valType: number, key: string, versi
         return `[${arrayLen} strings skipped]`;
       }
       if (arrayLen > 5000) {
+        if (elemType === 9) {
+          for (let i = 0; i < arrayLen; i++) {
+            readGgufValue(cursor, 9, key, version);
+          }
+          return `[${arrayLen} nested arrays skipped]`;
+        }
         const elemSize =
           elemType === 0 || elemType === 1 || elemType === 7
             ? 1
@@ -167,7 +179,11 @@ function readGgufValue(cursor: BinaryCursor, valType: number, key: string, versi
               : elemType === 10 || elemType === 11 || elemType === 12
                 ? 8
                 : 4;
-        cursor.skip(arrayLen * elemSize);
+        const totalSkip = arrayLen * elemSize;
+        if (!Number.isSafeInteger(totalSkip)) {
+          throw new Error(`Corrupt GGUF header: array byte size exceeds safe bound.`);
+        }
+        cursor.skip(totalSkip);
         return `[${arrayLen} items skipped]`;
       }
       const arr: unknown[] = [];

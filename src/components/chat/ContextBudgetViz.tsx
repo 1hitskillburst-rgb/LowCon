@@ -113,7 +113,7 @@ export const ContextSegmentRow: React.FC<RowProps> = ({
     <div
       onMouseEnter={() => onHoverChange(segment.key)}
       onMouseLeave={() => onHoverChange(null)}
-      className={`flex items-center justify-between gap-2 border-b border-[var(--lc-line)] px-1.5 py-1.5 transition-colors ${
+      className={`flex items-center justify-between gap-2 border-b border-[var(--lc-panel-line)] px-1.5 py-1.5 transition-colors ${
         isHovered ? 'rounded-[4px] bg-[var(--lc-hover)]' : ''
       }`}
     >
@@ -128,15 +128,15 @@ export const ContextSegmentRow: React.FC<RowProps> = ({
           }`}
         />
         <div className="min-w-0">
-          <div className="truncate text-[12.5px] font-semibold text-[var(--lc-side-ink)]">
+          <div className="truncate text-[12.5px] font-semibold text-[var(--lc-panel-ink)]">
             {segment.name}
           </div>
-          <div className="truncate text-[11px] text-[var(--lc-side-mute)]">{segment.description}</div>
+          <div className="truncate text-[11px] text-[var(--lc-panel-mute)]">{segment.description}</div>
         </div>
       </div>
       <span
         className={`shrink-0 text-[12.5px] font-semibold tabular-nums ${
-          segment.isFree ? 'text-[var(--lc-success)]' : 'text-[var(--lc-side-ink2)]'
+          segment.isFree ? 'text-[var(--lc-success)]' : 'text-[var(--lc-panel-ink2)]'
         }`}
       >
         {formatNumber(segment.tokens)}

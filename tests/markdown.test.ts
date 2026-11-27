@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseInlineTokens, parseMarkdownBlocks, sanitizeHref } from '../src/core/markdown.ts';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import {
+  parseInlineTokens,
+  parseMarkdownBlocks,
+  sanitizeHref,
+  sanitizeImageSrc,
+} from '../src/core/markdown.ts';
+import { MarkdownMessage } from '../src/components/chat/MarkdownMessage.tsx';
 
 test('parses closed and streaming unclosed fenced code blocks', () => {
   const md = [
@@ -121,16 +129,67 @@ test('parses GFM tables, GitHub callouts, task lists, nested lists, and details'
   }
 });
 
-test('sanitizes unsafe link protocols and parses inline formatting', () => {
+test('sanitizes unsafe link protocols, blocks protocol-relative URLs, and handles nested brackets & privacy-safe images', () => {
   assert.equal(sanitizeHref('https://example.com/docs'), 'https://example.com/docs');
+  assert.equal(sanitizeHref('/local/path'), '/local/path');
+  assert.equal(sanitizeHref('//evil.test/leak'), null);
   assert.equal(sanitizeHref('javascript:alert(1)'), null);
   assert.equal(sanitizeHref('data:text/html,hi'), null);
 
-  const tokens = parseInlineTokens('**bold** *italic* ~~old~~ `code` [safe](https://ok.test) [bad](javascript:alert(1))');
+  assert.deepEqual(sanitizeImageSrc('data:image/png;base64,AAA'), {
+    src: 'data:image/png;base64,AAA',
+    isInlineSafe: true,
+  });
+  assert.deepEqual(sanitizeImageSrc('https://tracker.test/pixel.png'), {
+    src: 'https://tracker.test/pixel.png',
+    isInlineSafe: false,
+  });
+  assert.equal(sanitizeImageSrc('javascript:alert(1)'), null);
+  assert.equal(sanitizeImageSrc('//evil.test/px.png'), null);
+
+  const tokens = parseInlineTokens(
+    '**bold** *italic* ~~old~~ `code` [safe](https://ok.test) [bad](javascript:alert(1)) [docs [v2]](https://example.com/v2) ![tracker](https://tracker.test/px.png) ![logo](data:image/png;base64,AAA)',
+  );
   assert.ok(tokens.some((t) => t.type === 'bold'));
   assert.ok(tokens.some((t) => t.type === 'italic'));
   assert.ok(tokens.some((t) => t.type === 'strike'));
   assert.ok(tokens.some((t) => t.type === 'code' && t.code === 'code'));
   assert.ok(tokens.some((t) => t.type === 'link' && t.href === 'https://ok.test/'));
+  assert.ok(
+    tokens.some(
+      (t) =>
+        t.type === 'link' &&
+        t.href === 'https://example.com/v2' &&
+        t.label.map((child) => (child.type === 'text' ? child.text : '')).join('') === 'docs [v2]',
+    ),
+  );
   assert.ok(!tokens.some((t) => t.type === 'link' && t.href.includes('javascript:')));
+  assert.ok(
+    tokens.some(
+      (t) =>
+        t.type === 'image' &&
+        t.alt === 'tracker' &&
+        t.src === 'https://tracker.test/px.png' &&
+        t.isInlineSafe === false,
+    ),
+  );
+  assert.ok(
+    tokens.some(
+      (t) =>
+        t.type === 'image' &&
+        t.alt === 'logo' &&
+        t.src === 'data:image/png;base64,AAA' &&
+        t.isInlineSafe === true,
+    ),
+  );
+
+  // MarkdownMessage must never emit an <img src="https://..."> auto-fetch for remote markdown images
+  const rendered = renderToStaticMarkup(
+    React.createElement(MarkdownMessage, {
+      content: '![Secret Pixel](https://tracker.test/px.png)\n\n![Inline Logo](data:image/png;base64,AAA)',
+    }),
+  );
+  assert.ok(rendered.includes('data-testid="blocked-remote-image"'));
+  assert.equal(rendered.includes('<img src="https://tracker.test/px.png"'), false);
+  assert.ok(rendered.includes('src="data:image/png;base64,AAA"'));
 });

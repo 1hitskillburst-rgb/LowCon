@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import { CheckCircle2, Cpu, Edit3, FileUp, Plus, Power, Trash2, X } from 'lucide-react';
 import { parseGgufHeader } from '../../core/gguf';
 import { formatCleanModelName } from '../../core/modelNames';
-import { formatNumber } from '../../core/privacy';
+import { formatNumber, isLocalEndpoint } from '../../core/privacy';
 import { createUuid } from '../../core/storage';
 import type { ChatTemplateType, ModelProfile, WorkerStatus } from '../../core/types';
 
@@ -54,6 +54,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   const [newBackend, setNewBackend] = useState<'mock' | 'lm_studio'>('lm_studio');
   const [newContextLimit, setNewContextLimit] = useState(8192);
   const [newTemplate, setNewTemplate] = useState<ChatTemplateType>('ChatML');
+  const [endpointError, setEndpointError] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
 
@@ -136,13 +137,19 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   const handleCreateCustomProfile = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName.trim()) return;
+    setEndpointError(null);
+    const endpointToUse = newEndpoint.trim() || resolvedDefaultEndpoint;
+    if (newBackend === 'lm_studio' && !isLocalEndpoint(endpointToUse)) {
+      setEndpointError(
+        'Only local loopback endpoints (127.0.0.1, localhost, ::1) are allowed.',
+      );
+      return;
+    }
     const profile: ModelProfile = {
       id: `model_${createUuid().slice(0, 8)}`,
       name: newName.trim(),
       filePath:
-        newBackend === 'lm_studio'
-          ? newEndpoint.trim() || resolvedDefaultEndpoint
-          : 'in-process://deterministic-mock',
+        newBackend === 'lm_studio' ? endpointToUse : 'in-process://deterministic-mock',
       backendType: newBackend,
       architecture: newBackend === 'lm_studio' ? 'openai-compatible' : 'qwen2',
       quantization: newBackend === 'lm_studio' ? 'Server-managed' : 'Deterministic',
@@ -152,6 +159,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
     };
     onAddModel(profile);
     setNewName('');
+    setEndpointError(null);
     setShowAddForm(false);
     setParseMessage({ kind: 'ok', text: `Added local model profile "${profile.name}".` });
   };
@@ -183,7 +191,16 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => setShowAddForm((prev) => !prev)}
+            onClick={() =>
+              setShowAddForm((prev) => {
+                const next = !prev;
+                if (next) {
+                  setNewEndpoint(resolvedDefaultEndpoint);
+                  setEndpointError(null);
+                }
+                return next;
+              })
+            }
             className="inline-flex items-center gap-1.5 rounded-[6px] bg-[var(--lc-accent)] px-3 py-1.5 text-[12.5px] font-semibold text-[var(--lc-accent-contrast)] hover:bg-[var(--lc-accent-hover)]"
           >
             <Plus className="h-3.5 w-3.5" />
@@ -206,10 +223,10 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
           </div>
 
           {/* Real Worker Status Bar */}
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-4 py-3 text-[var(--lc-side-ink)]">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)] px-4 py-3 text-[var(--lc-panel-ink)]">
             <div className="flex items-center gap-2.5 text-[13px]">
-              <Cpu className="h-4 w-4 text-[var(--lc-side-ink)]" />
-              <span className="font-semibold text-[var(--lc-side-ink)]">Inference Worker:</span>
+              <Cpu className="h-4 w-4 text-[var(--lc-panel-ink)]" />
+              <span className="font-semibold text-[var(--lc-panel-ink)]">Inference Worker:</span>
               {workerStatus.state === 'loaded' && (
                 <span className="font-medium text-[var(--lc-success)]">
                   Loaded — {workerStatus.modelName} ({formatNumber(workerStatus.contextLimit)} ctx)
@@ -221,10 +238,10 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                 </span>
               )}
               {workerStatus.state === 'loading' && (
-                <span className="text-[var(--lc-side-ink2)]">Loading {workerStatus.modelName}...</span>
+                <span className="text-[var(--lc-panel-ink2)]">Loading {workerStatus.modelName}...</span>
               )}
               {workerStatus.state === 'unloaded' && (
-                <span className="text-[var(--lc-side-mute)]">Unloaded (no model active in worker)</span>
+                <span className="text-[var(--lc-panel-mute)]">Unloaded (no model active in worker)</span>
               )}
               {workerStatus.state === 'error' && (
                 <span className="font-medium text-[var(--lc-danger)]">Error — {workerStatus.message}</span>
@@ -352,9 +369,17 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                       id="new-model-endpoint"
                       type="text"
                       value={newEndpoint}
-                      onChange={(e) => setNewEndpoint(e.target.value)}
+                      onChange={(e) => {
+                        setNewEndpoint(e.target.value);
+                        if (endpointError) setEndpointError(null);
+                      }}
                       className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1.5 font-mono text-[12.5px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
                     />
+                    {endpointError && (
+                      <p role="alert" className="mt-1 text-[11.5px] font-medium text-[var(--lc-danger)]">
+                        {endpointError}
+                      </p>
+                    )}
                   </div>
                 )}
                 <div>
@@ -489,7 +514,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                           </span>
                         )}
                         {isSelectedActive && !isLoadedInWorker && (
-                          <span className="rounded-[4px] bg-[var(--lc-panel)] px-2 py-0.5 text-[11px] font-semibold text-[var(--lc-side-ink2)]">
+                          <span className="rounded-[4px] bg-[var(--lc-surf-hover)] px-2 py-0.5 text-[11px] font-semibold text-[var(--lc-surf-ink2)]">
                             ACTIVE PROFILE (UNLOADED)
                           </span>
                         )}
@@ -546,7 +571,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                   </div>
 
                   {/* Per-Model Configuration Controls */}
-                  <div className="mt-3.5 grid grid-cols-1 gap-4 border-t border-[var(--lc-line-soft)] pt-3 sm:grid-cols-2">
+                  <div className="mt-3.5 grid grid-cols-1 gap-4 border-t border-[var(--lc-surf-line)] pt-3 sm:grid-cols-2">
                     <div>
                       <div className="flex items-center justify-between text-[12px]">
                         <label
@@ -563,9 +588,9 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                       <input
                         id={`ctx-override-${model.id}`}
                         type="range"
-                        min={512}
-                        max={Math.max(512, model.contextLimit)}
-                        step={512}
+                        min={256}
+                        max={Math.max(256, model.contextLimit)}
+                        step={256}
                         value={model.contextOverride ?? model.contextLimit}
                         onChange={(e) =>
                           onUpdateModel(model.id, { contextOverride: Number(e.target.value) })

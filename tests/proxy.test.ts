@@ -93,6 +93,12 @@ test('HTTP integration: /api/health, /api/local-llm/models, and /api/local-llm/c
       return;
     }
 
+    if (req.method === 'GET' && req.url === '/redirect-test/v1/models') {
+      res.writeHead(302, { Location: 'https://example.com/v1/models' });
+      res.end();
+      return;
+    }
+
     if (req.method === 'GET' && req.url === '/api/v1/models') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(
@@ -383,6 +389,53 @@ test('HTTP integration: /api/health, /api/local-llm/models, and /api/local-llm/c
     assert.deepEqual(unloadJson.unloaded.sort(), ['google/gemma-4-e2b', 'qwen2.5-7b-instruct:2']);
     assert.deepEqual(unloadedInstances.sort(), ['google/gemma-4-e2b', 'qwen2.5-7b-instruct:2']);
     assert.equal(unloadJson.cliFallbackUsed, false);
+
+    // 10. Cross-origin / Sec-Fetch-Site protection (403) and strict JSON Content-Type (415)
+    const crossOrigin = await fetch(`${proxyServer.baseUrl}/api/local-llm/models`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: 'https://evil.example',
+      },
+      body: JSON.stringify({ endpoint: mockLlm.baseUrl }),
+    });
+    assert.equal(crossOrigin.status, 403);
+
+    const crossSiteFetch = await fetch(`${proxyServer.baseUrl}/api/local-llm/models`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Sec-Fetch-Site': 'cross-site',
+      },
+      body: JSON.stringify({ endpoint: mockLlm.baseUrl }),
+    });
+    assert.equal(crossSiteFetch.status, 403);
+
+    const nonJsonContentType = await fetch(`${proxyServer.baseUrl}/api/local-llm/models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ endpoint: mockLlm.baseUrl }),
+    });
+    assert.equal(nonJsonContentType.status, 415);
+
+    const sameOriginOk = await fetch(`${proxyServer.baseUrl}/api/local-llm/models`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: proxyServer.baseUrl,
+        'Sec-Fetch-Site': 'same-origin',
+      },
+      body: JSON.stringify({ endpoint: mockLlm.baseUrl }),
+    });
+    assert.equal(sameOriginOk.status, 200);
+
+    // 11. Upstream HTTP 302 redirect to external host is blocked (redirect: 'error' -> 502)
+    const redirectBlocked = await fetch(`${proxyServer.baseUrl}/api/local-llm/models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint: `${mockLlm.baseUrl}/redirect-test/v1` }),
+    });
+    assert.equal(redirectBlocked.status, 502);
   } finally {
     await closeServer(directServer.server);
     await closeServer(proxyServer.server);

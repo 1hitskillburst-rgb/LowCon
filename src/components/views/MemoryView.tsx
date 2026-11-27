@@ -64,6 +64,18 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
     isPinned: boolean;
   } | null>(null);
 
+  useEffect(() => {
+    if (!showCreateModal && !editingNote) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (editingNote) setEditingNote(null);
+        else if (showCreateModal) setShowCreateModal(false);
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [showCreateModal, editingNote]);
+
   const includedSet = useMemo(() => new Set(includedMemoryIds), [includedMemoryIds]);
 
   const isNoteInActivePrompt = useMemo(
@@ -228,8 +240,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
               </div>
             ) : (
               filteredNotes.map(({ note }) => {
-                const isInPrompt =
-                  !note.isDisabled && (includedSet.has(note.id) || (note.isPinned && !note.isSummary));
+                const isInPrompt = isNoteInActivePrompt(note);
                 return (
                   <article
                     key={note.id}
@@ -247,7 +258,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                         <div className="flex flex-wrap items-center gap-2">
                           <h2 className="text-[14.5px] font-bold text-[var(--lc-surf-ink)]">{note.title}</h2>
                           {note.isPinned && (
-                            <span className="rounded-[4px] bg-[var(--lc-active-pill-bg)] px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--lc-active-pill-fg)]">
+                            <span className="rounded-[4px] bg-[var(--lc-surf-active-bg)] px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--lc-surf-active-fg)]">
                               PINNED RULE
                             </span>
                           )}
@@ -257,12 +268,12 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                             </span>
                           )}
                           {note.isSummary && (
-                            <span className="rounded-[4px] bg-[var(--lc-panel)] px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--lc-side-ink2)]">
+                            <span className="rounded-[4px] bg-[var(--lc-surf-hover)] px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--lc-surf-ink2)]">
                               {note.userApproved ? 'APPROVED SUMMARY' : 'UNAPPROVED SUMMARY'}
                             </span>
                           )}
                           {note.isDisabled && (
-                            <span className="rounded-[4px] bg-[var(--lc-hover)] px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--lc-side-mute)]">
+                            <span className="rounded-[4px] bg-[var(--lc-surf-hover)] px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--lc-surf-mute)]">
                               DISABLED
                             </span>
                           )}
@@ -360,6 +371,9 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
           role="dialog"
           aria-modal="true"
           aria-labelledby="create-note-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowCreateModal(false);
+          }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
         >
           <form
@@ -464,6 +478,9 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
           role="dialog"
           aria-modal="true"
           aria-labelledby="edit-note-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setEditingNote(null);
+          }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
         >
           <form

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, FolderLock, Lock, Palette, RefreshCw, ShieldCheck, Sparkles, Terminal, Trash2 } from 'lucide-react';
+import { ChevronDown, FolderLock, Lock, Palette, RefreshCw, ShieldCheck, Sparkles, Terminal, Trash2, Unlock } from 'lucide-react';
 import { calculateBudgetPartition } from '../../core/context';
 import {
   detectModelOrigin,
@@ -34,7 +34,10 @@ interface SettingsViewProps {
   onSwitchBackend: (backend: BackendType) => void;
   onTestLmStudioConnection: () => Promise<void>;
   onSelectLmModel: (modelName: string) => void;
+  vaultModeActive?: boolean;
   onLockVault: (passphrase: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  onLockActiveVaultNow?: () => void;
+  onDisableVaultEncryption?: () => void;
   onClearDiagnostics: () => void;
 }
 
@@ -64,7 +67,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onSwitchBackend,
   onTestLmStudioConnection,
   onSelectLmModel,
+  vaultModeActive = false,
   onLockVault,
+  onLockActiveVaultNow,
+  onDisableVaultEncryption,
   onClearDiagnostics,
 }) => {
   const [vaultPassphrase, setVaultPassphrase] = useState('');
@@ -129,11 +135,31 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     });
   };
 
+  const passphraseStrength = (() => {
+    if (!vaultPassphrase) return null;
+    if (vaultPassphrase.length < 8) {
+      return { label: 'Too short (min 8 chars)', colorClass: 'text-[var(--lc-danger)]' };
+    }
+    const classes = [
+      /[a-z]/.test(vaultPassphrase),
+      /[A-Z]/.test(vaultPassphrase),
+      /\d/.test(vaultPassphrase),
+      /[^A-Za-z0-9]/.test(vaultPassphrase),
+    ].filter(Boolean).length;
+    if (vaultPassphrase.length >= 12 && classes >= 3) {
+      return { label: 'Strong passphrase', colorClass: 'text-[var(--lc-success)]' };
+    }
+    if (vaultPassphrase.length >= 10 || classes >= 2) {
+      return { label: 'Fair passphrase', colorClass: 'text-[var(--lc-warn)]' };
+    }
+    return { label: 'Weak passphrase — consider adding length or symbols', colorClass: 'text-[var(--lc-warn)]' };
+  })();
+
   const handleLockVaultSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setVaultError(null);
-    if (vaultPassphrase.length < 4) {
-      setVaultError('Enter a passphrase of at least 4 characters to seal the local vault.');
+    if (vaultPassphrase.length < 8) {
+      setVaultError('Enter a passphrase of at least 8 characters to seal the local vault.');
       return;
     }
     if (vaultPassphrase !== vaultConfirm) {
@@ -202,7 +228,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       <span
                         aria-hidden="true"
                         style={{ backgroundColor: preset.colors.bg }}
-                        className="h-3 w-3 rounded-full border border-black/20"
+                        className="h-3 w-3 rounded-full border border-[var(--lc-surf-line)]"
                       />
                       <span>{preset.label}</span>
                     </button>
@@ -228,7 +254,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <label
                   key={item.key}
                   htmlFor={item.id}
-                  className="flex cursor-pointer items-center justify-between gap-2 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-bg)]/50 px-2.5 py-2 text-[12px]"
+                  className="flex cursor-pointer items-center justify-between gap-2 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surf-hover)]/45 px-2.5 py-2 text-[12px]"
                 >
                   <div className="min-w-0">
                     <div className="font-semibold text-[var(--lc-surf-ink)]">{item.label}</div>
@@ -247,7 +273,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               ))}
             </div>
 
-            <div className="mt-4 border-t border-[var(--lc-line-soft)] pt-4">
+            <div className="mt-4 border-t border-[var(--lc-surf-line)] pt-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <div className="text-[13px] font-semibold text-[var(--lc-surf-ink)]">
@@ -307,9 +333,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
             <div className="mt-3.5 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
               <label
-                className={`flex cursor-pointer items-start gap-2.5 rounded-[7px] border p-3 ${
+                className={`flex cursor-pointer items-start gap-2.5 rounded-[7px] border p-3 transition-colors ${
                   settings.activeBackendType === 'mock'
-                    ? 'border-[var(--lc-accent)] bg-[var(--lc-panel)]'
+                    ? 'border-[var(--lc-accent)] bg-[var(--lc-accent)]/10'
                     : 'border-[var(--lc-surf-line)] bg-[var(--lc-surface)] hover:bg-[var(--lc-surf-hover)]'
                 }`}
               >
@@ -331,9 +357,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </label>
 
               <label
-                className={`flex cursor-pointer items-start gap-2.5 rounded-[7px] border p-3 ${
+                className={`flex cursor-pointer items-start gap-2.5 rounded-[7px] border p-3 transition-colors ${
                   settings.activeBackendType === 'lm_studio'
-                    ? 'border-[var(--lc-accent)] bg-[var(--lc-panel)]'
+                    ? 'border-[var(--lc-accent)] bg-[var(--lc-accent)]/10'
                     : 'border-[var(--lc-surf-line)] bg-[var(--lc-surface)] hover:bg-[var(--lc-surf-hover)]'
                 }`}
               >
@@ -355,7 +381,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </label>
             </div>
 
-            <div className="mt-4 space-y-3 border-t border-[var(--lc-line-soft)] pt-4">
+            <div className="mt-4 space-y-3 border-t border-[var(--lc-surf-line)] pt-4">
               <div>
                 <label
                   htmlFor="lm-endpoint-input"
@@ -618,8 +644,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   }`}
                 >
                   <span
-                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      settings.promptEffortEnabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                    className={`inline-block h-3.5 w-3.5 transform rounded-full shadow-sm transition-transform ${
+                      settings.promptEffortEnabled
+                        ? 'translate-x-[18px] bg-[var(--lc-accent-contrast)]'
+                        : 'translate-x-[3px] bg-[var(--lc-surface)]'
                     }`}
                   />
                 </button>
@@ -819,22 +847,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
 
               {previewPartition.ok && (
-                <div className="grid grid-cols-3 gap-3 rounded-[6px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-3.5 py-2.5 text-[12px] text-[var(--lc-side-ink)]">
+                <div className="grid grid-cols-3 gap-3 rounded-[6px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)] px-3.5 py-2.5 text-[12px] text-[var(--lc-panel-ink)]">
                   <div>
-                    <div className="text-[var(--lc-side-mute)]">Prompt Budget</div>
-                    <div className="font-bold text-[var(--lc-side-ink)] tabular-nums">
+                    <div className="text-[var(--lc-panel-mute)]">Prompt Budget</div>
+                    <div className="font-bold text-[var(--lc-panel-ink)] tabular-nums">
                       {formatNumber(previewPartition.partition.promptBudget)} tok
                     </div>
                   </div>
                   <div>
-                    <div className="text-[var(--lc-side-mute)]">Output Reserve (max_tokens)</div>
-                    <div className="font-bold text-[var(--lc-side-ink)] tabular-nums">
+                    <div className="text-[var(--lc-panel-mute)]">Output Reserve (max_tokens)</div>
+                    <div className="font-bold text-[var(--lc-panel-ink)] tabular-nums">
                       {formatNumber(previewPartition.partition.outputReserve)} tok
                     </div>
                   </div>
                   <div>
-                    <div className="text-[var(--lc-side-mute)]">Safety Margin</div>
-                    <div className="font-bold text-[var(--lc-side-ink)] tabular-nums">
+                    <div className="text-[var(--lc-panel-mute)]">Safety Margin</div>
+                    <div className="font-bold text-[var(--lc-panel-ink)] tabular-nums">
                       {formatNumber(previewPartition.partition.safetyMargin)} tok
                     </div>
                   </div>
@@ -871,8 +899,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   }`}
                 >
                   <span
-                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      settings.allowAiFileEdits ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                    className={`inline-block h-3.5 w-3.5 transform rounded-full shadow-sm transition-transform ${
+                      settings.allowAiFileEdits
+                        ? 'translate-x-[18px] bg-[var(--lc-accent-contrast)]'
+                        : 'translate-x-[3px] bg-[var(--lc-surface)]'
                     }`}
                   />
                 </button>
@@ -888,20 +918,65 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           {/* 4. Encrypted Local Storage Vault */}
           <section className="rounded-[8px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] p-5 text-[var(--lc-surf-ink)]">
-            <div className="flex items-center gap-2">
-              <Lock className="h-4 w-4 text-[var(--lc-surf-ink)]" />
-              <h2 className="text-[15px] font-bold text-[var(--lc-surf-ink)]">
-                Encrypted Local Storage Vault (AES-256-GCM)
-              </h2>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Lock className="h-4 w-4 text-[var(--lc-surf-ink)]" />
+                <h2 className="text-[15px] font-bold text-[var(--lc-surf-ink)]">
+                  Encrypted Local Storage Vault (AES-256-GCM)
+                </h2>
+              </div>
+              {vaultModeActive && (
+                <span
+                  data-testid="vault-active-badge"
+                  className="inline-flex items-center gap-1 rounded-[4px] bg-[var(--lc-success)]/15 px-2 py-0.5 text-[11px] font-semibold text-[var(--lc-success)]"
+                >
+                  <ShieldCheck className="h-3 w-3" />
+                  Encrypted at rest
+                </span>
+              )}
             </div>
             <p className="mt-1 text-[12.5px] text-[var(--lc-surf-mute)]">
-              Seals your entire local workspace (sessions, memory notes, models, and settings) with
-              PBKDF2-SHA256 (150,000 iterations) + AES-256-GCM authenticated encryption, purges
-              plaintext storage, and locks the interface until unlocked with your passphrase.
+              Seals your entire local workspace (sessions, memory notes, models, files, and settings)
+              with PBKDF2-SHA256 (150,000 iterations) + AES-256-GCM authenticated encryption. Once
+              enabled, every change saves directly to ciphertext — plaintext is never written back to
+              local storage.
             </p>
             <div className="mt-2 font-mono text-[11.5px] text-[var(--lc-surf-ink2)]">
               Storage: {settings.storageNamespace}
             </div>
+
+            {vaultModeActive && (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2.5 rounded-[6px] border border-[var(--lc-success)]/30 bg-[var(--lc-success)]/8 px-3.5 py-2.5">
+                <div className="text-[12.5px] text-[var(--lc-surf-ink)]">
+                  Vault encryption is active. Reloading or closing the tab automatically requires your
+                  passphrase.
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {onLockActiveVaultNow && (
+                    <button
+                      type="button"
+                      data-testid="vault-relock-now"
+                      onClick={onLockActiveVaultNow}
+                      className="inline-flex items-center gap-1.5 rounded-[6px] bg-[var(--lc-accent)] px-3 py-1.5 text-[12px] font-semibold text-[var(--lc-accent-contrast)] hover:bg-[var(--lc-accent-hover)]"
+                    >
+                      <Lock className="h-3.5 w-3.5" />
+                      <span>Lock Screen Now</span>
+                    </button>
+                  )}
+                  {onDisableVaultEncryption && (
+                    <button
+                      type="button"
+                      data-testid="vault-disable-encryption"
+                      onClick={onDisableVaultEncryption}
+                      className="inline-flex items-center gap-1.5 rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[12px] font-medium text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]"
+                    >
+                      <Unlock className="h-3.5 w-3.5" />
+                      <span>Disable Encryption</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
 
             <form onSubmit={(e) => void handleLockVaultSubmit(e)} className="mt-3.5 space-y-3">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -910,7 +985,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     htmlFor="vault-passphrase-input"
                     className="block text-[12px] font-semibold text-[var(--lc-surf-ink2)]"
                   >
-                    Vault Passphrase
+                    {vaultModeActive ? 'New Vault Passphrase (rotate key)' : 'Vault Passphrase (min 8 chars)'}
                   </label>
                   <input
                     id="vault-passphrase-input"
@@ -918,9 +993,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     autoComplete="new-password"
                     value={vaultPassphrase}
                     onChange={(e) => setVaultPassphrase(e.target.value)}
-                    placeholder="Enter passphrase to seal"
+                    placeholder="Enter at least 8 characters"
                     className="mt-1 w-full rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[13px] text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
                   />
+                  {passphraseStrength && (
+                    <div className={`mt-1 text-[11.5px] font-medium ${passphraseStrength.colorClass}`}>
+                      {passphraseStrength.label}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label
@@ -953,7 +1033,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 className="inline-flex items-center gap-1.5 rounded-[6px] bg-[var(--lc-accent)] px-4 py-1.5 text-[13px] font-semibold text-[var(--lc-accent-contrast)] hover:bg-[var(--lc-accent-hover)] disabled:opacity-50"
               >
                 <Lock className="h-3.5 w-3.5" />
-                <span>{isSealing ? 'Sealing Vault...' : 'Lock Vault Now'}</span>
+                <span>
+                  {isSealing
+                    ? 'Sealing Vault...'
+                    : vaultModeActive
+                      ? 'Rotate Passphrase & Lock'
+                      : 'Lock Vault Now'}
+                </span>
               </button>
             </form>
           </section>
@@ -1036,14 +1122,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </section>
 
           {/* 6. Privacy & Network Boundary */}
-          <section className="rounded-[8px] border border-[var(--lc-line)] bg-[var(--lc-panel)] p-5 text-[var(--lc-side-ink)]">
+          <section className="rounded-[8px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)] p-5 text-[var(--lc-panel-ink)]">
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-[var(--lc-success)]" />
-              <h2 className="text-[14.5px] font-bold text-[var(--lc-side-ink)]">
+              <h2 className="text-[14.5px] font-bold text-[var(--lc-panel-ink)]">
                 Local Privacy & Loopback Boundary
               </h2>
             </div>
-            <p className="mt-1.5 text-[13px] leading-relaxed text-[var(--lc-side-ink2)]">
+            <p className="mt-1.5 text-[13px] leading-relaxed text-[var(--lc-panel-ink2)]">
               LowCon makes zero remote cloud LLM calls, embeds zero analytics or telemetry SDKs, and
               enforces strict loopback validation (<code>127.0.0.1</code>, <code>localhost</code>,{' '}
               <code>::1</code>) on both client and local server proxy layers before forwarding any

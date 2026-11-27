@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Check, Copy, X } from 'lucide-react';
 import { formatNumber } from '../../core/privacy';
 import type { PromptInspection } from '../../core/types';
@@ -16,6 +16,17 @@ export const PromptInspectorModal: React.FC<PromptInspectorModalProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
   const [viewMode, setViewMode] = useState<'rendered' | 'structured'>('rendered');
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -42,6 +53,9 @@ export const PromptInspectorModal: React.FC<PromptInspectorModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="prompt-inspector-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
     >
       <div className="flex max-h-[88vh] w-full max-w-[740px] flex-col rounded-[10px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] text-[var(--lc-surf-ink)] shadow-xl">
@@ -68,27 +82,27 @@ export const PromptInspectorModal: React.FC<PromptInspectorModalProps> = ({
         {/* Body */}
         <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
           {/* Quick Budget Stats Summary Card */}
-          <div className="grid grid-cols-4 gap-3 rounded-[6px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-3.5 py-2.5 text-[var(--lc-side-ink)]">
+          <div className="grid grid-cols-4 gap-3 rounded-[6px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)] px-3.5 py-2.5 text-[var(--lc-panel-ink)]">
             <div>
-              <div className="text-[11px] text-[var(--lc-side-mute)]">Prompt Packed</div>
-              <div className="text-[13px] font-bold text-[var(--lc-side-ink)]">
+              <div className="text-[11px] text-[var(--lc-panel-mute)]">Prompt Packed</div>
+              <div className="text-[13px] font-bold text-[var(--lc-panel-ink)]">
                 {formatNumber(inspection.totalTokens)} / {formatNumber(inspection.budgetPartition.promptBudget)}
               </div>
             </div>
             <div>
-              <div className="text-[11px] text-[var(--lc-side-mute)]">Output Reserve</div>
-              <div className="text-[13px] font-bold text-[var(--lc-side-ink)]">
+              <div className="text-[11px] text-[var(--lc-panel-mute)]">Output Reserve</div>
+              <div className="text-[13px] font-bold text-[var(--lc-panel-ink)]">
                 {formatNumber(inspection.budgetPartition.outputReserve)} tokens
               </div>
             </div>
             <div>
-              <div className="text-[11px] text-[var(--lc-side-mute)]">Safety Margin</div>
-              <div className="text-[13px] font-bold text-[var(--lc-side-ink)]">
+              <div className="text-[11px] text-[var(--lc-panel-mute)]">Safety Margin</div>
+              <div className="text-[13px] font-bold text-[var(--lc-panel-ink)]">
                 {formatNumber(inspection.budgetPartition.safetyMargin)} tokens
               </div>
             </div>
             <div>
-              <div className="text-[11px] text-[var(--lc-side-mute)]">Remaining Free</div>
+              <div className="text-[11px] text-[var(--lc-panel-mute)]">Remaining Free</div>
               <div className="text-[13px] font-bold text-[var(--lc-success)]">
                 {formatNumber(inspection.remainingCapacity)} tokens
               </div>
@@ -159,10 +173,10 @@ export const PromptInspectorModal: React.FC<PromptInspectorModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setViewMode('rendered')}
-                  className={`rounded-[5px] px-2.5 py-1 text-[11.5px] font-semibold ${
+                  className={`rounded-[5px] px-2.5 py-1 text-[11.5px] font-semibold transition-colors ${
                     viewMode === 'rendered'
-                      ? 'bg-[var(--lc-active-pill-bg)] text-[var(--lc-active-pill-fg)]'
-                      : 'bg-[var(--lc-panel)] text-[var(--lc-side-ink2)]'
+                      ? 'bg-[var(--lc-surf-active-bg)] text-[var(--lc-surf-active-fg)]'
+                      : 'border border-[var(--lc-surf-line)] bg-[var(--lc-surf-hover)]/60 text-[var(--lc-surf-ink2)] hover:text-[var(--lc-surf-ink)]'
                   }`}
                 >
                   Rendered Template ({inspection.templateType})
@@ -170,10 +184,10 @@ export const PromptInspectorModal: React.FC<PromptInspectorModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setViewMode('structured')}
-                  className={`rounded-[5px] px-2.5 py-1 text-[11.5px] font-semibold ${
+                  className={`rounded-[5px] px-2.5 py-1 text-[11.5px] font-semibold transition-colors ${
                     viewMode === 'structured'
-                      ? 'bg-[var(--lc-active-pill-bg)] text-[var(--lc-active-pill-fg)]'
-                      : 'bg-[var(--lc-panel)] text-[var(--lc-side-ink2)]'
+                      ? 'bg-[var(--lc-surf-active-bg)] text-[var(--lc-surf-active-fg)]'
+                      : 'border border-[var(--lc-surf-line)] bg-[var(--lc-surf-hover)]/60 text-[var(--lc-surf-ink2)] hover:text-[var(--lc-surf-ink)]'
                   }`}
                 >
                   OpenAI Chat API Messages (No Double-Wrap)

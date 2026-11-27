@@ -135,6 +135,19 @@ test('sanitizeSvgForPreview strips scripts, event handlers, javascript: URLs, XX
   assert.ok(dataUri.startsWith('data:image/svg+xml;charset=utf-8,'));
   assert.equal(decodeURIComponent(dataUri).toLowerCase().includes('<script'), false);
   assert.equal(sanitizeSvgForPreview('<div>not svg</div>'), '');
+
+  // Privacy: external remote URLs inside SVG image hrefs or style url(...) must be stripped
+  const trackingSvg = [
+    '<svg viewBox="0 0 100 100">',
+    '<style>.bg { background: url("https://tracker.test/bg.png"); } .ok { fill: url(#grad); }</style>',
+    '<image href="https://tracker.test/pixel.png" width="10" height="10" />',
+    '<image xlink:href="//tracker.test/proto.png" width="10" height="10" />',
+    '<rect width="100" height="100" class="ok" />',
+    '</svg>',
+  ].join('\n');
+  const cleanTracking = sanitizeSvgForPreview(trackingSvg);
+  assert.equal(cleanTracking.includes('tracker.test'), false);
+  assert.ok(cleanTracking.includes('fill: url(#grad)'));
 });
 
 test('buildSandboxedHtmlSrcDoc injects strict CSP meta tag into documents and fragments', () => {
@@ -181,6 +194,14 @@ test('buildSandboxedHtmlSrcDoc injects strict CSP meta tag into documents and fr
     guardedInsideHtml.indexOf(SANDBOX_HTML_CSP) <
       guardedInsideHtml.indexOf('<img src="https://evil.test/px">'),
   );
+
+  // Privacy: meta http-equiv="refresh" redirect tags must be stripped
+  const refreshDoc =
+    '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=https://evil.test/steal"><title>Hi</title></head><body>ok</body></html>';
+  const strippedRefresh = buildSandboxedHtmlSrcDoc(refreshDoc);
+  assert.equal(strippedRefresh.toLowerCase().includes('http-equiv="refresh"'), false);
+  assert.equal(strippedRefresh.includes('evil.test/steal'), false);
+  assert.ok(strippedRefresh.includes(SANDBOX_HTML_CSP));
 });
 
 test('RichArtifactPreview renders markdown, csv, sanitized svg, and sandboxed html iframe safely', () => {

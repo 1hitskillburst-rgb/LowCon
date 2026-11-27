@@ -8,6 +8,21 @@ import {
   sanitizeDiagnosticMessage,
 } from '../src/core/privacy';
 import { decryptVaultString, encryptVaultString, VaultError } from '../src/core/vault';
+import {
+  clearActiveVaultKey,
+  createDefaultSettings,
+  createDefaultWorkspace,
+  disableVaultEncryption,
+  isVaultModeActive,
+  isVaultSealed,
+  loadSavedThemePreference,
+  lockActiveVaultNow,
+  persistActiveWorkspace,
+  resetAndWipeVault,
+  saveThemePreference,
+  sealWorkspaceVault,
+  unsealWorkspaceVault,
+} from '../src/core/storage';
 import { createMockGgufBytes, parseGgufHeader } from '../src/core/gguf';
 import {
   consumeSseStream,
@@ -65,9 +80,124 @@ test('diagnostic logger redacts credentials and handles multi-byte Unicode safel
   assert.equal(logger.getEntries().length, 1);
   assert.equal(logger.getEntries()[0].message.includes('topsecret'), false);
 
+  // Expanded redaction covers JSON-formatted secrets, Authorization headers, and provider keys
+  const jsonSanitized = sanitizeDiagnosticMessage(
+    '{"api_key":"sk-live-secret999999999999","password":"hunter2","prompt":"confidential"} Authorization: Bearer tok_secret_123 AIzaSyAbCdEfGhIjKlMnOpQrStUvWxYz123456',
+  );
+  assert.equal(jsonSanitized.includes('sk-live-secret'), false);
+  assert.equal(jsonSanitized.includes('hunter2'), false);
+  assert.equal(jsonSanitized.includes('confidential'), false);
+  assert.equal(jsonSanitized.includes('tok_secret_123'), false);
+  assert.equal(jsonSanitized.includes('AIzaSy'), false);
+
+  // Diagnostic logging defaults to disabled for privacy-by-default
+  assert.equal(createDefaultSettings().diagnosticLevel, 'disabled');
+
   // Safe char truncation never splits multi-byte emoji
   const trunc = safeTruncateChars('Hello 🚀🔥✨ world with unicode — emdash', 12);
   assert.equal(Array.from(trunc).length, 12);
+});
+
+test('continuous encrypted vault keeps data encrypted at rest after unlock and supports relock/disable/reset', async () => {
+  const store = new Map<string, string>();
+  const fakeStorage = {
+    getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+    setItem: (k: string, v: string) => {
+      store.set(k, String(v));
+    },
+    removeItem: (k: string) => {
+      store.delete(k);
+    },
+    clear: () => store.clear(),
+    key: (i: number) => Array.from(store.keys())[i] ?? null,
+    get length() {
+      return store.size;
+    },
+  };
+  const prevStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: fakeStorage,
+    configurable: true,
+    writable: true,
+  });
+
+  const logger = new DiagnosticLogger('disabled');
+  try {
+    clearActiveVaultKey();
+    const initial = createDefaultWorkspace();
+    initial.settings.theme = {
+      preset: 'black',
+      bg: '#0D0E11',
+      surface: '#16181D',
+      sidebar: '#121318',
+      accent: '#6E82FF',
+    };
+    initial.sessions[0].title = 'Top Secret Design';
+
+    // Seal vault -> ciphertext stored, plaintext purged, theme hint saved
+    const sealed = await sealWorkspaceVault(initial, 'CorrectHorse#2026', logger);
+    assert.equal(sealed.ok, true);
+    assert.equal(isVaultSealed(), true);
+    assert.equal(isVaultModeActive(), false);
+    assert.equal(store.get('lowcon.workspace.v1'), undefined);
+    assert.ok(store.get('lowcon.vault.sealed.v1'));
+    assert.equal(store.get('lowcon.vault.sealed.v1')?.includes('Top Secret Design'), false);
+    assert.equal(loadSavedThemePreference().preset, 'black');
+
+    // Unlock vault -> stays encrypted at rest, NEVER writes plaintext key
+    const unlocked = await unsealWorkspaceVault('CorrectHorse#2026', logger);
+    assert.equal(unlocked.ok, true);
+    assert.equal(isVaultModeActive(), true);
+    assert.equal(store.get('lowcon.workspace.v1'), undefined);
+    if (!unlocked.ok) return;
+    assert.equal(unlocked.workspace.sessions[0].title, 'Top Secret Design');
+
+    // Mutate and persist while unlocked -> re-encrypts directly into sealed vault key
+    const updated = {
+      ...unlocked.workspace,
+      sessions: unlocked.workspace.sessions.map((s, idx) =>
+        idx === 0 ? { ...s, title: 'Updated Secret Session' } : s,
+      ),
+    };
+    const persisted = await persistActiveWorkspace(updated, logger);
+    assert.equal(persisted.ok, true);
+    assert.equal(store.get('lowcon.workspace.v1'), undefined);
+    assert.equal(store.get('lowcon.vault.sealed.v1')?.includes('Updated Secret Session'), false);
+
+    // 1-click lock clears in-memory key; re-unlocking sees updated session
+    const relocked = await lockActiveVaultNow(updated, logger);
+    assert.equal(relocked.ok, true);
+    assert.equal(isVaultModeActive(), false);
+
+    const unlockedAgain = await unsealWorkspaceVault('CorrectHorse#2026', logger);
+    assert.equal(unlockedAgain.ok, true);
+    if (!unlockedAgain.ok) return;
+    assert.equal(unlockedAgain.workspace.sessions[0].title, 'Updated Secret Session');
+
+    // Explicit opt-out restores plaintext storage and removes sealed vault
+    const disabled = disableVaultEncryption(unlockedAgain.workspace, logger);
+    assert.equal(disabled.ok, true);
+    assert.equal(isVaultModeActive(), false);
+    assert.equal(isVaultSealed(), false);
+    assert.ok(store.get('lowcon.workspace.v1')?.includes('Updated Secret Session'));
+
+    // Re-seal then test recovery reset (preserves theme, wipes sealed vault)
+    saveThemePreference(initial.settings.theme);
+    await sealWorkspaceVault(updated, 'CorrectHorse#2026', logger);
+    assert.equal(isVaultSealed(), true);
+    const fresh = resetAndWipeVault(logger);
+    assert.equal(isVaultSealed(), false);
+    assert.equal(isVaultModeActive(), false);
+    assert.equal(fresh.settings.theme.preset, 'black');
+    assert.notEqual(fresh.sessions[0].title, 'Updated Secret Session');
+  } finally {
+    clearActiveVaultKey();
+    if (prevStorage) {
+      Object.defineProperty(globalThis, 'localStorage', prevStorage);
+    } else {
+      delete (globalThis as Record<string, unknown>).localStorage;
+    }
+  }
 });
 
 test('GGUF binary header parser extracts metadata and rejects invalid/truncated headers', () => {

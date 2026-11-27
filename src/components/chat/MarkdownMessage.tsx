@@ -6,7 +6,9 @@ import {
   AlertTriangle,
   Check,
   Copy,
+  ExternalLink,
   Flame,
+  ImageOff,
   Info,
   Lightbulb,
 } from 'lucide-react';
@@ -29,33 +31,33 @@ const CALLOUT_STYLES: Record<
   { border: string; bg: string; title: string; icon: React.ReactNode }
 > = {
   note: {
-    border: 'border-[#2A3FE0]',
-    bg: 'bg-[#2A3FE0]/6',
-    title: 'text-[#2A3FE0]',
+    border: 'border-[var(--lc-callout-note)]',
+    bg: 'bg-[var(--lc-callout-note)]/10',
+    title: 'text-[var(--lc-callout-note)]',
     icon: <Info className="h-3.5 w-3.5 shrink-0" />,
   },
   tip: {
-    border: 'border-[#1D7A4E]',
-    bg: 'bg-[#1D7A4E]/7',
-    title: 'text-[#1D7A4E]',
+    border: 'border-[var(--lc-callout-tip)]',
+    bg: 'bg-[var(--lc-callout-tip)]/10',
+    title: 'text-[var(--lc-callout-tip)]',
     icon: <Lightbulb className="h-3.5 w-3.5 shrink-0" />,
   },
   important: {
-    border: 'border-[#7C3AED]',
-    bg: 'bg-[#7C3AED]/7',
-    title: 'text-[#6D28D9]',
+    border: 'border-[var(--lc-callout-important)]',
+    bg: 'bg-[var(--lc-callout-important)]/10',
+    title: 'text-[var(--lc-callout-important)]',
     icon: <AlertCircle className="h-3.5 w-3.5 shrink-0" />,
   },
   warning: {
-    border: 'border-[#B45309]',
-    bg: 'bg-[#F59E0B]/10',
-    title: 'text-[#B45309]',
+    border: 'border-[var(--lc-callout-warning)]',
+    bg: 'bg-[var(--lc-callout-warning)]/10',
+    title: 'text-[var(--lc-callout-warning)]',
     icon: <AlertTriangle className="h-3.5 w-3.5 shrink-0" />,
   },
   caution: {
-    border: 'border-[#D9383A]',
-    bg: 'bg-[#D9383A]/7',
-    title: 'text-[#D9383A]',
+    border: 'border-[var(--lc-callout-caution)]',
+    bg: 'bg-[var(--lc-callout-caution)]/10',
+    title: 'text-[var(--lc-callout-caution)]',
     icon: <Flame className="h-3.5 w-3.5 shrink-0" />,
   },
 };
@@ -65,6 +67,9 @@ function renderKatexHtml(expr: string, displayMode: boolean): string {
     displayMode,
     throwOnError: false,
     strict: false,
+    trust: false,
+    maxExpand: 100,
+    maxSize: 50,
     output: 'htmlAndMathml',
   });
 }
@@ -211,6 +216,32 @@ function renderInlineTokens(tokens: InlineToken[], keyPrefix: string): React.Rea
             {renderInlineTokens(token.label, key)}
           </a>
         );
+      case 'image':
+        if (token.isInlineSafe) {
+          return (
+            <img
+              key={key}
+              src={token.src}
+              alt={token.alt}
+              className="my-1.5 inline-block max-h-80 max-w-full rounded-[6px] border border-[var(--lc-line)]"
+            />
+          );
+        }
+        return (
+          <a
+            key={key}
+            href={token.src}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="blocked-remote-image"
+            title={`External image blocked to protect local privacy: ${token.src}`}
+            className="my-0.5 inline-flex items-center gap-1.5 rounded-[5px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-2 py-0.5 text-[12px] font-medium text-[var(--lc-panel-ink2)] hover:border-[var(--lc-accent)] hover:text-[var(--lc-panel-ink)]"
+          >
+            <ImageOff className="h-3 w-3 shrink-0 text-[var(--lc-panel-mute)]" />
+            <span>External image blocked{token.alt ? `: ${token.alt}` : ''}</span>
+            <ExternalLink className="h-3 w-3 shrink-0 text-[var(--lc-panel-mute)]" />
+          </a>
+        );
     }
   });
 }
@@ -253,7 +284,7 @@ function renderList(list: ListBlock, keyPrefix: string): React.ReactNode {
                 checked={item.checked}
                 readOnly
                 aria-label={item.checked ? 'Completed item' : 'Incomplete item'}
-                className="mt-1 h-3.5 w-3.5 shrink-0 rounded border-[#C3CAD4] accent-[#2A3FE0]"
+                className="mt-1 h-3.5 w-3.5 shrink-0 rounded border-[var(--lc-line)] accent-[var(--lc-accent)]"
               />
             )}
             <div className="min-w-0 flex-1 space-y-1">
@@ -339,7 +370,7 @@ function renderBlocks(blocks: MarkdownBlock[], keyPrefix: string, compact?: bool
                     return (
                       <th
                         key={`${key}-th-${hIdx}`}
-                        className={`px-3 py-2 font-semibold text-[var(--lc-side-ink)] ${
+                        className={`px-3 py-2 font-semibold text-[var(--lc-panel-ink)] ${
                           align ? ALIGN_CLASS[align] : 'text-left'
                         }`}
                       >
@@ -349,7 +380,7 @@ function renderBlocks(blocks: MarkdownBlock[], keyPrefix: string, compact?: bool
                   })}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[var(--lc-line-soft)]">
+              <tbody className="divide-y divide-[var(--lc-surf-line)]">
                 {block.rows.map((row, rIdx) => (
                   <tr key={`${key}-tr-${rIdx}`} className="hover:bg-[var(--lc-surf-hover)]/45">
                     {row.map((cell, cIdx) => {
@@ -382,7 +413,7 @@ function renderBlocks(blocks: MarkdownBlock[], keyPrefix: string, compact?: bool
             <summary className="cursor-pointer text-[13.5px] font-semibold text-[var(--lc-surf-ink)]">
               {renderInline(block.summary, `${key}-summary`)}
             </summary>
-            <div className="mt-2 space-y-2 border-t border-[var(--lc-line-soft)] pt-2 text-[14px]">
+            <div className="mt-2 space-y-2 border-t border-[var(--lc-surf-line)] pt-2 text-[14px]">
               {renderBlocks(block.blocks, `${key}-body`, compact)}
             </div>
           </details>

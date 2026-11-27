@@ -24,7 +24,6 @@ import {
 import { detectArtifactPreviewKind, type ArtifactPreviewKind } from '../../core/artifactPreview';
 import { getPackedTokens } from '../../core/context';
 import {
-  detectModelOrigin,
   resolveModelDisplayName,
   resolveModelOrigin,
   type ModelOrigin,
@@ -95,7 +94,7 @@ function renderToolActivityBadge(label: string, idx: number): React.ReactNode {
   const lower = label.toLowerCase();
   let icon: React.ReactNode = <FileCode2 className="h-3 w-3 shrink-0" />;
   let tone =
-    'border-[var(--lc-line)] bg-[var(--lc-panel)]/70 text-[var(--lc-mute)]';
+    'border-[var(--lc-panel-line)] bg-[var(--lc-panel)]/70 text-[var(--lc-panel-ink2)]';
 
   if (lower.startsWith('failed ')) {
     icon = <AlertCircle className="h-3 w-3 shrink-0" />;
@@ -326,7 +325,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (composerText.trim() && !isGenerating) {
+      if ((composerText.trim() || attachedFile) && !isGenerating) {
         onSendMessage();
       }
     }
@@ -368,7 +367,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
 
           {/* Active Backend Badge */}
-          <div className="flex items-center gap-1.5 rounded-[6px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-2 py-1 text-[11.5px] font-semibold text-[var(--lc-side-ink2)]">
+          <div className="flex items-center gap-1.5 rounded-[6px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)] px-2 py-1 text-[11.5px] font-semibold text-[var(--lc-panel-ink2)]">
             <span aria-hidden="true" className="h-[6px] w-[6px] rounded-full bg-[var(--lc-success)]" />
             <span>{backendLabel}</span>
           </div>
@@ -379,8 +378,21 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </label>
           <select
             id="chat-active-model-select"
-            value={activeModelId}
-            onChange={(e) => onSelectActiveModel(e.target.value)}
+            value={
+              activeModel?.backendType === 'lm_studio' &&
+              selectedLmModel &&
+              connectedLmModels.includes(selectedLmModel)
+                ? `lm::${selectedLmModel}`
+                : activeModelId
+            }
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val.startsWith('lm::')) {
+                onSelectLmModel(val.slice(4));
+              } else {
+                onSelectActiveModel(val);
+              }
+            }}
             className="max-w-[320px] rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1 text-[12.5px] font-semibold text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
           >
             {models.map((m) => (
@@ -388,6 +400,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 {m.name}
               </option>
             ))}
+            {connectedLmModels.length > 0 && (
+              <optgroup label="LM Studio Server Models">
+                {connectedLmModels.map((lmName) => (
+                  <option key={`lm-${lmName}`} value={`lm::${lmName}`}>
+                    {resolveModelDisplayName(lmName, modelDisplayAliases)}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </div>
       </header>
@@ -452,7 +473,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <button
                   type="button"
                   onClick={onReviewSummaries}
-                  className="rounded-[5px] bg-[var(--lc-success)] px-2.5 py-1 text-[12px] font-semibold text-white hover:opacity-90"
+                  className="rounded-[5px] bg-[var(--lc-success)] px-2.5 py-1 text-[12px] font-semibold text-[var(--lc-success-contrast)] hover:opacity-90"
                 >
                   Review &amp; Approve
                 </button>
@@ -535,17 +556,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     </div>
 
                     {msg.role === 'user' ? (
-                      <div className="space-y-2 border-l-[3px] border-[#F2D452] py-0.5 pl-4 text-[15px] leading-relaxed text-[var(--lc-ink)]">
+                      <div className="space-y-2 border-l-[3px] border-[var(--lc-quote-bar)] py-0.5 pl-4 text-[15px] leading-relaxed text-[var(--lc-ink)]">
                         {msg.attachedFiles && msg.attachedFiles.length > 0 && (
                           <div className="flex flex-wrap gap-1.5">
                             {msg.attachedFiles.map((att) => (
                               <span
                                 key={`${msg.id}-att-${att.name}`}
-                                className="inline-flex items-center gap-1.5 rounded-[6px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-2.5 py-1 text-[12px] text-[var(--lc-side-ink)]"
+                                className="inline-flex items-center gap-1.5 rounded-[6px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)] px-2.5 py-1 text-[12px] text-[var(--lc-panel-ink)]"
                               >
-                                <Paperclip className="h-3 w-3 shrink-0 text-[var(--lc-mute)]" />
+                                <Paperclip className="h-3 w-3 shrink-0 text-[var(--lc-panel-mute)]" />
                                 <span className="font-medium">{att.name}</span>
-                                <span className="text-[var(--lc-side-mute)]">
+                                <span className="text-[var(--lc-panel-mute)]">
                                   ({countLines(att.content)} lines)
                                 </span>
                               </span>
@@ -572,7 +593,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         )}
 
                         {hasThinking && (
-                          <div className="rounded-[8px] border border-[var(--lc-line)] bg-[var(--lc-panel)]/80">
+                          <div className="rounded-[8px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)]/85">
                             <button
                               type="button"
                               aria-expanded={isThinkingExpanded}
@@ -583,7 +604,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                   [msg.id]: !prev[msg.id],
                                 }))
                               }
-                              className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[12.5px] font-medium text-[var(--lc-side-ink2)] hover:text-[var(--lc-side-ink)]"
+                              className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[12.5px] font-medium text-[var(--lc-panel-ink2)] hover:text-[var(--lc-panel-ink)]"
                             >
                               <span className="inline-flex items-center gap-1.5">
                                 {isThinkingExpanded ? (
@@ -595,14 +616,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                   {thinkingLabel}
                                 </span>
                               </span>
-                              <span className="text-[11px] text-[var(--lc-side-mute)]">
+                              <span className="text-[11px] text-[var(--lc-panel-mute)]">
                                 {isThinkingExpanded ? 'Hide' : 'Show'}
                               </span>
                             </button>
                             {isThinkingExpanded && (
                               <div
                                 data-testid={`thinking-content-${msg.id}`}
-                                className="max-h-72 overflow-y-auto border-t border-[var(--lc-line)] px-3 py-2.5"
+                                className="max-h-72 overflow-y-auto border-t border-[var(--lc-panel-line)] px-3 py-2.5"
                               >
                                 <MarkdownMessage content={msg.thinkingContent ?? ''} compact />
                               </div>
@@ -628,7 +649,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         ) : (
                           <div
                             data-testid="empty-response-notice"
-                            className="rounded-[6px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-3.5 py-2.5 text-[13px] text-[var(--lc-side-ink2)]"
+                            className="rounded-[6px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)] px-3.5 py-2.5 text-[13px] text-[var(--lc-panel-ink2)]"
                           >
                             {msg.stopReason === 'max_tokens' && hasThinking
                               ? `Output reply reserve (${outputReserveTokens ?? 'current'} tokens) was reached during thinking before visible answer text started. Increase Output Reply Reserve in Settings or inspect the Thought process above.`
@@ -674,7 +695,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                         className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] border ${
                                           isPreviewActive
                                             ? 'border-[var(--lc-accent)]/40 bg-[var(--lc-accent)]/15 text-[var(--lc-accent)]'
-                                            : 'border-[var(--lc-surf-line)] bg-[var(--lc-panel)] text-[var(--lc-surf-ink2)] group-hover:text-[var(--lc-surf-ink)]'
+                                            : 'border-[var(--lc-surf-line)] bg-[var(--lc-surf-hover)] text-[var(--lc-surf-ink2)] group-hover:text-[var(--lc-surf-ink)]'
                                         }`}
                                       >
                                         {kindMeta.icon}
@@ -830,7 +851,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           className={`mx-auto w-full ${widthLayout.innerMax} rounded-[12px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-4 py-3 text-[var(--lc-surf-ink)] shadow-xs focus-within:border-[var(--lc-accent)]`}
         >
           {attachedFile && (
-            <div className="mb-2 flex items-center justify-between gap-2 rounded-[6px] border border-[var(--lc-line)] bg-[var(--lc-panel)] px-2.5 py-1 text-[12px] text-[var(--lc-side-ink)]">
+            <div className="mb-2 flex items-center justify-between gap-2 rounded-[6px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)] px-2.5 py-1 text-[12px] text-[var(--lc-panel-ink)]">
               <span className="flex min-w-0 items-center gap-1.5 truncate">
                 <span className="truncate">
                   Attached local file: <strong>{attachedFile.name}</strong> (
@@ -850,7 +871,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 type="button"
                 onClick={() => onAttachFile(null)}
                 aria-label="Remove attached file"
-                className="ml-2 shrink-0 text-[var(--lc-side-mute)] hover:text-[var(--lc-danger)]"
+                className="ml-2 shrink-0 text-[var(--lc-panel-mute)] hover:text-[var(--lc-danger)]"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -924,11 +945,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       <div className="max-h-60 overflow-y-auto space-y-0.5">
                         {models.map((m) => {
                           const isSelected = m.id === activeModelId;
-                          const itemOrigin = detectModelOrigin({
-                            profileName: m.name,
-                            architecture: m.architecture,
-                            backendType: m.backendType,
-                          });
+                          const itemOrigin = resolveModelOrigin(
+                            {
+                              modelId: m.id,
+                              profileName: m.name,
+                              architecture: m.architecture,
+                              backendType: m.backendType,
+                            },
+                            modelIconOverrides,
+                          );
                           return (
                             <button
                               key={m.id}
@@ -954,7 +979,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
                         {connectedLmModels.length > 0 && (
                           <>
-                            <div className="mt-1 border-t border-[var(--lc-line-soft)] px-2.5 pt-1.5 pb-0.5 text-[10.5px] font-semibold tracking-wide text-[var(--lc-surf-mute)] uppercase">
+                            <div className="mt-1 border-t border-[var(--lc-surf-line)] px-2.5 pt-1.5 pb-0.5 text-[10.5px] font-semibold tracking-wide text-[var(--lc-surf-mute)] uppercase">
                               LM Studio Server Models
                             </div>
                             {connectedLmModels.map((lmName) => {
@@ -1055,7 +1080,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <button
                 type="button"
                 onClick={onStopGeneration}
-                className="inline-flex items-center gap-1.5 rounded-[8px] bg-[var(--lc-danger)] px-3.5 py-1.5 text-[13px] font-semibold text-white hover:opacity-90"
+                className="inline-flex items-center gap-1.5 rounded-[8px] bg-[var(--lc-danger)] px-3.5 py-1.5 text-[13px] font-semibold text-[var(--lc-danger-contrast)] hover:opacity-90"
               >
                 <Square className="h-3 w-3 fill-current" />
                 <span>Stop</span>
@@ -1064,7 +1089,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <button
                 type="button"
                 onClick={onSendMessage}
-                disabled={!composerText.trim()}
+                disabled={!composerText.trim() && !attachedFile}
                 className="rounded-[8px] bg-[var(--lc-accent)] px-4 py-1.5 text-[13px] font-semibold text-[var(--lc-accent-contrast)] transition-colors hover:bg-[var(--lc-accent-hover)] disabled:cursor-not-allowed disabled:opacity-45"
               >
                 Send

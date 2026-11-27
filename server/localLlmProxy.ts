@@ -26,7 +26,7 @@ async function fetchLoadedInstanceIds(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const resp = await fetch(url, { signal: controller.signal });
+      const resp = await fetch(url, { signal: controller.signal, redirect: 'error' });
       if (!resp.ok) {
         await resp.body?.cancel().catch(() => {});
         continue;
@@ -139,6 +139,7 @@ export async function unloadAllLocalModels(
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ instance_id: instanceId }),
             signal: controller.signal,
+            redirect: 'error',
           });
           await r.body?.cancel().catch(() => {});
           if (r.ok) {
@@ -380,7 +381,8 @@ function extractModelIds(payload: unknown): string[] {
     }
   } else if (Array.isArray(rec.models)) {
     for (const item of rec.models) {
-      if (item && typeof item === 'object') {
+      if (typeof item === 'string') models.push(item);
+      else if (item && typeof item === 'object') {
         const entry = item as { name?: unknown; id?: unknown };
         if (typeof entry.name === 'string') models.push(entry.name);
         else if (typeof entry.id === 'string') models.push(entry.id);
@@ -404,8 +406,56 @@ function parseJsonObjectBody(body: unknown): Record<string, unknown> | null {
   return body as Record<string, unknown>;
 }
 
+function sanitizeUpstreamErrorSnippet(raw: string): string {
+  const singleLine = raw
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/"(?:prompt|content|messages|api[_-]?key|password|token)"\s*:\s*"[^"]*"/gi, '"[redacted]"')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return singleLine.length > 120 ? `${singleLine.slice(0, 117)}...` : singleLine;
+}
+
 export function createLocalLlmProxyRouter(): Router {
   const router = Router();
+
+  router.use((req: Request, res: Response, next) => {
+    const fetchSite = (req.headers['sec-fetch-site'] ?? '').toString().trim().toLowerCase();
+    if (fetchSite === 'cross-site') {
+      res.status(403).json({
+        error: 'LowCon privacy boundary: Cross-site requests to local model proxy are blocked.',
+      });
+      return;
+    }
+
+    const originHeader = req.headers.origin;
+    if (typeof originHeader === 'string' && originHeader.trim()) {
+      const hostHeader = (req.headers.host ?? '').trim().toLowerCase();
+      try {
+        const parsedOrigin = new URL(originHeader);
+        if (!hostHeader || parsedOrigin.host.toLowerCase() !== hostHeader) {
+          res.status(403).json({
+            error: 'LowCon privacy boundary: Cross-origin requests to local model proxy are blocked.',
+          });
+          return;
+        }
+      } catch {
+        res.status(403).json({
+          error: 'LowCon privacy boundary: Invalid request Origin header rejected.',
+        });
+        return;
+      }
+    }
+
+    const contentType = (req.headers['content-type'] ?? '').toString().trim().toLowerCase();
+    if (!contentType.startsWith('application/json')) {
+      res.status(415).json({
+        error: 'Unsupported Content-Type: expected application/json.',
+      });
+      return;
+    }
+
+    next();
+  });
 
   router.post('/models', async (req: Request, res: Response) => {
     const controller = new AbortController();
@@ -447,7 +497,7 @@ export function createLocalLlmProxyRouter(): Router {
         controller.signal.addEventListener('abort', onParentAbort, { once: true });
         const timer = setTimeout(() => attemptController.abort(), 5000);
         try {
-          const r = await fetch(url, { signal: attemptController.signal });
+          const r = await fetch(url, { signal: attemptController.signal, redirect: 'error' });
           if (r.ok) {
             upstreamResp = r;
             break;
@@ -578,13 +628,15 @@ export function createLocalLlmProxyRouter(): Router {
           ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
         }),
         signal: controller.signal,
+        redirect: 'error',
       });
 
       if (!upstream.ok || !upstream.body) {
         const text = await upstream.text().catch(() => '');
+        const snippet = sanitizeUpstreamErrorSnippet(text);
         if (!res.headersSent && !res.destroyed) {
           res.status(upstream.status || 502).json({
-            error: `Local server ${url} returned HTTP ${upstream.status}: ${text.slice(0, 200)}`,
+            error: `Local server ${url} returned HTTP ${upstream.status}${snippet ? `: ${snippet}` : ''}`,
           });
         }
         return;

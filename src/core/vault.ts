@@ -78,6 +78,52 @@ function base64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
+export interface VaultSessionKey {
+  readonly key: CryptoKey;
+  readonly salt: Uint8Array;
+}
+
+export async function deriveVaultSessionKey(
+  passphrase: string,
+  existingSalt?: Uint8Array,
+): Promise<VaultSessionKey> {
+  const salt = existingSalt ? new Uint8Array(existingSalt) : new Uint8Array(SALT_LEN);
+  if (!existingSalt) {
+    globalThis.crypto.getRandomValues(salt);
+  }
+  const key = await deriveAesKey(passphrase, salt);
+  return { key, salt };
+}
+
+/**
+ * Encrypts plaintext UTF-8 JSON using an already-derived in-memory VaultSessionKey
+ * with a fresh random 96-bit IV on every save.
+ */
+export async function encryptVaultStringWithKey(
+  sessionKey: VaultSessionKey,
+  plaintext: string,
+): Promise<string> {
+  const subtle = getSubtleCrypto();
+  const iv = new Uint8Array(IV_LEN);
+  globalThis.crypto.getRandomValues(iv);
+
+  const encodedPlain = new TextEncoder().encode(plaintext);
+  const encryptedBuf = await subtle.encrypt(
+    { name: 'AES-GCM', iv: iv as BufferSource },
+    sessionKey.key,
+    encodedPlain,
+  );
+  const ciphertext = new Uint8Array(encryptedBuf);
+
+  const envelope = new Uint8Array(MAGIC_BYTES.length + SALT_LEN + IV_LEN + ciphertext.length);
+  envelope.set(MAGIC_BYTES, 0);
+  envelope.set(sessionKey.salt, MAGIC_BYTES.length);
+  envelope.set(iv, MAGIC_BYTES.length + SALT_LEN);
+  envelope.set(ciphertext, MAGIC_BYTES.length + SALT_LEN + IV_LEN);
+
+  return bytesToBase64(envelope);
+}
+
 /**
  * Encrypts plaintext UTF-8 JSON into a self-contained authenticated envelope:
  * [16 bytes Magic][16 bytes Salt][12 bytes IV][AES-256-GCM Ciphertext + 16-byte Tag]
@@ -86,35 +132,19 @@ export async function encryptVaultString(passphrase: string, plaintext: string):
   if (!passphrase) {
     throw new VaultError('EMPTY_PASSPHRASE', 'A non-empty passphrase is required to lock the vault.');
   }
-  const subtle = getSubtleCrypto();
-  const salt = new Uint8Array(SALT_LEN);
-  const iv = new Uint8Array(IV_LEN);
-  globalThis.crypto.getRandomValues(salt);
-  globalThis.crypto.getRandomValues(iv);
-
-  const key = await deriveAesKey(passphrase, salt);
-  const encodedPlain = new TextEncoder().encode(plaintext);
-  const encryptedBuf = await subtle.encrypt(
-    { name: 'AES-GCM', iv: iv as BufferSource },
-    key,
-    encodedPlain,
-  );
-  const ciphertext = new Uint8Array(encryptedBuf);
-
-  const envelope = new Uint8Array(MAGIC_BYTES.length + SALT_LEN + IV_LEN + ciphertext.length);
-  envelope.set(MAGIC_BYTES, 0);
-  envelope.set(salt, MAGIC_BYTES.length);
-  envelope.set(iv, MAGIC_BYTES.length + SALT_LEN);
-  envelope.set(ciphertext, MAGIC_BYTES.length + SALT_LEN + IV_LEN);
-
-  return bytesToBase64(envelope);
+  const sessionKey = await deriveVaultSessionKey(passphrase);
+  return encryptVaultStringWithKey(sessionKey, plaintext);
 }
 
 /**
- * Decrypts and authenticates an encrypted vault envelope.
- * Rejects wrong passphrases, truncated envelopes, and tampered bytes.
+ * Decrypts and authenticates an encrypted vault envelope, returning both
+ * the plaintext and the derived in-memory VaultSessionKey so subsequent saves
+ * stay encrypted-at-rest without ever writing plaintext back to storage.
  */
-export async function decryptVaultString(passphrase: string, base64Envelope: string): Promise<string> {
+export async function decryptVaultStringAndKey(
+  passphrase: string,
+  base64Envelope: string,
+): Promise<{ plaintext: string; sessionKey: VaultSessionKey }> {
   if (!passphrase) {
     throw new VaultError('EMPTY_PASSPHRASE', 'Enter your vault passphrase to unlock.');
   }
@@ -137,7 +167,9 @@ export async function decryptVaultString(passphrase: string, base64Envelope: str
     }
   }
 
-  const salt = envelope.subarray(MAGIC_BYTES.length, MAGIC_BYTES.length + SALT_LEN);
+  const salt = new Uint8Array(
+    envelope.subarray(MAGIC_BYTES.length, MAGIC_BYTES.length + SALT_LEN),
+  );
   const iv = envelope.subarray(
     MAGIC_BYTES.length + SALT_LEN,
     MAGIC_BYTES.length + SALT_LEN + IV_LEN,
@@ -152,11 +184,23 @@ export async function decryptVaultString(passphrase: string, base64Envelope: str
       key,
       ciphertext as BufferSource,
     );
-    return new TextDecoder().decode(plainBuf);
+    return {
+      plaintext: new TextDecoder().decode(plainBuf),
+      sessionKey: { key, salt },
+    };
   } catch {
     throw new VaultError(
       'DECRYPTION_FAILED',
       'Incorrect passphrase or tampered vault payload. Decryption failed.',
     );
   }
+}
+
+/**
+ * Decrypts and authenticates an encrypted vault envelope.
+ * Rejects wrong passphrases, truncated envelopes, and tampered bytes.
+ */
+export async function decryptVaultString(passphrase: string, base64Envelope: string): Promise<string> {
+  const { plaintext } = await decryptVaultStringAndKey(passphrase, base64Envelope);
+  return plaintext;
 }

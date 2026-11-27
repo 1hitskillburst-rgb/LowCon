@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
-import { Lock, Unlock } from 'lucide-react';
+import { AlertTriangle, Lock, Unlock } from 'lucide-react';
 
 interface VaultLockOverlayProps {
   onUnlock: (passphrase: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  onResetVault?: () => void;
 }
 
-export const VaultLockOverlay: React.FC<VaultLockOverlayProps> = ({ onUnlock }) => {
+export const VaultLockOverlay: React.FC<VaultLockOverlayProps> = ({ onUnlock, onResetVault }) => {
   const [passphrase, setPassphrase] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isUnlocking, setIsUnlocking] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,6 +95,52 @@ export const VaultLockOverlay: React.FC<VaultLockOverlayProps> = ({ onUnlock }) 
             <span>{isUnlocking ? 'Decrypting...' : 'Unlock Workspace'}</span>
           </button>
         </form>
+
+        {onResetVault && (
+          <div className="mt-4 border-t border-[var(--lc-surf-line)] pt-3">
+            {!confirmReset ? (
+              <button
+                type="button"
+                data-testid="vault-forgot-passphrase"
+                onClick={() => setConfirmReset(true)}
+                className="text-[12px] font-medium text-[var(--lc-surf-mute)] underline decoration-dotted underline-offset-2 hover:text-[var(--lc-surf-ink)]"
+              >
+                Forgot passphrase? Reset local workspace
+              </button>
+            ) : (
+              <div
+                data-testid="vault-reset-confirm-box"
+                className="space-y-2.5 rounded-[6px] border border-[var(--lc-danger)]/35 bg-[var(--lc-danger)]/10 p-3"
+              >
+                <div className="flex items-start gap-2 text-[12px] text-[var(--lc-danger)]">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    Because LowCon never stores your passphrase, resetting permanently erases the
+                    encrypted local workspace (sessions, memory notes, files, and profiles) on this
+                    device.
+                  </span>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmReset(false)}
+                    className="rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1 text-[12px] font-medium text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="vault-confirm-reset"
+                    onClick={onResetVault}
+                    className="rounded-[6px] bg-[var(--lc-danger)] px-3 py-1 text-[12px] font-semibold text-[var(--lc-danger-contrast)] hover:opacity-90"
+                  >
+                    Erase local workspace &amp; start fresh
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

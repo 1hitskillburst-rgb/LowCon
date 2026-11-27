@@ -34,9 +34,14 @@ import { resolveModelDisplayName } from './core/modelNames';
 import {
   createDefaultWorkspace,
   createUuid,
+  disableVaultEncryption,
+  isVaultModeActive,
   isVaultSealed,
   loadUnsealedWorkspace,
-  saveUnsealedWorkspace,
+  lockActiveVaultNow,
+  persistActiveWorkspace,
+  resetAndWipeVault,
+  saveThemePreference,
   sealWorkspaceVault,
   unsealWorkspaceVault,
 } from './core/storage';
@@ -280,8 +285,8 @@ function buildLivePreviewInspection(
     },
     {
       modelContextLimit: Math.max(512, effectiveLimit),
-      outputReservePct: settings.outputReservePct,
-      safetyMarginPct: settings.safetyMarginPct,
+      outputReservePct: Math.min(50, Math.max(5, settings.outputReservePct)),
+      safetyMarginPct: Math.min(25, Math.max(2, settings.safetyMarginPct)),
       templateType,
       allowEmptyUserMessage: true,
     },
@@ -289,18 +294,40 @@ function buildLivePreviewInspection(
   if (fallback.ok) {
     return { inspection: fallback.inspection, previewWarning: result.message };
   }
+  const emergency = assembleContext(
+    {
+      coreInstruction: '',
+      currentUserMessage: '',
+      pinnedFacts: [],
+      retrievedMemories: [],
+      conversationTurns: [],
+      summaries: [],
+    },
+    {
+      modelContextLimit: 2048,
+      outputReservePct: 20,
+      safetyMarginPct: 5,
+      templateType,
+      allowEmptyUserMessage: true,
+    },
+  );
+  if (emergency.ok) {
+    return { inspection: emergency.inspection, previewWarning: result.message };
+  }
   throw new Error(fallback.message);
 }
 
 export const App: React.FC = () => {
   const loggerRef = useRef<DiagnosticLogger | null>(null);
   if (!loggerRef.current) {
-    loggerRef.current = new DiagnosticLogger('minimal_redacted');
+    loggerRef.current = new DiagnosticLogger('disabled');
   }
   const logger = loggerRef.current;
 
   const [vaultLocked, setVaultLocked] = useState<boolean>(() => isVaultSealed());
+  const [vaultModeActive, setVaultModeActive] = useState<boolean>(() => isVaultModeActive());
   const [bannerError, setBannerError] = useState<string | null>(null);
+  const initialStorageWarningRef = useRef<string | null>(null);
 
   const [workspace, setWorkspace] = useState<PersistedWorkspace>(() => {
     if (isVaultSealed()) {
@@ -308,10 +335,17 @@ export const App: React.FC = () => {
     }
     const loaded = loadUnsealedWorkspace(logger);
     if (loaded.storageWarning) {
-      setTimeout(() => setBannerError(loaded.storageWarning ?? null), 0);
+      initialStorageWarningRef.current = loaded.storageWarning;
     }
     return loaded.workspace;
   });
+
+  useEffect(() => {
+    if (initialStorageWarningRef.current) {
+      setBannerError(initialStorageWarningRef.current);
+      initialStorageWarningRef.current = null;
+    }
+  }, []);
 
   const [currentTab, setCurrentTab] = useState<NavigationTab>('chat');
   const [rightSidebarTab, setRightSidebarTab] = useState<RightSidebarTab>('context');
@@ -373,7 +407,10 @@ export const App: React.FC = () => {
   // Subscribe to diagnostic logger updates and apply active theme variables
   useEffect(() => {
     applyThemeToDocument(workspace.settings.theme);
-  }, [workspace.settings.theme]);
+    if (!vaultLocked) {
+      saveThemePreference(workspace.settings.theme);
+    }
+  }, [workspace.settings.theme, vaultLocked]);
 
   useEffect(() => {
     logger.setLevel(workspace.settings.diagnosticLevel);
@@ -436,13 +473,18 @@ export const App: React.FC = () => {
     workspace.settings.contextLimitOverride,
   ]);
 
-  // Persist unsealed workspace reliably on every state change
+  // Persist workspace reliably on every state change (encrypted directly to ciphertext when vault mode is active)
   useEffect(() => {
     if (vaultLocked) return;
-    const res = saveUnsealedWorkspace(workspace, logger);
-    if (!res.ok) {
-      setBannerError(res.error);
-    }
+    let cancelled = false;
+    void persistActiveWorkspace(workspace, logger).then((res) => {
+      if (!cancelled && !res.ok) {
+        setBannerError(res.error);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [workspace, vaultLocked, logger]);
 
   // Compute live preview inspection when composer/memory/settings change so ContextPanel & Inspector are NEVER stale/fake
@@ -642,7 +684,9 @@ export const App: React.FC = () => {
 
   const handleSendMessage = useCallback(async () => {
     const rawInput = composerText.trim();
-    if (!rawInput || !activeSession || !activeModel || !controllerRef.current) return;
+    if ((!rawInput && !attachedFile) || !activeSession || !activeModel || !controllerRef.current) {
+      return;
+    }
     if (generatingSessionId) return;
 
     setBannerError(null);
@@ -797,7 +841,9 @@ export const App: React.FC = () => {
           (s.title === 'New local session' || s.title === 'Context strategy / 8K model');
         return {
           ...s,
-          title: shouldRename ? safeTruncateChars(rawInput, 36) : s.title,
+          title: shouldRename
+            ? safeTruncateChars(rawInput || currentAttachedFile?.name || 'Attached file', 36)
+            : s.title,
           updatedAt: now,
           messages: [...s.messages, userMessage, assistantPlaceholder],
         };
@@ -1154,7 +1200,7 @@ export const App: React.FC = () => {
             toolActivityLabels.push(`Created ${exec.artifact.filename}`);
             logger.info(
               'chat',
-              `Tool create_file wrote '${exec.artifact.filename}' (${countLines(exec.artifact.content)} lines)`,
+              `Tool create_file wrote file (${countLines(exec.artifact.content)} lines)`,
             );
             compactCallsForBudget.push({
               ...tc,
@@ -1287,6 +1333,40 @@ export const App: React.FC = () => {
               isEdited: true,
             };
             upsertCollectedFile(updatedArtifact);
+            if (!matchingWorkspaceFile) {
+              setWorkspace((prev) => ({
+                ...prev,
+                sessions: prev.sessions.map((s) => {
+                  if (s.id !== targetSessionId) return s;
+                  return {
+                    ...s,
+                    messages: s.messages.map((m) => {
+                      if (!m.generatedFiles || m.generatedFiles.length === 0) return m;
+                      const hasMatch = m.generatedFiles.some(
+                        (f) =>
+                          f.id === sourceArtifactId ||
+                          f.filename.toLowerCase() === updatedArtifact.filename.toLowerCase(),
+                      );
+                      if (!hasMatch) return m;
+                      return {
+                        ...m,
+                        generatedFiles: m.generatedFiles.map((f) =>
+                          f.id === sourceArtifactId ||
+                          f.filename.toLowerCase() === updatedArtifact.filename.toLowerCase()
+                            ? {
+                                ...f,
+                                content: updatedArtifact.content,
+                                updatedAt: nowMs,
+                                isEdited: true,
+                              }
+                            : f,
+                        ),
+                      };
+                    }),
+                  };
+                }),
+              }));
+            }
             setPreviewFile((curr) => {
               if (!curr) return curr;
               if (
@@ -1305,7 +1385,9 @@ export const App: React.FC = () => {
               }
               if (
                 curr.sessionId === targetSessionId &&
-                (curr.file.id === sourceArtifactId || curr.file.id === updatedArtifact.id)
+                (curr.file.id === sourceArtifactId ||
+                  curr.file.id === updatedArtifact.id ||
+                  curr.file.filename.toLowerCase() === updatedArtifact.filename.toLowerCase())
               ) {
                 return { ...curr, file: updatedArtifact };
               }
@@ -1316,7 +1398,7 @@ export const App: React.FC = () => {
             );
             logger.info(
               'chat',
-              `Tool edit_file updated '${updatedArtifact.filename}' (${exec.linesChanged} line(s) changed)`,
+              `Tool edit_file updated file (${exec.linesChanged} line(s) changed)`,
             );
             compactCallsForBudget.push({
               ...tc,
@@ -1344,7 +1426,7 @@ export const App: React.FC = () => {
           const exec = executeCalculateTool(tc.function.arguments);
           if (exec.ok) {
             toolActivityLabels.push(`Calculated: ${safeTruncateChars(exec.formatted, 48)}`);
-            logger.info('chat', `Tool calculate (${exec.mode}) -> ${exec.formatted}`);
+            logger.info('chat', `Tool calculate (${exec.mode}) succeeded`);
           } else {
             toolActivityLabels.push(`Failed calculate: ${exec.error}`);
             logger.warn('chat', `Tool calculate error: ${exec.error}`);
@@ -1384,7 +1466,7 @@ export const App: React.FC = () => {
             );
             logger.info(
               'chat',
-              `Tool read_attached_chunk read '${exec.filename}' L${exec.startLine}-${exec.endLine}/${exec.totalLines}`,
+              `Tool read_attached_chunk read L${exec.startLine}-${exec.endLine}/${exec.totalLines}`,
             );
           } else {
             toolActivityLabels.push(`Failed read_attached_chunk: ${exec.error}`);
@@ -1437,7 +1519,7 @@ export const App: React.FC = () => {
             toolActivityLabels.push(`Saved note: ${safeTruncateChars(exec.note.title, 40)}`);
             logger.info(
               'memory',
-              `Tool save_memory_note created '${exec.note.title}' (pinned=${exec.note.isPinned})`,
+              `Tool save_memory_note created note ${exec.note.id} (pinned=${exec.note.isPinned})`,
             );
           } else {
             toolActivityLabels.push(`Failed save_memory_note: ${exec.error}`);
@@ -1488,7 +1570,7 @@ export const App: React.FC = () => {
             );
             logger.info(
               'files',
-              `Tool save_workspace_file ${exec.action} '${exec.file.filename}' (${exec.file.sizeBytes} bytes)`,
+              `Tool save_workspace_file ${exec.action} file ${exec.file.id} (${exec.file.sizeBytes} bytes)`,
             );
           } else {
             toolActivityLabels.push(`Failed save_workspace_file: ${exec.error}`);
@@ -1643,7 +1725,7 @@ export const App: React.FC = () => {
         ...prev,
         memoryNotes: [newNote, ...prev.memoryNotes],
       }));
-      logger.info('memory', `Saved chat reply as memory note '${newNote.title}'`);
+      logger.info('memory', `Saved chat reply as memory note ${newNote.id}`);
     },
     [activeSession, logger],
   );
@@ -1678,7 +1760,7 @@ export const App: React.FC = () => {
       ...prev,
       memoryNotes: [draft, ...prev.memoryNotes],
     }));
-    logger.info('memory', `Generated draft session summary '${draft.title}' (awaiting approval)`);
+    logger.info('memory', `Generated draft session summary ${draft.id} (awaiting approval)`);
     return true;
   }, [activeSession, logger]);
 
@@ -1713,7 +1795,7 @@ export const App: React.FC = () => {
       }));
       logger.info(
         'memory',
-        `Created ${isSummary ? 'draft summary' : 'memory note'} '${note.title}' (pinned=${note.isPinned})`,
+        `Created ${isSummary ? 'draft summary' : 'memory note'} ${note.id} (pinned=${note.isPinned})`,
       );
     },
     [activeSession?.id, logger],
@@ -1821,7 +1903,7 @@ export const App: React.FC = () => {
         ...prev,
         workspaceFiles: res.files,
       }));
-      logger.info('files', `Saved '${res.file.filename}' from chat to persistent Files tab`);
+      logger.info('files', `Saved file ${res.file.id} from chat to persistent Files tab`);
     },
     [logger],
   );
@@ -1904,37 +1986,42 @@ export const App: React.FC = () => {
       manuallyUnloadedRef.current = false;
       setBannerError(null);
       setLastTurnInspection(null);
-      const prevSettings = workspaceRef.current.settings;
+      const currentWorkspace = workspaceRef.current;
+      const prevSettings = currentWorkspace.settings;
       if (prevSettings.selectedLmModel && prevSettings.selectedLmModel !== modelName) {
         triggerLmStudioUnloadAll(prevSettings);
       }
       if (controllerRef.current?.isLoaded()) {
         controllerRef.current.unloadModel();
       }
+      const lmProfile = currentWorkspace.models.find((m) => m.backendType === 'lm_studio');
       setWorkspace((prev) => {
-        const lmProfile = prev.models.find((m) => m.backendType === 'lm_studio');
-        const nextActiveModelId = lmProfile ? lmProfile.id : prev.activeModelId;
-        if (lmProfile && controllerRef.current) {
-          const effectiveCtx = getEffectiveContextLimit(
-            lmProfile,
-            prev.settings.contextLimitOverride,
-          );
-          controllerRef.current.loadModel({
-            ...lmProfile,
-            contextOverride: effectiveCtx,
-          });
-        }
+        const nextLmProfile = prev.models.find((m) => m.backendType === 'lm_studio');
+        const nextActiveModelId = nextLmProfile ? nextLmProfile.id : prev.activeModelId;
         return {
           ...prev,
           activeModelId: nextActiveModelId,
           settings: {
             ...prev.settings,
-            activeBackendType: lmProfile ? 'lm_studio' : prev.settings.activeBackendType,
+            activeBackendType: nextLmProfile ? 'lm_studio' : prev.settings.activeBackendType,
             selectedLmModel: modelName,
           },
         };
       });
-      logger.info('settings', `Selected LM Studio server model '${modelName}' (previous model unloaded)`);
+      if (lmProfile && controllerRef.current) {
+        const effectiveCtx = getEffectiveContextLimit(
+          lmProfile,
+          prevSettings.contextLimitOverride,
+        );
+        const loadRes = controllerRef.current.loadModel({
+          ...lmProfile,
+          contextOverride: effectiveCtx,
+        });
+        if (!loadRes.ok) {
+          setBannerError(loadRes.error);
+        }
+      }
+      logger.info('settings', 'Selected LM Studio server model (previous model unloaded)');
     },
     [logger, triggerLmStudioUnloadAll],
   );
@@ -1942,13 +2029,18 @@ export const App: React.FC = () => {
   const handleLockVault = useCallback(
     async (passphrase: string): Promise<{ ok: true } | { ok: false; error: string }> => {
       controllerRef.current?.cancelGeneration();
-      const res = await sealWorkspaceVault(workspace, passphrase, logger);
+      controllerRef.current?.unloadModel();
+      const res = await sealWorkspaceVault(workspaceRef.current, passphrase, logger);
       if (res.ok) {
+        setVaultModeActive(true);
+        setPreviewFile(null);
+        setLastTurnInspection(null);
+        setWorkspace(createDefaultWorkspace());
         setVaultLocked(true);
       }
       return res;
     },
-    [workspace, logger],
+    [logger],
   );
 
   const handleUnlockVault = useCallback(
@@ -1958,6 +2050,7 @@ export const App: React.FC = () => {
         return res;
       }
       setWorkspace(res.workspace);
+      setVaultModeActive(true);
       setLastTurnInspection(null);
       setVaultLocked(false);
       return { ok: true };
@@ -1965,8 +2058,44 @@ export const App: React.FC = () => {
     [logger],
   );
 
+  const handleLockActiveVaultNow = useCallback(async () => {
+    controllerRef.current?.cancelGeneration();
+    controllerRef.current?.unloadModel();
+    const res = await lockActiveVaultNow(workspaceRef.current, logger);
+    if (!res.ok) {
+      setBannerError(res.error);
+      return;
+    }
+    setPreviewFile(null);
+    setLastTurnInspection(null);
+    setWorkspace(createDefaultWorkspace());
+    setVaultLocked(true);
+  }, [logger]);
+
+  const handleDisableVaultEncryption = useCallback(() => {
+    const res = disableVaultEncryption(workspaceRef.current, logger);
+    if (!res.ok) {
+      setBannerError(res.error);
+      return;
+    }
+    setWorkspace(res.workspace);
+    setVaultModeActive(false);
+  }, [logger]);
+
+  const handleResetVault = useCallback(() => {
+    controllerRef.current?.cancelGeneration();
+    controllerRef.current?.unloadModel();
+    const fresh = resetAndWipeVault(logger);
+    setWorkspace(fresh);
+    setVaultModeActive(false);
+    setPreviewFile(null);
+    setLastTurnInspection(null);
+    setBannerError(null);
+    setVaultLocked(false);
+  }, [logger]);
+
   if (vaultLocked) {
-    return <VaultLockOverlay onUnlock={handleUnlockVault} />;
+    return <VaultLockOverlay onUnlock={handleUnlockVault} onResetVault={handleResetVault} />;
   }
 
   const backendLabel =
@@ -2169,7 +2298,7 @@ export const App: React.FC = () => {
                   ...prev,
                   models: [...prev.models, profile],
                 }));
-                logger.info('models', `Added model profile '${profile.name}'`);
+                logger.info('models', `Added model profile ${profile.id}`);
               }}
               onUpdateModel={(modelId, patch) => {
                 setLastTurnInspection(null);
@@ -2230,7 +2359,10 @@ export const App: React.FC = () => {
               onSwitchBackend={handleSwitchBackend}
               onTestLmStudioConnection={handleTestLmStudioConnection}
               onSelectLmModel={handleSelectLmModel}
+              vaultModeActive={vaultModeActive}
               onLockVault={handleLockVault}
+              onLockActiveVaultNow={() => void handleLockActiveVaultNow()}
+              onDisableVaultEncryption={handleDisableVaultEncryption}
               onClearDiagnostics={() => logger.clear()}
             />
           )}

@@ -1,5 +1,5 @@
 import { DEFAULT_LM_STUDIO_ENDPOINT, type DiagnosticLogger } from './privacy';
-import { createDefaultTheme } from './theme';
+import { createDefaultTheme, normalizeHexColor } from './theme';
 import type {
   AppSettings,
   MemoryNote,
@@ -7,7 +7,15 @@ import type {
   PersistedWorkspace,
   PromptEffortPrompts,
   Session,
+  ThemePresetId,
+  ThemeSettings,
 } from './types';
+import {
+  decryptVaultStringAndKey,
+  encryptVaultString,
+  encryptVaultStringWithKey,
+  type VaultSessionKey,
+} from './vault';
 
 export const DEFAULT_PROMPT_EFFORT_PROMPTS: PromptEffortPrompts = {
   low: 'Keep reasoning brief and direct. Prioritize concise, fast answers with minimal step-by-step deliberation.',
@@ -17,11 +25,68 @@ export const DEFAULT_PROMPT_EFFORT_PROMPTS: PromptEffortPrompts = {
   xhigh:
     'Perform exhaustive, deep first-principles reasoning. Carefully analyze all edge cases, alternatives, and invariants before producing a comprehensive answer.',
 };
-import { decryptVaultString, encryptVaultString } from './vault';
 
 const WORKSPACE_STORAGE_KEY = 'lowcon.workspace.v1';
 const VAULT_STORAGE_KEY = 'lowcon.vault.sealed.v1';
+const THEME_PREF_STORAGE_KEY = 'lowcon.theme.pref.v1';
 const DEFAULT_BUILTIN_MAX_CONTEXT = 131072;
+
+// In-memory AES-256-GCM key while an encrypted vault is unlocked.
+// Never persisted to disk/localStorage so reloads or crashes always require re-unlocking.
+let activeVaultSessionKey: VaultSessionKey | null = null;
+let encryptedSaveQueue: Promise<unknown> = Promise.resolve();
+
+export function isVaultModeActive(): boolean {
+  return activeVaultSessionKey !== null;
+}
+
+export function clearActiveVaultKey(): void {
+  activeVaultSessionKey = null;
+}
+
+export function saveThemePreference(theme?: Partial<ThemeSettings>): void {
+  try {
+    const defaults = createDefaultTheme();
+    const presetRaw = theme?.preset;
+    const preset: ThemePresetId =
+      presetRaw === 'white' || presetRaw === 'gray' || presetRaw === 'black' || presetRaw === 'custom'
+        ? presetRaw
+        : defaults.preset;
+    const sanitized: ThemeSettings = {
+      preset,
+      bg: normalizeHexColor(theme?.bg ?? '', defaults.bg),
+      surface: normalizeHexColor(theme?.surface ?? '', defaults.surface),
+      sidebar: normalizeHexColor(theme?.sidebar ?? '', defaults.sidebar),
+      accent: normalizeHexColor(theme?.accent ?? '', defaults.accent),
+    };
+    globalThis.localStorage?.setItem(THEME_PREF_STORAGE_KEY, JSON.stringify(sanitized));
+  } catch {
+    // Ignore storage quota / private mode failures for non-critical theme hint
+  }
+}
+
+export function loadSavedThemePreference(): ThemeSettings {
+  const defaults = createDefaultTheme();
+  try {
+    const raw = globalThis.localStorage?.getItem(THEME_PREF_STORAGE_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Partial<ThemeSettings>;
+    const presetRaw = parsed?.preset;
+    const preset: ThemePresetId =
+      presetRaw === 'white' || presetRaw === 'gray' || presetRaw === 'black' || presetRaw === 'custom'
+        ? presetRaw
+        : defaults.preset;
+    return {
+      preset,
+      bg: normalizeHexColor(parsed?.bg ?? '', defaults.bg),
+      surface: normalizeHexColor(parsed?.surface ?? '', defaults.surface),
+      sidebar: normalizeHexColor(parsed?.sidebar ?? '', defaults.sidebar),
+      accent: normalizeHexColor(parsed?.accent ?? '', defaults.accent),
+    };
+  } catch {
+    return defaults;
+  }
+}
 
 export function createUuid(): string {
   if (typeof globalThis.crypto?.randomUUID === 'function') {
@@ -36,7 +101,7 @@ export function createDefaultSettings(): AppSettings {
     safetyMarginPct: 5,
     contextLimitOverride: 8192,
     memoryRetrievalEnabled: true,
-    diagnosticLevel: 'minimal_redacted',
+    diagnosticLevel: 'disabled',
     lmStudioEndpoint: DEFAULT_LM_STUDIO_ENDPOINT,
     activeBackendType: 'mock',
     connectedLmModels: [],
@@ -45,7 +110,7 @@ export function createDefaultSettings(): AppSettings {
     modelIconOverrides: {},
     allowAiFileEdits: true,
     connectionStatus: 'Not tested yet',
-    storageNamespace: 'localStorage://lowcon.workspace.v1 (Encrypted on Vault Lock)',
+    storageNamespace: 'localStorage://lowcon.workspace.v1 (Unsealed — enable Vault for AES-256-GCM at rest)',
     theme: createDefaultTheme(),
     chatWidth: 'default',
     effortLevel: 'medium',
@@ -151,7 +216,10 @@ export function createDefaultWorkspace(): PersistedWorkspace {
     activeModelId: models[0].id,
     memoryNotes: createDefaultMemoryNotes(initialSessionId),
     workspaceFiles: [],
-    settings: createDefaultSettings(),
+    settings: {
+      ...createDefaultSettings(),
+      theme: loadSavedThemePreference(),
+    },
   };
 }
 
@@ -193,6 +261,12 @@ export function loadUnsealedWorkspace(logger: DiagnosticLogger): {
         ? parsed.activeSessionId
         : parsed.sessions[0].id;
 
+    const mergedTheme: ThemeSettings = {
+      ...createDefaultTheme(),
+      ...(parsed.settings?.theme ?? {}),
+    };
+    saveThemePreference(mergedTheme);
+
     return {
       workspace: {
         version: 1,
@@ -211,10 +285,7 @@ export function loadUnsealedWorkspace(logger: DiagnosticLogger): {
           modelIconOverrides: {
             ...(parsed.settings?.modelIconOverrides ?? {}),
           },
-          theme: {
-            ...createDefaultTheme(),
-            ...(parsed.settings?.theme ?? {}),
-          },
+          theme: mergedTheme,
           promptEffortPrompts: {
             ...DEFAULT_PROMPT_EFFORT_PROMPTS,
             ...(parsed.settings?.promptEffortPrompts ?? {}),
@@ -237,6 +308,7 @@ export function saveUnsealedWorkspace(
   logger: DiagnosticLogger,
 ): { ok: true } | { ok: false; error: string } {
   try {
+    saveThemePreference(workspace.settings.theme);
     globalThis.localStorage?.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(workspace));
     return { ok: true };
   } catch (err) {
@@ -247,8 +319,43 @@ export function saveUnsealedWorkspace(
 }
 
 /**
- * Seals the entire persisted workspace with AES-256-GCM + PBKDF2-SHA256
- * and wipes the plaintext localStorage copy.
+ * Persists the active workspace cleanly:
+ * - When an encrypted vault session is unlocked, re-encrypts with the in-memory
+ *   AES-256-GCM key and writes ONLY to `lowcon.vault.sealed.v1` (never plaintext).
+ * - Otherwise writes to `lowcon.workspace.v1`.
+ */
+export function persistActiveWorkspace(
+  workspace: PersistedWorkspace,
+  logger: DiagnosticLogger,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  saveThemePreference(workspace.settings.theme);
+  const sessionKey = activeVaultSessionKey;
+  if (!sessionKey) {
+    return Promise.resolve(saveUnsealedWorkspace(workspace, logger));
+  }
+
+  const run = async (): Promise<{ ok: true } | { ok: false; error: string }> => {
+    try {
+      const plaintext = JSON.stringify(workspace);
+      const sealed = await encryptVaultStringWithKey(sessionKey, plaintext);
+      globalThis.localStorage?.setItem(VAULT_STORAGE_KEY, sealed);
+      globalThis.localStorage?.removeItem(WORKSPACE_STORAGE_KEY);
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error('vault', `Encrypted workspace persistence failed: ${msg}`);
+      return { ok: false, error: `Failed to save encrypted vault locally: ${msg}` };
+    }
+  };
+
+  const next = encryptedSaveQueue.then(run, run);
+  encryptedSaveQueue = next;
+  return next;
+}
+
+/**
+ * Seals the entire persisted workspace with AES-256-GCM + PBKDF2-SHA256,
+ * wipes the plaintext localStorage copy, and clears the in-memory session key.
  */
 export async function sealWorkspaceVault(
   workspace: PersistedWorkspace,
@@ -256,10 +363,19 @@ export async function sealWorkspaceVault(
   logger: DiagnosticLogger,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
-    const plaintext = JSON.stringify(workspace);
+    saveThemePreference(workspace.settings.theme);
+    const updatedWorkspace: PersistedWorkspace = {
+      ...workspace,
+      settings: {
+        ...workspace.settings,
+        storageNamespace: 'localStorage://lowcon.vault.sealed.v1 (AES-256-GCM encrypted at rest)',
+      },
+    };
+    const plaintext = JSON.stringify(updatedWorkspace);
     const sealed = await encryptVaultString(passphrase, plaintext);
     globalThis.localStorage?.setItem(VAULT_STORAGE_KEY, sealed);
     globalThis.localStorage?.removeItem(WORKSPACE_STORAGE_KEY);
+    activeVaultSessionKey = null;
     logger.info('vault', 'Workspace sealed with AES-256-GCM and plaintext storage purged.');
     return { ok: true };
   } catch (err) {
@@ -270,7 +386,28 @@ export async function sealWorkspaceVault(
 }
 
 /**
+ * Immediately re-locks an already-active vault session by flushing the latest
+ * encrypted snapshot and clearing the in-memory key (no passphrase re-entry required).
+ */
+export async function lockActiveVaultNow(
+  workspace: PersistedWorkspace,
+  logger: DiagnosticLogger,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!activeVaultSessionKey) {
+    return { ok: false, error: 'Vault encryption is not currently active.' };
+  }
+  const saved = await persistActiveWorkspace(workspace, logger);
+  if (!saved.ok) {
+    return saved;
+  }
+  activeVaultSessionKey = null;
+  logger.info('vault', 'Active vault locked and in-memory key cleared.');
+  return { ok: true };
+}
+
+/**
  * Decrypts and restores the sealed workspace after verifying passphrase integrity.
+ * Keeps the derived AES-256-GCM key in memory and NEVER writes plaintext back to localStorage.
  */
 export async function unsealWorkspaceVault(
   passphrase: string,
@@ -281,9 +418,15 @@ export async function unsealWorkspaceVault(
     if (!sealed) {
       return { ok: false, error: 'No sealed vault payload found in local storage.' };
     }
-    const plaintext = await decryptVaultString(passphrase, sealed);
+    const { plaintext, sessionKey } = await decryptVaultStringAndKey(passphrase, sealed);
     const rawWorkspace = JSON.parse(plaintext) as PersistedWorkspace;
     const defaults = createDefaultSettings();
+    const mergedTheme: ThemeSettings = {
+      ...createDefaultTheme(),
+      ...(rawWorkspace.settings?.theme ?? {}),
+    };
+    saveThemePreference(mergedTheme);
+
     const workspace: PersistedWorkspace = {
       ...rawWorkspace,
       models: Array.isArray(rawWorkspace.models)
@@ -295,29 +438,86 @@ export async function unsealWorkspaceVault(
       settings: {
         ...defaults,
         ...(rawWorkspace.settings ?? {}),
+        storageNamespace: 'localStorage://lowcon.vault.sealed.v1 (AES-256-GCM encrypted at rest)',
         modelDisplayAliases: {
           ...(rawWorkspace.settings?.modelDisplayAliases ?? {}),
         },
         modelIconOverrides: {
           ...(rawWorkspace.settings?.modelIconOverrides ?? {}),
         },
-        theme: {
-          ...createDefaultTheme(),
-          ...(rawWorkspace.settings?.theme ?? {}),
-        },
+        theme: mergedTheme,
         promptEffortPrompts: {
           ...DEFAULT_PROMPT_EFFORT_PROMPTS,
           ...(rawWorkspace.settings?.promptEffortPrompts ?? {}),
         },
       },
     };
-    globalThis.localStorage?.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(workspace));
-    globalThis.localStorage?.removeItem(VAULT_STORAGE_KEY);
-    logger.info('vault', 'Vault unlocked and workspace restored cleanly.');
+
+    activeVaultSessionKey = sessionKey;
+    // Ensure no legacy plaintext copy lingers on disk
+    globalThis.localStorage?.removeItem(WORKSPACE_STORAGE_KEY);
+    logger.info('vault', 'Vault unlocked (data remains AES-256-GCM encrypted at rest).');
     return { ok: true, workspace };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn('vault', `Vault unlock rejected: ${msg}`);
     return { ok: false, error: msg };
   }
+}
+
+/**
+ * Explicitly disables vault encryption at rest (user opt-out from Settings),
+ * moving storage back to standard unsealed localStorage and clearing the vault key.
+ */
+export function disableVaultEncryption(
+  workspace: PersistedWorkspace,
+  logger: DiagnosticLogger,
+): { ok: true; workspace: PersistedWorkspace } | { ok: false; error: string } {
+  const updatedWorkspace: PersistedWorkspace = {
+    ...workspace,
+    settings: {
+      ...workspace.settings,
+      storageNamespace:
+        'localStorage://lowcon.workspace.v1 (Unsealed — enable Vault for AES-256-GCM at rest)',
+    },
+  };
+  const saveRes = saveUnsealedWorkspace(updatedWorkspace, logger);
+  if (!saveRes.ok) {
+    return saveRes;
+  }
+  activeVaultSessionKey = null;
+  try {
+    globalThis.localStorage?.removeItem(VAULT_STORAGE_KEY);
+  } catch {
+    // Ignore
+  }
+  logger.info('vault', 'Vault encryption disabled by user; switched to unsealed local storage.');
+  return { ok: true, workspace: updatedWorkspace };
+}
+
+/**
+ * Permanently erases any sealed vault and local workspace data (recovery path for forgotten passphrase)
+ * and returns a fresh default workspace while preserving the user's non-sensitive UI theme preference.
+ */
+export function resetAndWipeVault(logger?: DiagnosticLogger): PersistedWorkspace {
+  activeVaultSessionKey = null;
+  try {
+    globalThis.localStorage?.removeItem(VAULT_STORAGE_KEY);
+    globalThis.localStorage?.removeItem(WORKSPACE_STORAGE_KEY);
+  } catch {
+    // Ignore
+  }
+  const fresh = createDefaultWorkspace();
+  if (logger) {
+    saveUnsealedWorkspace(fresh, logger);
+    logger.warn('vault', 'Local vault and workspace erased; initialized a fresh workspace.');
+  } else {
+    try {
+      saveThemePreference(fresh.settings.theme);
+      globalThis.localStorage?.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(fresh));
+    } catch {
+      // Ignore storage quota failures during emergency reset
+    }
+  }
+  return fresh;
 }

@@ -69,3 +69,83 @@ test('tokens per second tiers map slow->red, orange, yellow, fast->green', () =>
     assert.ok(darkVars[key]);
   }
 });
+
+function hexToRgb(hex: string): [number, number, number] {
+  const clean = hex.replace('#', '');
+  return [
+    parseInt(clean.slice(0, 2), 16),
+    parseInt(clean.slice(2, 4), 16),
+    parseInt(clean.slice(4, 6), 16),
+  ];
+}
+
+function relativeLuminance(hex: string): number {
+  const [r, g, b] = hexToRgb(hex).map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrastRatio(a: string, b: string): number {
+  const l1 = relativeLuminance(a);
+  const l2 = relativeLuminance(b);
+  return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+}
+
+test('codeMode decouples from dark bg and all semantic token pairs maintain >= 4.5:1 contrast', () => {
+  const mixed = computeThemeCssVariables({
+    bg: '#11141A',
+    surface: '#FFFFFF',
+    sidebar: '#181C24',
+    accent: '#FACC15',
+  });
+  assert.equal(mixed.mode, 'dark');
+  assert.equal(mixed.codeMode, 'light');
+  assert.equal(isDarkColor(mixed.vars['--lc-code-bg']), false);
+  assert.equal(isDarkColor(mixed.vars['--lc-code-text']), true);
+
+  const themesToCheck = [
+    ...THEME_PRESETS.map((p) => ({ name: p.id, computed: computeThemeCssVariables(p.colors) })),
+    { name: 'mixed-dark-bg-light-surface', computed: mixed },
+    {
+      name: 'mixed-light-bg-dark-surface',
+      computed: computeThemeCssVariables({
+        bg: '#F8FAFC',
+        surface: '#161A22',
+        sidebar: '#EEF2F7',
+        accent: '#0EA5E9',
+      }),
+    },
+  ];
+
+  for (const { name, computed } of themesToCheck) {
+    const v = computed.vars;
+    assert.ok(
+      contrastRatio(v['--lc-success-contrast'], v['--lc-success']) >= 4.5,
+      `${name}: --lc-success-contrast on --lc-success`,
+    );
+    assert.ok(
+      contrastRatio(v['--lc-danger-contrast'], v['--lc-danger']) >= 4.5,
+      `${name}: --lc-danger-contrast on --lc-danger`,
+    );
+    assert.ok(
+      contrastRatio(v['--lc-panel-ink'], v['--lc-panel']) >= 4.5,
+      `${name}: --lc-panel-ink on --lc-panel`,
+    );
+    assert.ok(
+      contrastRatio(v['--lc-surf-active-fg'], v['--lc-surf-active-bg']) >= 4.5,
+      `${name}: --lc-surf-active-fg on --lc-surf-active-bg`,
+    );
+    assert.ok(
+      contrastRatio(v['--lc-code-text'], v['--lc-code-bg']) >= 4.5,
+      `${name}: --lc-code-text on --lc-code-bg`,
+    );
+    for (const callout of ['note', 'tip', 'important', 'warning', 'caution']) {
+      assert.ok(
+        contrastRatio(v[`--lc-callout-${callout}`], v['--lc-bg']) >= 4.5,
+        `${name}: --lc-callout-${callout} on --lc-bg`,
+      );
+    }
+  }
+});
