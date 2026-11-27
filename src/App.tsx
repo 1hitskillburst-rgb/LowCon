@@ -42,6 +42,13 @@ import {
 import { DiagnosticLogger, safeTruncateChars } from './core/privacy';
 import { resolveModelDisplayName } from './core/modelNames';
 import {
+  clampLeftSidebarWidth,
+  clampRightSidebarWidth,
+  loadSidebarLayoutState,
+  saveSidebarLayoutState,
+  type SidebarLayoutState,
+} from './core/sidebarLayout';
+import {
   createDefaultWorkspace,
   createUuid,
   disableVaultEncryption,
@@ -375,6 +382,34 @@ export const App: React.FC = () => {
 
   const [currentTab, setCurrentTab] = useState<NavigationTab>('chat');
   const [rightSidebarTab, setRightSidebarTab] = useState<RightSidebarTab>('context');
+  const [sidebarLayout, setSidebarLayout] = useState<SidebarLayoutState>(() =>
+    loadSidebarLayoutState(),
+  );
+  useEffect(() => {
+    saveSidebarLayoutState(sidebarLayout);
+  }, [sidebarLayout]);
+
+  const handleToggleLeftSidebar = useCallback(() => {
+    setSidebarLayout((prev) => ({ ...prev, leftOpen: !prev.leftOpen }));
+  }, []);
+
+  const handleToggleRightSidebar = useCallback(() => {
+    setSidebarLayout((prev) => ({ ...prev, rightOpen: !prev.rightOpen }));
+  }, []);
+
+  const handleResizeLeftSidebar = useCallback((nextWidth: number) => {
+    setSidebarLayout((prev) => ({
+      ...prev,
+      leftWidth: clampLeftSidebarWidth(nextWidth),
+    }));
+  }, []);
+
+  const handleResizeRightSidebar = useCallback((nextWidth: number) => {
+    setSidebarLayout((prev) => ({
+      ...prev,
+      rightWidth: clampRightSidebarWidth(nextWidth),
+    }));
+  }, []);
   const [composerText, setComposerText] = useState('');
   const [attachedFile, setAttachedFile] = useState<{ name: string; content: string } | null>(null);
   const [hoveredSegment, setHoveredSegment] = useState<ContextSegmentKey | null>(null);
@@ -2685,18 +2720,22 @@ export const App: React.FC = () => {
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[var(--lc-bg)] text-[var(--lc-ink)]">
       {/* Left Navigation Sidebar */}
-      <SidebarNav
-        currentTab={currentTab}
-        onSelectTab={setCurrentTab}
-        sessions={workspace.sessions}
-        activeSessionId={workspace.activeSessionId}
-        generatingSessionId={generatingSessionId}
-        onSelectSession={handleSelectSession}
-        onNewSession={handleNewSession}
-        onDeleteSession={handleDeleteSession}
-        username={workspace.settings.userProfile?.username}
-        totalLifetimeTokens={workspace.tokenUsage?.totalLifetimeTokens ?? 0}
-      />
+      {sidebarLayout.leftOpen && (
+        <SidebarNav
+          currentTab={currentTab}
+          onSelectTab={setCurrentTab}
+          sessions={workspace.sessions}
+          activeSessionId={workspace.activeSessionId}
+          generatingSessionId={generatingSessionId}
+          onSelectSession={handleSelectSession}
+          onNewSession={handleNewSession}
+          onDeleteSession={handleDeleteSession}
+          username={workspace.settings.userProfile?.username}
+          totalLifetimeTokens={workspace.tokenUsage?.totalLifetimeTokens ?? 0}
+          width={sidebarLayout.leftWidth}
+          onResizeWidth={handleResizeLeftSidebar}
+        />
+      )}
 
       {/* Main Content Area + Dismissible System Banner */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -2745,6 +2784,10 @@ export const App: React.FC = () => {
                 }}
                 backendLabel={backendLabel}
                 workerStatus={workerStatus}
+                leftSidebarOpen={sidebarLayout.leftOpen}
+                onToggleLeftSidebar={handleToggleLeftSidebar}
+                rightSidebarOpen={sidebarLayout.rightOpen}
+                onToggleRightSidebar={handleToggleRightSidebar}
                 composerText={composerText}
                 onComposerTextChange={setComposerText}
                 attachedFile={attachedFile}
@@ -2837,7 +2880,7 @@ export const App: React.FC = () => {
                     />
                   );
                 })()
-              ) : (
+              ) : sidebarLayout.rightOpen ? (
                 <RightSidebarPanel
                   activeTab={rightSidebarTab}
                   onSelectTab={setRightSidebarTab}
@@ -2871,8 +2914,10 @@ export const App: React.FC = () => {
                     })
                   }
                   onOpenFileSettings={() => setCurrentTab('settings')}
+                  width={sidebarLayout.rightWidth}
+                  onResizeWidth={handleResizeRightSidebar}
                 />
-              )}
+              ) : null}
             </>
           )}
 
@@ -2883,6 +2928,8 @@ export const App: React.FC = () => {
               workerStatus={workerStatus}
               globalContextOverride={workspace.settings.contextLimitOverride}
               lmStudioEndpoint={workspace.settings.lmStudioEndpoint}
+              leftSidebarOpen={sidebarLayout.leftOpen}
+              onToggleLeftSidebar={handleToggleLeftSidebar}
               onSelectActiveModel={handleSelectActiveModel}
               onLoadModel={handleLoadModel}
               onUnloadModel={handleUnloadModel}
@@ -2927,6 +2974,8 @@ export const App: React.FC = () => {
                 ),
               )}
               requestedFilter={requestedMemoryFilter}
+              leftSidebarOpen={sidebarLayout.leftOpen}
+              onToggleLeftSidebar={handleToggleLeftSidebar}
               onGenerateSessionSummary={() => {
                 handleGenerateSessionSummary();
               }}
@@ -2942,6 +2991,8 @@ export const App: React.FC = () => {
               activeModel={activeModel}
               diagnosticEntries={diagnosticEntries}
               isTestingConnection={isTestingConnection}
+              leftSidebarOpen={sidebarLayout.leftOpen}
+              onToggleLeftSidebar={handleToggleLeftSidebar}
               onUpdateSettings={(patch) => {
                 setLastTurnInspection(null);
                 setWorkspace((prev) => ({
@@ -2969,6 +3020,8 @@ export const App: React.FC = () => {
                 }
               }
               tokenUsage={workspace.tokenUsage ?? createEmptyTokenUsage()}
+              leftSidebarOpen={sidebarLayout.leftOpen}
+              onToggleLeftSidebar={handleToggleLeftSidebar}
               onUpdateProfile={(patch) => {
                 setLastTurnInspection(null);
                 setWorkspace((prev) => ({

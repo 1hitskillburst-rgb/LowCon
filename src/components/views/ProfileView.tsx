@@ -11,11 +11,14 @@ import {
   type CalendarDayCell,
 } from '../../core/tokenUsage';
 import type { TokenUsageHistory, UserProfileSettings } from '../../core/types';
+import { LeftSidebarToggleButton } from '../layout/SidebarToggleIcons';
 
 interface ProfileViewProps {
   profile: UserProfileSettings;
   tokenUsage: TokenUsageHistory;
   onUpdateProfile: (patch: Partial<UserProfileSettings>) => void;
+  leftSidebarOpen?: boolean;
+  onToggleLeftSidebar?: () => void;
 }
 
 const HEATMAP_WEEKS = 26;
@@ -24,6 +27,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   profile,
   tokenUsage,
   onUpdateProfile,
+  leftSidebarOpen = true,
+  onToggleLeftSidebar,
 }) => {
   const now = useMemo(() => new Date(), []);
   const heatmapCardRef = useRef<HTMLDivElement | null>(null);
@@ -73,6 +78,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           <span className="text-[var(--lc-mute)]">Workspace /</span>
           <span className="ml-1 font-semibold text-[var(--lc-ink)]">Profile</span>
         </div>
+        {onToggleLeftSidebar && (
+          <LeftSidebarToggleButton open={leftSidebarOpen} onToggle={onToggleLeftSidebar} />
+        )}
       </header>
 
       {/* Body */}

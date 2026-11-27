@@ -13,6 +13,7 @@ import { formatNumber } from '../../core/privacy';
 import { ModelOriginIcon } from '../chat/ModelOriginIcon';
 import { DEFAULT_PROMPT_EFFORT_PROMPTS } from '../../core/storage';
 import { createDefaultTheme, THEME_PRESETS } from '../../core/theme';
+import { LeftSidebarToggleButton } from '../layout/SidebarToggleIcons';
 import {
   getEffectiveContextLimit,
   type AppSettings,
@@ -39,6 +40,8 @@ interface SettingsViewProps {
   onLockActiveVaultNow?: () => void;
   onDisableVaultEncryption?: () => void;
   onClearDiagnostics: () => void;
+  leftSidebarOpen?: boolean;
+  onToggleLeftSidebar?: () => void;
 }
 
 const CONTEXT_PRESETS = [
@@ -72,6 +75,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onLockActiveVaultNow,
   onDisableVaultEncryption,
   onClearDiagnostics,
+  leftSidebarOpen = true,
+  onToggleLeftSidebar,
 }) => {
   const [vaultPassphrase, setVaultPassphrase] = useState('');
   const [vaultConfirm, setVaultConfirm] = useState('');
@@ -185,6 +190,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <span className="text-[var(--lc-mute)]">Workspace /</span>
           <span className="ml-1 font-semibold text-[var(--lc-ink)]">Settings</span>
         </div>
+        {onToggleLeftSidebar && (
+          <LeftSidebarToggleButton open={leftSidebarOpen} onToggle={onToggleLeftSidebar} />
+        )}
       </header>
 
       {/* Body */}

@@ -3,6 +3,7 @@ import { CheckCircle2, Edit3, Eye, EyeOff, FileText, Pin, Plus, Search, Trash2, 
 import { retrieveMemoryNotes } from '../../core/memory';
 import { formatRelativeTime } from '../../core/privacy';
 import type { MemoryNote } from '../../core/types';
+import { LeftSidebarToggleButton } from '../layout/SidebarToggleIcons';
 
 export type MemoryFilter = 'all' | 'pinned' | 'in_prompt' | 'summaries';
 
@@ -12,6 +13,8 @@ interface MemoryViewProps {
   activeSessionId: string;
   canSummarizeActiveSession: boolean;
   requestedFilter?: { filter: MemoryFilter; seq: number } | null;
+  leftSidebarOpen?: boolean;
+  onToggleLeftSidebar?: () => void;
   onGenerateSessionSummary: () => void;
   onCreateNote: (input: {
     title: string;
@@ -33,6 +36,8 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
   activeSessionId,
   canSummarizeActiveSession,
   requestedFilter,
+  leftSidebarOpen = true,
+  onToggleLeftSidebar,
   onGenerateSessionSummary,
   onCreateNote,
   onUpdateNote,
@@ -178,6 +183,9 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
             <Plus className="h-3.5 w-3.5" />
             <span>New Note</span>
           </button>
+          {onToggleLeftSidebar && (
+            <LeftSidebarToggleButton open={leftSidebarOpen} onToggle={onToggleLeftSidebar} />
+          )}
         </div>
       </header>
 

@@ -5,6 +5,7 @@ import { formatCleanModelName } from '../../core/modelNames';
 import { formatNumber, isLocalEndpoint } from '../../core/privacy';
 import { createUuid } from '../../core/storage';
 import type { ChatTemplateType, ModelProfile, WorkerStatus } from '../../core/types';
+import { LeftSidebarToggleButton } from '../layout/SidebarToggleIcons';
 
 interface ModelsViewProps {
   models: ModelProfile[];
@@ -12,6 +13,8 @@ interface ModelsViewProps {
   workerStatus: WorkerStatus;
   globalContextOverride: number;
   lmStudioEndpoint: string;
+  leftSidebarOpen?: boolean;
+  onToggleLeftSidebar?: () => void;
   onSelectActiveModel: (modelId: string) => void;
   onLoadModel: (modelId: string) => void;
   onUnloadModel: () => void;
@@ -35,6 +38,8 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   workerStatus,
   globalContextOverride,
   lmStudioEndpoint,
+  leftSidebarOpen = true,
+  onToggleLeftSidebar,
   onSelectActiveModel,
   onLoadModel,
   onUnloadModel,
@@ -206,6 +211,9 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
             <Plus className="h-3.5 w-3.5" />
             <span>Add Profile</span>
           </button>
+          {onToggleLeftSidebar && (
+            <LeftSidebarToggleButton open={leftSidebarOpen} onToggle={onToggleLeftSidebar} />
+          )}
         </div>
       </header>
 

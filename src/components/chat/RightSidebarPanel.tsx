@@ -1,10 +1,16 @@
 import React from 'react';
+import {
+  RIGHT_SIDEBAR_DEFAULT,
+  RIGHT_SIDEBAR_MAX,
+  RIGHT_SIDEBAR_MIN,
+} from '../../core/sidebarLayout';
 import type {
   ContextSegmentKey,
   MemoryNote,
   TurnContextBudget,
   WorkspaceFile,
 } from '../../core/types';
+import { SidebarResizeHandle } from '../layout/SidebarToggleIcons';
 import { ContextPanel } from './ContextPanel';
 import { FilesPanel } from './FilesPanel';
 
@@ -33,6 +39,8 @@ interface RightSidebarPanelProps {
   onDeleteWorkspaceFile: (fileId: string) => void;
   onPreviewWorkspaceFile: (file: WorkspaceFile) => void;
   onOpenFileSettings?: () => void;
+  width?: number;
+  onResizeWidth?: (width: number) => void;
 }
 
 export const RightSidebarPanel: React.FC<RightSidebarPanelProps> = ({
@@ -56,11 +64,14 @@ export const RightSidebarPanel: React.FC<RightSidebarPanelProps> = ({
   onDeleteWorkspaceFile,
   onPreviewWorkspaceFile,
   onOpenFileSettings,
+  width = RIGHT_SIDEBAR_DEFAULT,
+  onResizeWidth,
 }) => {
   return (
     <aside
       aria-label="Context and local files sidebar"
-      className="flex h-full w-[344px] shrink-0 flex-col border-l border-[var(--lc-panel-line)] bg-[var(--lc-panel)] text-[var(--lc-panel-ink)]"
+      style={{ width: `${width}px` }}
+      className="relative flex h-full shrink-0 flex-col border-l border-[var(--lc-panel-line)] bg-[var(--lc-panel)] text-[var(--lc-panel-ink)]"
     >
       {/* Top Tab Bar */}
       <div className="shrink-0 border-b border-[var(--lc-panel-line)] px-4 pt-3 pb-2.5">
@@ -135,6 +146,17 @@ export const RightSidebarPanel: React.FC<RightSidebarPanelProps> = ({
           hoveredSegment={hoveredSegment}
           onHoverSegment={onHoverSegment}
           onOpenPromptInspector={onOpenPromptInspector}
+        />
+      )}
+
+      {onResizeWidth && (
+        <SidebarResizeHandle
+          side="right"
+          width={width}
+          minWidth={RIGHT_SIDEBAR_MIN}
+          maxWidth={RIGHT_SIDEBAR_MAX}
+          defaultWidth={RIGHT_SIDEBAR_DEFAULT}
+          onResize={onResizeWidth}
         />
       )}
     </aside>

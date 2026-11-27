@@ -1,8 +1,14 @@
 import React from 'react';
 import { Plus, Trash2, User } from 'lucide-react';
 import { safeTruncateChars } from '../../core/privacy';
+import {
+  LEFT_SIDEBAR_DEFAULT,
+  LEFT_SIDEBAR_MAX,
+  LEFT_SIDEBAR_MIN,
+} from '../../core/sidebarLayout';
 import { formatCompactTokens } from '../../core/tokenUsage';
 import type { NavigationTab, Session } from '../../core/types';
+import { SidebarResizeHandle } from './SidebarToggleIcons';
 
 interface SidebarNavProps {
   currentTab: NavigationTab;
@@ -15,6 +21,8 @@ interface SidebarNavProps {
   onDeleteSession: (sessionId: string) => void;
   username?: string;
   totalLifetimeTokens?: number;
+  width?: number;
+  onResizeWidth?: (width: number) => void;
 }
 
 export const SidebarNav: React.FC<SidebarNavProps> = ({
@@ -28,6 +36,8 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
   onDeleteSession,
   username,
   totalLifetimeTokens = 0,
+  width = LEFT_SIDEBAR_DEFAULT,
+  onResizeWidth,
 }) => {
   const navItems: Array<{ id: NavigationTab; label: string; count?: number }> = [
     { id: 'chat', label: 'Chat', count: sessions.length },
@@ -44,7 +54,8 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
   return (
     <aside
       aria-label="Workspace navigation"
-      className="flex h-full w-[216px] shrink-0 flex-col border-r border-[var(--lc-line)] bg-[var(--lc-side)] px-3.5 pt-5 pb-4 text-[var(--lc-side-ink)]"
+      style={{ width: `${width}px` }}
+      className="relative flex h-full shrink-0 flex-col border-r border-[var(--lc-line)] bg-[var(--lc-side)] px-3.5 pt-5 pb-4 text-[var(--lc-side-ink)]"
     >
       {/* Brand Header matching src/ui/nav.rs */}
       <div className="flex items-center gap-2.5">
@@ -205,6 +216,17 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
           </div>
         </button>
       </div>
+
+      {onResizeWidth && (
+        <SidebarResizeHandle
+          side="left"
+          width={width}
+          minWidth={LEFT_SIDEBAR_MIN}
+          maxWidth={LEFT_SIDEBAR_MAX}
+          defaultWidth={LEFT_SIDEBAR_DEFAULT}
+          onResize={onResizeWidth}
+        />
+      )}
     </aside>
   );
 };

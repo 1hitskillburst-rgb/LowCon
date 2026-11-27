@@ -45,6 +45,10 @@ import type {
   WorkerStatus,
 } from '../../core/types';
 import { ContextStrip } from './ContextBudgetViz';
+import {
+  LeftSidebarToggleButton,
+  RightSidebarToggleButton,
+} from '../layout/SidebarToggleIcons';
 import { MarkdownMessage } from './MarkdownMessage';
 import { ModelOriginIcon } from './ModelOriginIcon';
 
@@ -223,8 +227,12 @@ interface ChatViewProps {
   effortLevel: EffortLevel;
   chatWidth?: ChatWidthPreset;
   onChangeEffortLevel: (level: EffortLevel) => void;
-  backendLabel: string;
+  backendLabel?: string;
   workerStatus: WorkerStatus;
+  leftSidebarOpen?: boolean;
+  onToggleLeftSidebar?: () => void;
+  rightSidebarOpen?: boolean;
+  onToggleRightSidebar?: () => void;
   composerText: string;
   onComposerTextChange: (text: string) => void;
   attachedFile: { name: string; content: string } | null;
@@ -270,8 +278,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   effortLevel,
   chatWidth = 'default',
   onChangeEffortLevel,
-  backendLabel,
   workerStatus,
+  leftSidebarOpen = true,
+  onToggleLeftSidebar,
+  rightSidebarOpen = true,
+  onToggleRightSidebar,
   composerText,
   onComposerTextChange,
   attachedFile,
@@ -388,24 +399,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
     (m) => (m.role === 'user' || m.role === 'assistant') && !m.isError && m.content.trim().length > 0,
   );
 
-  const workerStatusLabel =
-    workerStatus.state === 'loaded'
-      ? 'Worker ready'
-      : workerStatus.state === 'generating'
-        ? 'Streaming'
-        : workerStatus.state === 'loading'
-          ? 'Loading model'
-          : workerStatus.state === 'error'
-            ? 'Worker error'
-            : 'No model loaded';
-
-  const workerDotColor =
-    workerStatus.state === 'loaded' || workerStatus.state === 'generating'
-      ? 'var(--lc-success)'
-      : workerStatus.state === 'error'
-        ? 'var(--lc-danger)'
-        : 'var(--lc-mute)';
-
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     setFileError(null);
     const file = e.target.files?.[0];
@@ -441,76 +434,25 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <span className="ml-1 font-semibold text-[var(--lc-ink)]">Chat</span>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Real Worker Readiness Status */}
-          <div className="flex items-center gap-1.5 text-[12px] text-[var(--lc-ink2)]">
-            <span
-              aria-hidden="true"
-              style={{ backgroundColor: workerDotColor }}
-              className="h-[7px] w-[7px] rounded-full"
-            />
-            <span>{workerStatusLabel}</span>
-            {workerStatus.state === 'generating' &&
-              liveTokensPerSecond !== null &&
-              liveTokensPerSecond !== undefined &&
-              liveTokensPerSecond > 0 && (
-                <>
-                  <span>·</span>
-                  <span
-                    data-testid="live-tps-indicator"
-                    style={{ color: getTpsColorVar(liveTokensPerSecond) }}
-                    className="font-semibold tabular-nums"
-                  >
-                    {liveTokensPerSecond.toFixed(1)} tok/s
-                  </span>
-                </>
-              )}
-          </div>
-
-          {/* Active Backend Badge */}
-          <div className="flex items-center gap-1.5 rounded-[6px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)] px-2 py-1 text-[11.5px] font-semibold text-[var(--lc-panel-ink2)]">
-            <span aria-hidden="true" className="h-[6px] w-[6px] rounded-full bg-[var(--lc-success)]" />
-            <span>{backendLabel}</span>
-          </div>
-
-          {/* Active Model Selector (wired directly to InferenceController) */}
-          <label className="sr-only" htmlFor="chat-active-model-select">
-            Active model
-          </label>
-          <select
-            id="chat-active-model-select"
-            value={
-              activeModel?.backendType === 'lm_studio' &&
-              selectedLmModel &&
-              connectedLmModels.includes(selectedLmModel)
-                ? `lm::${selectedLmModel}`
-                : activeModelId
-            }
-            onChange={(e) => {
-              const val = e.target.value;
-              if (val.startsWith('lm::')) {
-                onSelectLmModel(val.slice(4));
-              } else {
-                onSelectActiveModel(val);
-              }
-            }}
-            className="max-w-[320px] rounded-[6px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2.5 py-1 text-[12.5px] font-semibold text-[var(--lc-surf-ink)] focus:border-[var(--lc-accent)] focus:outline-none"
-          >
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-            {connectedLmModels.length > 0 && (
-              <optgroup label="LM Studio Server Models">
-                {connectedLmModels.map((lmName) => (
-                  <option key={`lm-${lmName}`} value={`lm::${lmName}`}>
-                    {resolveModelDisplayName(lmName, modelDisplayAliases)}
-                  </option>
-                ))}
-              </optgroup>
+        <div className="flex items-center gap-1.5">
+          {workerStatus.state === 'generating' &&
+            liveTokensPerSecond !== null &&
+            liveTokensPerSecond !== undefined &&
+            liveTokensPerSecond > 0 && (
+              <span
+                data-testid="live-tps-indicator"
+                style={{ color: getTpsColorVar(liveTokensPerSecond) }}
+                className="mr-1.5 text-[12px] font-semibold tabular-nums"
+              >
+                {liveTokensPerSecond.toFixed(1)} tok/s
+              </span>
             )}
-          </select>
+          {onToggleLeftSidebar && (
+            <LeftSidebarToggleButton open={leftSidebarOpen} onToggle={onToggleLeftSidebar} />
+          )}
+          {onToggleRightSidebar && (
+            <RightSidebarToggleButton open={rightSidebarOpen} onToggle={onToggleRightSidebar} />
+          )}
         </div>
       </header>
 
