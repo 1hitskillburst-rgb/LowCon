@@ -68,3 +68,73 @@ test('ChatView renders Copy and Retry buttons under user messages', () => {
   assert.ok(html.includes('>Copy<'));
   assert.ok(html.includes('>Retry<'));
 });
+
+test('ChatView renders Queue button while generating and queued banner with Cancel button', () => {
+  const ws = createDefaultWorkspace();
+  const baseProps = {
+    session: ws.sessions[0],
+    models: ws.models,
+    activeModelId: ws.activeModelId,
+    onSelectActiveModel: () => {},
+    connectedLmModels: [],
+    selectedLmModel: '',
+    onSelectLmModel: () => {},
+    effortLevel: 'medium' as const,
+    onChangeEffortLevel: () => {},
+    backendLabel: 'Offline Mock',
+    workerStatus: {
+      state: 'generating' as const,
+      modelId: ws.models[0].id,
+      modelName: ws.models[0].name,
+      sessionId: ws.sessions[0].id,
+    },
+    composerText: 'Follow up question',
+    onComposerTextChange: () => {},
+    attachedFile: null,
+    onAttachFile: () => {},
+    memoryRetrievalEnabled: true,
+    onToggleMemoryRetrieval: () => {},
+    isGenerating: true,
+    hoveredSegment: null,
+    onHoverSegment: () => {},
+    onSendMessage: () => {},
+    onStopGeneration: () => {},
+    onNewSession: () => {},
+    onSummarizeSession: () => true,
+    onReviewSummaries: () => {},
+    onOpenSources: () => {},
+    onSaveAsNote: () => {},
+    onOpenFilePreview: () => {},
+    onCancelQueuedRequest: () => {},
+  };
+
+  // Before queuing: Queue button is active next to Stop
+  const readyToQueueHtml = renderToStaticMarkup(
+    React.createElement(ChatView, {
+      ...baseProps,
+      queuedRequest: null,
+      hasQueuedRequestAnywhere: false,
+    }),
+  );
+  assert.ok(readyToQueueHtml.includes('data-testid="queue-message-button"'));
+  assert.ok(readyToQueueHtml.includes('>Queue<'));
+  assert.equal(readyToQueueHtml.includes('data-testid="queued-request-banner"'), false);
+
+  // With 1 queued request: Banner shows queued prompt + Cancel button, and Queue button caps at 1/1
+  const queuedHtml = renderToStaticMarkup(
+    React.createElement(ChatView, {
+      ...baseProps,
+      composerText: '',
+      queuedRequest: {
+        rawInput: 'Follow up question',
+        attachedFile: null,
+      },
+      hasQueuedRequestAnywhere: true,
+    }),
+  );
+  assert.ok(queuedHtml.includes('data-testid="queued-request-banner"'));
+  assert.ok(queuedHtml.includes('Queued (runs next):'));
+  assert.ok(queuedHtml.includes('Follow up question'));
+  assert.ok(queuedHtml.includes('data-testid="cancel-queued-request"'));
+  assert.ok(queuedHtml.includes('Queued (1/1)'));
+});

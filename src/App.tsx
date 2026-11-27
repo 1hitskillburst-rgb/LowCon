@@ -379,6 +379,11 @@ export const App: React.FC = () => {
   const [lastTurnInspection, setLastTurnInspection] = useState<PromptInspection | null>(null);
   const [workerStatus, setWorkerStatus] = useState<WorkerStatus>({ state: 'unloaded' });
   const [generatingSessionId, setGeneratingSessionId] = useState<string | null>(null);
+  const [queuedRequest, setQueuedRequest] = useState<{
+    sessionId: string;
+    rawInput: string;
+    attachedFile: AttachedFileAttachment | null;
+  } | null>(null);
   const [liveTokensPerSecond, setLiveTokensPerSecond] = useState<number | null>(null);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [diagnosticEntries, setDiagnosticEntries] = useState<DiagnosticEntry[]>(() =>
@@ -389,6 +394,7 @@ export const App: React.FC = () => {
     seq: number;
   } | null>(null);
   const manuallyUnloadedRef = useRef(false);
+  const pausedQueueOnStopRef = useRef(false);
   const activeDripCleanupRef = useRef<(() => void) | null>(null);
   const pendingUnloadRef = useRef<Promise<unknown> | null>(null);
   const workspaceRef = useRef(workspace);
@@ -686,6 +692,7 @@ export const App: React.FC = () => {
   const handleDeleteSession = useCallback((sessionId: string) => {
     setLastTurnInspection(null);
     setPreviewFile((curr) => (curr && curr.sessionId === sessionId ? null : curr));
+    setQueuedRequest((curr) => (curr && curr.sessionId === sessionId ? null : curr));
     setWorkspace((prev) => {
       const remaining = prev.sessions.filter((s) => s.id !== sessionId);
       if (remaining.length === 0) return prev;
@@ -723,6 +730,7 @@ export const App: React.FC = () => {
       }
 
       setBannerError(null);
+      pausedQueueOnStopRef.current = false;
 
       const truncateIdx = params.truncateFromMessageId
         ? targetSession.messages.findIndex((m) => m.id === params.truncateFromMessageId)
@@ -1584,7 +1592,7 @@ export const App: React.FC = () => {
           for (const att of sessionAttachedFiles) {
             readableByLower.set(att.name.toLowerCase(), att);
           }
-          for (const msg of activeSession.messages) {
+          for (const msg of priorMessages) {
             for (const gen of msg.generatedFiles ?? []) {
               readableByLower.set(gen.filename.toLowerCase(), {
                 name: gen.filename,
@@ -1873,14 +1881,57 @@ export const App: React.FC = () => {
     if ((!rawInput && !attachedFile) || !activeSession) {
       return;
     }
-    if (generatingSessionId) return;
+    if (generatingSessionId) {
+      if (!queuedRequest) {
+        setQueuedRequest({
+          sessionId: activeSession.id,
+          rawInput,
+          attachedFile,
+        });
+        setComposerText('');
+        setAttachedFile(null);
+      }
+      return;
+    }
     await dispatchChatTurn({
       sessionId: activeSession.id,
       rawInput,
       attachedFile,
       clearComposer: true,
     });
-  }, [composerText, attachedFile, activeSession, generatingSessionId, dispatchChatTurn]);
+  }, [composerText, attachedFile, activeSession, generatingSessionId, queuedRequest, dispatchChatTurn]);
+
+  useEffect(() => {
+    if (generatingSessionId !== null || !queuedRequest) return;
+    if (pausedQueueOnStopRef.current) {
+      return;
+    }
+    const next = queuedRequest;
+    setQueuedRequest(null);
+    void dispatchChatTurn({
+      sessionId: next.sessionId,
+      rawInput: next.rawInput,
+      attachedFile: next.attachedFile,
+      clearComposer: false,
+    });
+  }, [generatingSessionId, queuedRequest, dispatchChatTurn]);
+
+  const handleCancelQueuedRequest = useCallback(() => {
+    setQueuedRequest(null);
+  }, []);
+
+  const handleSendQueuedNow = useCallback(() => {
+    if (!queuedRequest || generatingSessionId) return;
+    const next = queuedRequest;
+    setQueuedRequest(null);
+    pausedQueueOnStopRef.current = false;
+    void dispatchChatTurn({
+      sessionId: next.sessionId,
+      rawInput: next.rawInput,
+      attachedFile: next.attachedFile,
+      clearComposer: false,
+    });
+  }, [queuedRequest, generatingSessionId, dispatchChatTurn]);
 
   const handleRetryUserMessage = useCallback(
     async (messageId: string) => {
@@ -1907,6 +1958,7 @@ export const App: React.FC = () => {
   );
 
   const handleStopGeneration = useCallback(() => {
+    pausedQueueOnStopRef.current = true;
     if (controllerRef.current?.getStatus().state === 'generating') {
       controllerRef.current.cancelGeneration();
     } else {
@@ -2422,6 +2474,14 @@ export const App: React.FC = () => {
                 workspaceFilenames={workspaceFilenames}
                 onSaveArtifactToWorkspaceFiles={handleSaveArtifactToWorkspaceFiles}
                 onRetryUserMessage={(msgId) => void handleRetryUserMessage(msgId)}
+                queuedRequest={
+                  queuedRequest && queuedRequest.sessionId === activeSession.id
+                    ? queuedRequest
+                    : null
+                }
+                hasQueuedRequestAnywhere={Boolean(queuedRequest)}
+                onCancelQueuedRequest={handleCancelQueuedRequest}
+                onSendQueuedNow={handleSendQueuedNow}
               />
 
               {previewFile &&

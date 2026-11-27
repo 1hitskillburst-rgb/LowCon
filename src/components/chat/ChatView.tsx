@@ -8,6 +8,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Clock,
   Code2,
   Copy,
   FileCode2,
@@ -245,6 +246,13 @@ interface ChatViewProps {
   workspaceFilenames?: Set<string>;
   onSaveArtifactToWorkspaceFiles?: (file: GeneratedFileArtifact) => void;
   onRetryUserMessage?: (messageId: string) => void;
+  queuedRequest?: {
+    rawInput: string;
+    attachedFile: { name: string; content: string } | null;
+  } | null;
+  hasQueuedRequestAnywhere?: boolean;
+  onCancelQueuedRequest?: () => void;
+  onSendQueuedNow?: () => void;
 }
 
 export const ChatView: React.FC<ChatViewProps> = ({
@@ -284,6 +292,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   workspaceFilenames,
   onSaveArtifactToWorkspaceFiles,
   onRetryUserMessage,
+  queuedRequest = null,
+  hasQueuedRequestAnywhere = false,
+  onCancelQueuedRequest,
+  onSendQueuedNow,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
@@ -411,7 +423,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if ((composerText.trim() || attachedFile) && !isGenerating) {
+      if ((composerText.trim() || attachedFile) && (!isGenerating || !hasQueuedRequestAnywhere)) {
         onSendMessage();
       }
     }
@@ -956,6 +968,52 @@ export const ChatView: React.FC<ChatViewProps> = ({
           data-testid="chat-composer-card"
           className={`mx-auto w-full ${widthLayout.innerMax} rounded-[12px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-4 py-3 text-[var(--lc-surf-ink)] shadow-xs focus-within:border-[var(--lc-accent)]`}
         >
+          {queuedRequest && (
+            <div
+              data-testid="queued-request-banner"
+              className="mb-2 flex items-center justify-between gap-2 rounded-[7px] border border-[var(--lc-accent)]/30 bg-[var(--lc-accent)]/8 px-3 py-1.5 text-[12px] text-[var(--lc-surf-ink)]"
+            >
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <Clock className="h-3.5 w-3.5 shrink-0 text-[var(--lc-accent)]" />
+                <span className="shrink-0 font-semibold text-[var(--lc-accent)]">
+                  {isGenerating ? 'Queued (runs next):' : 'Queued (paused):'}
+                </span>
+                <span className="truncate text-[var(--lc-surf-ink2)]">
+                  {queuedRequest.rawInput || queuedRequest.attachedFile?.name}
+                </span>
+                {queuedRequest.attachedFile && queuedRequest.rawInput && (
+                  <span className="shrink-0 rounded border border-[var(--lc-panel-line)] bg-[var(--lc-panel)] px-1.5 py-0.5 text-[10.5px] text-[var(--lc-panel-ink2)]">
+                    +{queuedRequest.attachedFile.name}
+                  </span>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                {!isGenerating && onSendQueuedNow && (
+                  <button
+                    type="button"
+                    data-testid="send-queued-now"
+                    onClick={onSendQueuedNow}
+                    className="rounded-[5px] bg-[var(--lc-accent)] px-2 py-0.5 text-[11.5px] font-semibold text-[var(--lc-accent-contrast)] hover:bg-[var(--lc-accent-hover)]"
+                  >
+                    Send now
+                  </button>
+                )}
+                {onCancelQueuedRequest && (
+                  <button
+                    type="button"
+                    data-testid="cancel-queued-request"
+                    onClick={onCancelQueuedRequest}
+                    aria-label="Cancel queued request"
+                    className="inline-flex items-center gap-1 rounded-[5px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-2 py-0.5 text-[11.5px] font-medium text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)] hover:text-[var(--lc-danger)]"
+                  >
+                    <X className="h-3 w-3" />
+                    <span>Cancel</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {attachedFile && (
             <div className="mb-2 flex items-center justify-between gap-2 rounded-[6px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)] px-2.5 py-1 text-[12px] text-[var(--lc-panel-ink)]">
               <span className="flex min-w-0 items-center gap-1.5 truncate">
@@ -1183,14 +1241,31 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </div>
 
             {isGenerating ? (
-              <button
-                type="button"
-                onClick={onStopGeneration}
-                className="inline-flex items-center gap-1.5 rounded-[8px] bg-[var(--lc-danger)] px-3.5 py-1.5 text-[13px] font-semibold text-[var(--lc-danger-contrast)] hover:opacity-90"
-              >
-                <Square className="h-3 w-3 fill-current" />
-                <span>Stop</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  data-testid="queue-message-button"
+                  onClick={onSendMessage}
+                  disabled={hasQueuedRequestAnywhere || (!composerText.trim() && !attachedFile)}
+                  title={
+                    hasQueuedRequestAnywhere
+                      ? '1 request is already queued'
+                      : 'Queue this message to run right after the current response'
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-[8px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] px-3 py-1.5 text-[13px] font-semibold text-[var(--lc-surf-ink)] transition-colors hover:bg-[var(--lc-surf-hover)] disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  <Clock className="h-3.5 w-3.5" />
+                  <span>{hasQueuedRequestAnywhere ? 'Queued (1/1)' : 'Queue'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onStopGeneration}
+                  className="inline-flex items-center gap-1.5 rounded-[8px] bg-[var(--lc-danger)] px-3.5 py-1.5 text-[13px] font-semibold text-[var(--lc-danger-contrast)] hover:opacity-90"
+                >
+                  <Square className="h-3 w-3 fill-current" />
+                  <span>Stop</span>
+                </button>
+              </div>
             ) : (
               <button
                 type="button"
