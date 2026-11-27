@@ -85,7 +85,7 @@ import {
   type WorkerStatus,
 } from './core/types';
 
-const MAX_TOOL_ROUNDS = 4;
+const MAX_TOOL_ROUNDS = 8;
 
 const CORE_SYSTEM_INSTRUCTION =
   'You are LowCon, a private, deterministic assistant running on this device. Respect all pinned project rules, cite local memory when relevant, and keep responses accurate and concise.';
@@ -131,7 +131,7 @@ function mapSessionHistoryTurns(messages: ChatMessage[]): ConversationTurnCandid
         const fileSummary = m.generatedFiles
           .map((f) => `${f.filename} (${f.language}, ${countLines(f.content)} lines)`)
           .join(', ');
-        content = `${content}\n\n[Attached generated files: ${fileSummary}]`;
+        content = `${content}\n\n[Session generated files (use read_attached_chunk to inspect lines, edit_file to patch): ${fileSummary}]`;
       }
       return {
         id: m.id,
@@ -1221,7 +1221,20 @@ export const App: React.FC = () => {
             content: exec.toolResultJson,
           });
         } else if (tc.function.name === READ_ATTACHED_CHUNK_TOOL_NAME) {
-          const exec = executeReadAttachedChunkTool(tc.function.arguments, sessionAttachedFiles);
+          const readableByLower = new Map<string, AttachedFileAttachment>();
+          for (const att of sessionAttachedFiles) {
+            readableByLower.set(att.name.toLowerCase(), att);
+          }
+          for (const gen of getSessionGeneratedFiles()) {
+            readableByLower.set(gen.filename.toLowerCase(), {
+              name: gen.filename,
+              content: gen.content,
+            });
+          }
+          const exec = executeReadAttachedChunkTool(
+            tc.function.arguments,
+            Array.from(readableByLower.values()),
+          );
           if (exec.ok) {
             toolActivityLabels.push(
               `Read ${exec.filename} L${exec.startLine}-${exec.endLine}`,

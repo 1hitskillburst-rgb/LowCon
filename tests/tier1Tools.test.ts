@@ -460,6 +460,57 @@ test('executeReadAttachedChunkTool paginates lines, caps at 120 lines, and handl
   assert.equal(wrongName.ok, false);
 });
 
+test('executeReadAttachedChunkTool can inspect generated session files before executeEditFileTool', () => {
+  const generated = makeFileArtifact({
+    id: 'file_2048',
+    filename: '2048.html',
+    title: '2048 Game',
+    language: 'html',
+    content: [
+      '<!doctype html>',
+      '<html>',
+      '<body>',
+      '  <script>',
+      '    function spawnTile() { return 2; }',
+      '  </script>',
+      '</body>',
+      '</html>',
+    ].join('\n'),
+  });
+
+  const readableFiles = [
+    { name: 'notes.txt', content: 'user note' },
+    { name: generated.filename, content: generated.content },
+  ];
+
+  const chunk = executeReadAttachedChunkTool(
+    JSON.stringify({ filename: '2048.html', start_line: 4, end_line: 6 }),
+    readableFiles,
+  );
+  assert.equal(chunk.ok, true);
+  if (chunk.ok) {
+    assert.equal(chunk.filename, '2048.html');
+    assert.ok(chunk.content.includes('5:     function spawnTile() { return 2; }'));
+  }
+
+  const editRes = executeEditFileTool(
+    JSON.stringify({
+      filename: '2048.html',
+      edits: [
+        {
+          old_text: '    function spawnTile() { return 2; }',
+          new_text: '    function spawnTile() { return Math.random() < 0.1 ? "powerup" : 2; }',
+        },
+      ],
+    }),
+    [generated],
+  );
+  assert.equal(editRes.ok, true);
+  if (editRes.ok) {
+    assert.ok(editRes.artifact.content.includes('"powerup"'));
+  }
+});
+
 // ---------------------------------------------------------------------------
 // 4. search_memory & save_memory_note
 // ---------------------------------------------------------------------------

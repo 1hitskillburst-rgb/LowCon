@@ -156,7 +156,7 @@ export const EDIT_FILE_TOOL_DEFINITION: ToolDefinition = {
   function: {
     name: EDIT_FILE_TOOL_NAME,
     description:
-      'Edit an existing session file via edits[] or top-level (start_line, end_line, replacement) or (old_text, new_text).',
+      'Patch an existing generated session file in place via edits[] or top-level (start_line, end_line, replacement) or (old_text, new_text). Prefer this over create_file when modifying an existing file.',
     parameters: {
       type: 'object',
       properties: {
@@ -193,7 +193,7 @@ export const READ_ATTACHED_CHUNK_TOOL_DEFINITION: ToolDefinition = {
   type: 'function',
   function: {
     name: READ_ATTACHED_CHUNK_TOOL_NAME,
-    description: `Read 1-indexed lines (max ${MAX_ATTACHED_CHUNK_LINES}) from an attached file.`,
+    description: `Read 1-indexed lines (max ${MAX_ATTACHED_CHUNK_LINES}) from an attached or previously generated session file (use to inspect a file before calling edit_file).`,
     parameters: {
       type: 'object',
       properties: {
@@ -257,8 +257,8 @@ export const ALL_FILE_AND_TIER1_TOOLS: ToolDefinition[] = [
 
 export const TIER1_TOOL_POLICY_INSTRUCTION = `[Tier 1 Tools]
 - \`${CALCULATE_TOOL_NAME}\`: Exact math, json_validate, regex_test, or date_diff.
-- \`${EDIT_FILE_TOOL_NAME}\`: Patch existing session files; never echo the full file.
-- \`${READ_ATTACHED_CHUNK_TOOL_NAME}\`: Read indexed attached files in <=${MAX_ATTACHED_CHUNK_LINES}-line chunks.
+- \`${EDIT_FILE_TOOL_NAME}\`: Patch existing generated session files (inspect lines with \`${READ_ATTACHED_CHUNK_TOOL_NAME}\` first if needed); never echo the full file.
+- \`${READ_ATTACHED_CHUNK_TOOL_NAME}\`: Read attached or generated session files in <=${MAX_ATTACHED_CHUNK_LINES}-line chunks.
 - \`${SEARCH_MEMORY_TOOL_NAME}\` / \`${SAVE_MEMORY_TOOL_NAME}\`: Recall prior facts or save durable rules/decisions.`;
 
 export const FULL_TOOL_CALL_POLICY_INSTRUCTION = buildToolPolicyInstruction(
@@ -267,8 +267,8 @@ export const FULL_TOOL_CALL_POLICY_INSTRUCTION = buildToolPolicyInstruction(
 
 const TIER1_POLICY_BULLETS: Record<string, string> = {
   [CALCULATE_TOOL_NAME]: `- \`${CALCULATE_TOOL_NAME}\`: Exact math, json_validate, regex_test, or date_diff.`,
-  [EDIT_FILE_TOOL_NAME]: `- \`${EDIT_FILE_TOOL_NAME}\`: Patch existing session files; never echo the full file.`,
-  [READ_ATTACHED_CHUNK_TOOL_NAME]: `- \`${READ_ATTACHED_CHUNK_TOOL_NAME}\`: Read indexed attached files in <=${MAX_ATTACHED_CHUNK_LINES}-line chunks.`,
+  [EDIT_FILE_TOOL_NAME]: `- \`${EDIT_FILE_TOOL_NAME}\`: Patch existing generated session files (inspect with \`${READ_ATTACHED_CHUNK_TOOL_NAME}\` first if needed); never echo the full file.`,
+  [READ_ATTACHED_CHUNK_TOOL_NAME]: `- \`${READ_ATTACHED_CHUNK_TOOL_NAME}\`: Read attached or generated session files in <=${MAX_ATTACHED_CHUNK_LINES}-line chunks.`,
   [SEARCH_MEMORY_TOOL_NAME]: `- \`${SEARCH_MEMORY_TOOL_NAME}\`: Search saved local memory notes.`,
   [SAVE_MEMORY_TOOL_NAME]: `- \`${SAVE_MEMORY_TOOL_NAME}\`: Save durable facts, preferences, or rules.`,
 };
