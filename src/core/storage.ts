@@ -1,5 +1,6 @@
 import { DEFAULT_LM_STUDIO_ENDPOINT, type DiagnosticLogger } from './privacy';
 import { createDefaultTheme, normalizeHexColor } from './theme';
+import { createEmptyTokenUsage, sanitizeTokenUsageHistory } from './tokenUsage';
 import type {
   AppSettings,
   MemoryNote,
@@ -116,6 +117,10 @@ export function createDefaultSettings(): AppSettings {
     effortLevel: 'medium',
     promptEffortEnabled: false,
     promptEffortPrompts: { ...DEFAULT_PROMPT_EFFORT_PROMPTS },
+    userProfile: {
+      username: '',
+      customSystemPrompt: '',
+    },
   };
 }
 
@@ -220,6 +225,7 @@ export function createDefaultWorkspace(): PersistedWorkspace {
       ...createDefaultSettings(),
       theme: loadSavedThemePreference(),
     },
+    tokenUsage: createEmptyTokenUsage(),
   };
 }
 
@@ -290,7 +296,18 @@ export function loadUnsealedWorkspace(logger: DiagnosticLogger): {
             ...DEFAULT_PROMPT_EFFORT_PROMPTS,
             ...(parsed.settings?.promptEffortPrompts ?? {}),
           },
+          userProfile: {
+            username:
+              typeof parsed.settings?.userProfile?.username === 'string'
+                ? parsed.settings.userProfile.username
+                : '',
+            customSystemPrompt:
+              typeof parsed.settings?.userProfile?.customSystemPrompt === 'string'
+                ? parsed.settings.userProfile.customSystemPrompt
+                : '',
+          },
         },
+        tokenUsage: sanitizeTokenUsageHistory(parsed.tokenUsage, parsed.sessions),
       },
     };
   } catch (err) {
@@ -450,7 +467,18 @@ export async function unsealWorkspaceVault(
           ...DEFAULT_PROMPT_EFFORT_PROMPTS,
           ...(rawWorkspace.settings?.promptEffortPrompts ?? {}),
         },
+        userProfile: {
+          username:
+            typeof rawWorkspace.settings?.userProfile?.username === 'string'
+              ? rawWorkspace.settings.userProfile.username
+              : '',
+          customSystemPrompt:
+            typeof rawWorkspace.settings?.userProfile?.customSystemPrompt === 'string'
+              ? rawWorkspace.settings.userProfile.customSystemPrompt
+              : '',
+        },
       },
+      tokenUsage: sanitizeTokenUsageHistory(rawWorkspace.tokenUsage, rawWorkspace.sessions),
     };
 
     activeVaultSessionKey = sessionKey;

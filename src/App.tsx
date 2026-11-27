@@ -9,6 +9,7 @@ import { SourcesModal } from './components/modals/SourcesModal';
 import { VaultLockOverlay } from './components/modals/VaultLockOverlay';
 import { MemoryView, type MemoryFilter } from './components/views/MemoryView';
 import { ModelsView } from './components/views/ModelsView';
+import { ProfileView } from './components/views/ProfileView';
 import { SettingsView } from './components/views/SettingsView';
 import {
   assembleContext,
@@ -46,6 +47,7 @@ import {
   unsealWorkspaceVault,
 } from './core/storage';
 import { applyThemeToDocument } from './core/theme';
+import { addTokenUsage, createEmptyTokenUsage } from './core/tokenUsage';
 import {
   ALL_WORKSPACE_TOOLS,
   buildToolPolicyForTools,
@@ -104,12 +106,22 @@ const MAX_TOOL_ROUNDS = 8;
 const CORE_SYSTEM_INSTRUCTION =
   'You are LowCon, a private, deterministic assistant running on this device. Respect all pinned project rules, cite local memory when relevant, and keep responses accurate and concise.';
 
-function buildEffectiveCoreInstruction(
+export function buildEffectiveCoreInstruction(
   settings: AppSettings,
   activeTools: ToolDefinition[],
   workspaceFiles: WorkspaceFile[] = [],
 ): string {
   const parts: string[] = [CORE_SYSTEM_INSTRUCTION];
+  const username = settings.userProfile?.username?.trim();
+  if (username) {
+    parts.push(
+      `[User Profile]\nThe user's name is "${username}". Address them by this name when appropriate.`,
+    );
+  }
+  const customSystemPrompt = settings.userProfile?.customSystemPrompt?.trim();
+  if (customSystemPrompt) {
+    parts.push(`[Custom System Prompt]\n${customSystemPrompt}`);
+  }
   const toolPolicy = buildToolPolicyForTools(activeTools);
   if (toolPolicy) parts.push(toolPolicy);
   const filesCatalog = formatWorkspaceFilesCatalogForPrompt(
@@ -813,7 +825,7 @@ export const App: React.FC = () => {
     const userMessage: ChatMessage = {
       id: userMsgId,
       role: 'user',
-      authorName: 'You',
+      authorName: workspace.settings.userProfile?.username?.trim() || 'You',
       createdAt: now,
       content: rawInput,
       ...(currentAttachedFile ? { attachedFiles: [currentAttachedFile] } : {}),
@@ -1150,6 +1162,14 @@ export const App: React.FC = () => {
       cumulativeTokens += outcome.totalTokens;
       if (outcome.tokensPerSecond > 0) {
         latestTps = outcome.tokensPerSecond;
+      }
+
+      const stepTokensUsed = currentInspection.totalTokens + outcome.totalTokens;
+      if (stepTokensUsed > 0) {
+        setWorkspace((prev) => ({
+          ...prev,
+          tokenUsage: addTokenUsage(prev.tokenUsage, stepTokensUsed),
+        }));
       }
 
       const hasToolCalls =
@@ -2113,6 +2133,8 @@ export const App: React.FC = () => {
         onSelectSession={handleSelectSession}
         onNewSession={handleNewSession}
         onDeleteSession={handleDeleteSession}
+        username={workspace.settings.userProfile?.username}
+        totalLifetimeTokens={workspace.tokenUsage?.totalLifetimeTokens ?? 0}
       />
 
       {/* Main Content Area + Dismissible System Banner */}
@@ -2364,6 +2386,32 @@ export const App: React.FC = () => {
               onLockActiveVaultNow={() => void handleLockActiveVaultNow()}
               onDisableVaultEncryption={handleDisableVaultEncryption}
               onClearDiagnostics={() => logger.clear()}
+            />
+          )}
+
+          {currentTab === 'profile' && (
+            <ProfileView
+              profile={
+                workspace.settings.userProfile ?? {
+                  username: '',
+                  customSystemPrompt: '',
+                }
+              }
+              tokenUsage={workspace.tokenUsage ?? createEmptyTokenUsage()}
+              onUpdateProfile={(patch) => {
+                setLastTurnInspection(null);
+                setWorkspace((prev) => ({
+                  ...prev,
+                  settings: {
+                    ...prev.settings,
+                    userProfile: {
+                      username: prev.settings.userProfile?.username ?? '',
+                      customSystemPrompt: prev.settings.userProfile?.customSystemPrompt ?? '',
+                      ...patch,
+                    },
+                  },
+                }));
+              }}
             />
           )}
         </main>

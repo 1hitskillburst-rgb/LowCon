@@ -2,7 +2,7 @@ import type { ModelOrigin } from './modelNames';
 
 export type BackendType = 'mock' | 'lm_studio';
 
-export type NavigationTab = 'chat' | 'models' | 'memory' | 'settings';
+export type NavigationTab = 'chat' | 'models' | 'memory' | 'settings' | 'profile';
 
 export type MessageRole = 'user' | 'assistant' | 'system';
 
@@ -228,6 +228,16 @@ export interface ThemeSettings {
   accent: string;
 }
 
+export interface UserProfileSettings {
+  username: string;
+  customSystemPrompt: string;
+}
+
+export interface TokenUsageHistory {
+  totalLifetimeTokens: number;
+  dailyTokens: Record<string, number>;
+}
+
 export interface AppSettings {
   outputReservePct: number;
   safetyMarginPct: number;
@@ -248,6 +258,7 @@ export interface AppSettings {
   effortLevel: EffortLevel;
   promptEffortEnabled: boolean;
   promptEffortPrompts: PromptEffortPrompts;
+  userProfile?: UserProfileSettings;
 }
 
 export type WorkerStatus =
@@ -274,6 +285,7 @@ export interface PersistedWorkspace {
   memoryNotes: MemoryNote[];
   workspaceFiles: WorkspaceFile[];
   settings: AppSettings;
+  tokenUsage?: TokenUsageHistory;
 }
 
 export const THEME_COLORS = {

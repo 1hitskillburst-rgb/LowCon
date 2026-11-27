@@ -124,6 +124,89 @@ function renderToolActivityBadge(label: string, idx: number): React.ReactNode {
   );
 }
 
+interface ThinkingProcessBoxProps {
+  messageId: string;
+  thinkingContent: string;
+  thinkingLabel: string;
+  isExpanded: boolean;
+  isThinkingActive: boolean;
+  isStreaming: boolean;
+  onToggle: () => void;
+}
+
+const ThinkingProcessBox: React.FC<ThinkingProcessBoxProps> = ({
+  messageId,
+  thinkingContent,
+  thinkingLabel,
+  isExpanded,
+  isThinkingActive,
+  isStreaming,
+  onToggle,
+}) => {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const shouldAutoScrollRef = useRef(true);
+
+  useEffect(() => {
+    if (!isExpanded) {
+      shouldAutoScrollRef.current = true;
+      return;
+    }
+    const el = scrollRef.current;
+    if (!el) return;
+    if (shouldAutoScrollRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [isExpanded, isStreaming, thinkingContent]);
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    shouldAutoScrollRef.current = distanceFromBottom <= 40;
+  };
+
+  return (
+    <div className="rounded-[8px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)]/85">
+      <button
+        type="button"
+        aria-expanded={isExpanded}
+        data-testid={`thinking-toggle-${messageId}`}
+        onClick={() => {
+          if (!isExpanded) {
+            shouldAutoScrollRef.current = true;
+          }
+          onToggle();
+        }}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[12.5px] font-medium text-[var(--lc-panel-ink2)] hover:text-[var(--lc-panel-ink)]"
+      >
+        <span className="inline-flex items-center gap-1.5">
+          {isExpanded ? (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+          )}
+          <span className={isThinkingActive ? 'lowcon-streaming-glow font-semibold' : ''}>
+            {thinkingLabel}
+          </span>
+        </span>
+        <span className="text-[11px] text-[var(--lc-panel-mute)]">
+          {isExpanded ? 'Hide' : 'Show'}
+        </span>
+      </button>
+      {isExpanded && (
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          data-testid={`thinking-content-${messageId}`}
+          className="max-h-72 overflow-y-auto border-t border-[var(--lc-panel-line)] px-3 py-2.5"
+        >
+          <MarkdownMessage content={thinkingContent} compact />
+        </div>
+      )}
+    </div>
+  );
+};
+
 interface ChatViewProps {
   session: Session;
   models: ModelProfile[];
@@ -593,42 +676,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         )}
 
                         {hasThinking && (
-                          <div className="rounded-[8px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)]/85">
-                            <button
-                              type="button"
-                              aria-expanded={isThinkingExpanded}
-                              data-testid={`thinking-toggle-${msg.id}`}
-                              onClick={() =>
-                                setExpandedThinkingIds((prev) => ({
-                                  ...prev,
-                                  [msg.id]: !prev[msg.id],
-                                }))
-                              }
-                              className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[12.5px] font-medium text-[var(--lc-panel-ink2)] hover:text-[var(--lc-panel-ink)]"
-                            >
-                              <span className="inline-flex items-center gap-1.5">
-                                {isThinkingExpanded ? (
-                                  <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-                                ) : (
-                                  <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-                                )}
-                                <span className={isThinkingActive ? 'lowcon-streaming-glow font-semibold' : ''}>
-                                  {thinkingLabel}
-                                </span>
-                              </span>
-                              <span className="text-[11px] text-[var(--lc-panel-mute)]">
-                                {isThinkingExpanded ? 'Hide' : 'Show'}
-                              </span>
-                            </button>
-                            {isThinkingExpanded && (
-                              <div
-                                data-testid={`thinking-content-${msg.id}`}
-                                className="max-h-72 overflow-y-auto border-t border-[var(--lc-panel-line)] px-3 py-2.5"
-                              >
-                                <MarkdownMessage content={msg.thinkingContent ?? ''} compact />
-                              </div>
-                            )}
-                          </div>
+                          <ThinkingProcessBox
+                            messageId={msg.id}
+                            thinkingContent={msg.thinkingContent ?? ''}
+                            thinkingLabel={thinkingLabel}
+                            isExpanded={isThinkingExpanded}
+                            isThinkingActive={isThinkingActive}
+                            isStreaming={isMsgStreaming}
+                            onToggle={() =>
+                              setExpandedThinkingIds((prev) => ({
+                                ...prev,
+                                [msg.id]: !prev[msg.id],
+                              }))
+                            }
+                          />
                         )}
 
                         {hasVisibleContent ? (

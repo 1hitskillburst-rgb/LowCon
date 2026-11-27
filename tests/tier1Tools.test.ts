@@ -400,6 +400,43 @@ test('edit_file supports exact old_text/new_text edits, case-insensitive lookup,
     existing,
   );
   assert.equal(overlap.ok, false);
+
+  // Tolerates null/empty schema-filler fields and start_line hints alongside old_text/new_text
+  const fillerAndHint = executeEditFileTool(
+    JSON.stringify({
+      filename: 'app.py',
+      edits: [
+        {
+          start_line: 1,
+          end_line: 2,
+          replacement: '',
+          old_text: 'def greet():\n    return "hi"',
+          new_text: 'def greet():\n    return "hey"',
+          replace_all: null,
+        },
+      ],
+    }),
+    existing,
+  );
+  assert.equal(fillerAndHint.ok, true);
+  if (fillerAndHint.ok) {
+    assert.ok(fillerAndHint.artifact.content.includes('return "hey"'));
+  }
+
+  // Tolerates synonym replacement with old_text
+  const synonymRes = executeEditFileTool(
+    JSON.stringify({
+      filename: 'app.py',
+      edits: [
+        { old_text: 'def bye():\n    return "hi"', replacement: 'def bye():\n    return "cya"' },
+      ],
+    }),
+    existing,
+  );
+  assert.equal(synonymRes.ok, true);
+  if (synonymRes.ok) {
+    assert.ok(synonymRes.artifact.content.includes('return "cya"'));
+  }
 });
 
 // ---------------------------------------------------------------------------

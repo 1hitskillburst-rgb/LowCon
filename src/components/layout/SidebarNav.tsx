@@ -1,6 +1,7 @@
 import React from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, User } from 'lucide-react';
 import { safeTruncateChars } from '../../core/privacy';
+import { formatCompactTokens } from '../../core/tokenUsage';
 import type { NavigationTab, Session } from '../../core/types';
 
 interface SidebarNavProps {
@@ -12,6 +13,8 @@ interface SidebarNavProps {
   onSelectSession: (sessionId: string) => void;
   onNewSession: () => void;
   onDeleteSession: (sessionId: string) => void;
+  username?: string;
+  totalLifetimeTokens?: number;
 }
 
 export const SidebarNav: React.FC<SidebarNavProps> = ({
@@ -23,6 +26,8 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
   onSelectSession,
   onNewSession,
   onDeleteSession,
+  username,
+  totalLifetimeTokens = 0,
 }) => {
   const navItems: Array<{ id: NavigationTab; label: string; count?: number }> = [
     { id: 'chat', label: 'Chat', count: sessions.length },
@@ -30,6 +35,11 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
     { id: 'memory', label: 'Memory' },
     { id: 'settings', label: 'Settings' },
   ];
+
+  const trimmedUsername = username?.trim() ?? '';
+  const displayName = trimmedUsername || 'Profile';
+  const displayInitial = trimmedUsername ? Array.from(trimmedUsername)[0].toUpperCase() : null;
+  const isProfileActive = currentTab === 'profile';
 
   return (
     <aside
@@ -158,20 +168,42 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
         })}
       </div>
 
-      {/* Bottom Local Boundary Badge */}
+      {/* Bottom Profile Entry */}
       <div className="mt-3 border-t border-[var(--lc-line)] pt-2.5">
-        <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          data-testid="sidebar-profile-button"
+          onClick={() => onSelectTab('profile')}
+          aria-current={isProfileActive ? 'page' : undefined}
+          className={`flex w-full items-center gap-2.5 rounded-[7px] border px-2 py-1.5 text-left transition-colors ${
+            isProfileActive
+              ? 'border-[var(--lc-active-pill-bg)] bg-[var(--lc-surface)] text-[var(--lc-surf-ink)]'
+              : 'border-transparent bg-transparent text-[var(--lc-side-ink)] hover:bg-[var(--lc-hover)]'
+          }`}
+        >
           <span
             aria-hidden="true"
-            className="h-[7px] w-[7px] shrink-0 rounded-full bg-[var(--lc-success)]"
-          />
-          <span className="text-[12.5px] font-semibold text-[var(--lc-side-ink)]">
-            Local boundary active
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--lc-accent)] text-[12px] font-bold text-[var(--lc-accent-contrast)]"
+          >
+            {displayInitial ?? <User className="h-3.5 w-3.5" />}
           </span>
-        </div>
-        <p className="mt-1 text-[11px] leading-snug text-[var(--lc-side-ink2)]">
-          Loopback-only LLM calls. No cloud endpoints, telemetry, or remote tracking.
-        </p>
+          <div className="min-w-0 flex-1">
+            <div
+              className={`truncate text-[13px] leading-tight font-semibold ${
+                isProfileActive ? 'text-[var(--lc-surf-ink)]' : 'text-[var(--lc-side-ink)]'
+              }`}
+            >
+              {displayName}
+            </div>
+            <div
+              className={`truncate text-[11px] leading-tight tabular-nums ${
+                isProfileActive ? 'text-[var(--lc-surf-mute)]' : 'text-[var(--lc-side-mute)]'
+              }`}
+            >
+              {formatCompactTokens(totalLifetimeTokens)} tokens lifetime
+            </div>
+          </div>
+        </button>
       </div>
     </aside>
   );

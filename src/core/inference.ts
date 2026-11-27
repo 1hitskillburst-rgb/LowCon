@@ -628,6 +628,9 @@ export function generateDeterministicMockReply(
 
   const hasPinnedRules = sysContent.includes('[Pinned Instructions & Facts]');
   const hasRetrievedMem = sysContent.includes('[Retrieved Memory]');
+  const hasCustomSystemPrompt = sysContent.includes('[Custom System Prompt]');
+  const profileNameMatch = /The user's name is "([^"]+)"/.exec(sysContent);
+  const profileUsername = profileNameMatch?.[1]?.trim();
 
   let base: string;
   if (
@@ -647,12 +650,15 @@ export function generateDeterministicMockReply(
     base =
       'LowCon enforces a strict local boundary: remote endpoints are rejected before any request is issued, diagnostic logs scrub sensitive fields before storage, and the local storage vault seals persisted state using AES-256-GCM authenticated encryption derived via PBKDF2-SHA256.';
   } else {
-    base = `Received your prompt cleanly within the active context budget. Running deterministic local inference on the loaded model profile with strict token accounting.`;
+    base = profileUsername
+      ? `Hi ${profileUsername} — received your prompt cleanly within the active context budget. Running deterministic local inference on the loaded model profile with strict token accounting.`
+      : `Received your prompt cleanly within the active context budget. Running deterministic local inference on the loaded model profile with strict token accounting.`;
   }
 
   const notes: string[] = [];
   if (hasPinnedRules) notes.push('active pinned project rules were verified in the system block');
   if (hasRetrievedMem) notes.push('relevant local memory excerpts were injected');
+  if (hasCustomSystemPrompt) notes.push('your custom system prompt was applied');
 
   if (notes.length > 0) {
     return `${base}\n\nContext verification: ${notes.join(' and ')}.`;

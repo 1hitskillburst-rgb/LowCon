@@ -178,7 +178,7 @@ export const EDIT_FILE_TOOL_DEFINITION: ToolDefinition = {
   function: {
     name: EDIT_FILE_TOOL_NAME,
     description:
-      'Patch an existing session or persistent Files-tab file in place via edits[] or top-level (start_line, end_line, replacement) or (old_text, new_text). Prefer this over create_file when modifying an existing file.',
+      'Patch an existing file in place. Choose ONE style per edit: exact-text {filename, old_text, new_text} (preferred) OR line-range {filename, start_line, end_line, replacement}, or pass multiple edits in edits[]. Do NOT include unused mode fields.',
     parameters: {
       type: 'object',
       properties: {
@@ -1425,57 +1425,83 @@ function parseSingleEditOp(raw: unknown, indexLabel: string): ParsedEditOp | str
   }
   const rec = raw as Record<string, unknown>;
 
-  const hasLineFields =
-    rec.start_line !== undefined || rec.end_line !== undefined || rec.replacement !== undefined;
-  const hasTextFields = rec.old_text !== undefined || rec.new_text !== undefined;
+  const hasNonEmptyString = (val: unknown): val is string =>
+    typeof val === 'string' && val.length > 0;
+  const hasAnyString = (val: unknown): val is string => typeof val === 'string';
+  const hasPositiveInt = (val: unknown): val is number =>
+    typeof val === 'number' && Number.isInteger(val) && val >= 1;
 
-  if (hasLineFields && hasTextFields) {
-    return `${indexLabel} cannot mix line-range fields (start_line/end_line/replacement) with exact-text fields (old_text/new_text).`;
-  }
+  // Ignore null/undefined schema-filler fields; also tolerate empty string / 0 defaults
+  // when the other mode is populated with real values.
+  const hasRealOldText = hasNonEmptyString(rec.old_text);
+  const hasRealNewText = hasNonEmptyString(rec.new_text);
+  const hasRealReplacement = hasNonEmptyString(rec.replacement);
+  const hasRealLineStart = hasPositiveInt(rec.start_line);
 
-  if (hasLineFields) {
+  // 1. Exact-text mode (preferred when old_text is non-empty).
+  // Tolerates null/empty/default line-range fields or start_line/end_line location hints
+  // as long as a conflicting non-empty `replacement` wasn't ALSO given alongside `new_text`.
+  if (hasRealOldText) {
+    if (hasAnyString(rec.new_text) && hasRealReplacement && rec.new_text !== rec.replacement) {
+      return `${indexLabel} has both "new_text" and "replacement". Pass ONLY {"old_text": "...", "new_text": "..."} (without start_line/end_line/replacement).`;
+    }
+    const targetNewText = hasAnyString(rec.new_text)
+      ? rec.new_text
+      : hasAnyString(rec.replacement)
+        ? rec.replacement
+        : null;
+    if (targetNewText === null) {
+      return `${indexLabel} requires a string "new_text" field alongside "old_text".`;
+    }
     if (
-      typeof rec.start_line !== 'number' ||
-      !Number.isInteger(rec.start_line) ||
-      rec.start_line < 1
+      rec.replace_all !== undefined &&
+      rec.replace_all !== null &&
+      typeof rec.replace_all !== 'boolean'
     ) {
-      return `${indexLabel} requires a positive integer "start_line".`;
-    }
-    const startLine = rec.start_line;
-    const endLine = rec.end_line === undefined ? startLine : rec.end_line;
-    if (typeof endLine !== 'number' || !Number.isInteger(endLine) || endLine < startLine) {
-      return `${indexLabel} "end_line" must be an integer >= start_line (${startLine}).`;
-    }
-    if (typeof rec.replacement !== 'string') {
-      return `${indexLabel} requires a string "replacement" field.`;
-    }
-    return {
-      kind: 'line_range',
-      startLine,
-      endLine,
-      replacement: rec.replacement,
-    };
-  }
-
-  if (hasTextFields) {
-    if (typeof rec.old_text !== 'string' || rec.old_text.length === 0) {
-      return `${indexLabel} requires a non-empty string "old_text" field.`;
-    }
-    if (typeof rec.new_text !== 'string') {
-      return `${indexLabel} requires a string "new_text" field.`;
-    }
-    if (rec.replace_all !== undefined && typeof rec.replace_all !== 'boolean') {
       return `${indexLabel} optional "replace_all" must be a boolean.`;
     }
     return {
       kind: 'exact_text',
-      oldText: rec.old_text,
-      newText: rec.new_text,
+      oldText: rec.old_text as string,
+      newText: targetNewText,
       replaceAll: rec.replace_all === true,
     };
   }
 
-  return `${indexLabel} must specify either (start_line, replacement) or (old_text, new_text).`;
+  // 2. Line-range mode (start_line provided and old_text is absent/empty)
+  if (hasRealLineStart || rec.start_line !== undefined || rec.end_line !== undefined || hasRealReplacement) {
+    if (hasRealNewText && !hasRealReplacement && !hasRealLineStart) {
+      return `${indexLabel} provided "new_text" without a non-empty "old_text". Example: {"filename": "...", "old_text": "...", "new_text": "..."}.`;
+    }
+    if (!hasRealLineStart) {
+      return `${indexLabel} requires a positive integer "start_line" (or non-empty "old_text" + "new_text").`;
+    }
+    const startLine = rec.start_line as number;
+    const rawEnd = rec.end_line === undefined || rec.end_line === null ? startLine : rec.end_line;
+    if (typeof rawEnd !== 'number' || !Number.isInteger(rawEnd) || rawEnd < startLine) {
+      return `${indexLabel} "end_line" must be an integer >= start_line (${startLine}).`;
+    }
+    const replacementStr = hasAnyString(rec.replacement)
+      ? rec.replacement
+      : hasAnyString(rec.new_text)
+        ? rec.new_text
+        : null;
+    if (replacementStr === null) {
+      return `${indexLabel} requires a string "replacement" field alongside "start_line".`;
+    }
+    return {
+      kind: 'line_range',
+      startLine,
+      endLine: rawEnd,
+      replacement: replacementStr,
+    };
+  }
+
+  if (rec.old_text !== undefined || rec.new_text !== undefined) {
+    return `${indexLabel} requires a non-empty string "old_text" and string "new_text". Example: {"old_text": "old", "new_text": "new"}.`;
+  }
+
+  return `${indexLabel} must specify either {"old_text": "...", "new_text": "..."} OR {"start_line": 1, "end_line": 1, "replacement": "..."}.`;
 }
 
 function splitReplacementLines(replacement: string): string[] {
