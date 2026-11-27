@@ -756,15 +756,23 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                 workspaceFilenames?.has(file.filename.toLowerCase()),
                               );
                               return (
-                                <div key={file.id} className="flex max-w-[460px] items-center gap-2">
+                                <div
+                                  key={file.id}
+                                  data-testid={`file-artifact-row-${file.id}`}
+                                  className={`flex max-w-[520px] items-stretch overflow-hidden rounded-[10px] border transition-colors ${
+                                    isPreviewActive
+                                      ? 'border-[var(--lc-accent)] bg-[var(--lc-accent)]/8'
+                                      : 'border-[var(--lc-surf-line)] bg-[var(--lc-surface)]'
+                                  }`}
+                                >
                                   <button
                                     type="button"
                                     data-testid={`file-artifact-card-${file.id}`}
                                     onClick={() => onOpenFilePreview(file)}
-                                    className={`group flex min-w-0 flex-1 items-center justify-between gap-3 rounded-[10px] border px-3.5 py-2.5 text-left transition-colors ${
+                                    className={`group flex min-w-0 flex-1 items-center justify-between gap-3 px-3.5 py-2.5 text-left transition-colors ${
                                       isPreviewActive
-                                        ? 'border-[var(--lc-accent)] bg-[var(--lc-accent)]/8'
-                                        : 'border-[var(--lc-surf-line)] bg-[var(--lc-surface)] hover:border-[var(--lc-accent)]/60 hover:bg-[var(--lc-surf-hover)]/60'
+                                        ? 'hover:bg-[var(--lc-accent)]/12'
+                                        : 'hover:bg-[var(--lc-surf-hover)]/60'
                                     }`}
                                   >
                                     <div className="flex min-w-0 items-center gap-3">
@@ -823,10 +831,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                           ? 'Update copy in Files tab'
                                           : 'Save to persistent Files tab'
                                       }
-                                      className={`inline-flex shrink-0 items-center gap-1 rounded-[8px] border px-2.5 py-2 text-[11.5px] font-medium transition-colors ${
+                                      className={`flex shrink-0 items-center justify-center gap-1.5 border-l px-3.5 text-[12px] font-medium transition-colors ${
+                                        isPreviewActive
+                                          ? 'border-[var(--lc-accent)]/30'
+                                          : 'border-[var(--lc-surf-line)]'
+                                      } ${
                                         inWorkspace
-                                          ? 'border-[var(--lc-success)]/35 bg-[var(--lc-success)]/10 text-[var(--lc-success)] hover:bg-[var(--lc-success)]/15'
-                                          : 'border-[var(--lc-surf-line)] bg-[var(--lc-surface)] text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)] hover:text-[var(--lc-surf-ink)]'
+                                          ? 'bg-[var(--lc-success)]/10 text-[var(--lc-success)] hover:bg-[var(--lc-success)]/16'
+                                          : 'bg-[var(--lc-surf-hover)]/35 text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)] hover:text-[var(--lc-surf-ink)]'
                                       }`}
                                     >
                                       {inWorkspace ? (
