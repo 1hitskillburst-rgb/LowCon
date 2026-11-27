@@ -699,216 +699,243 @@ export const App: React.FC = () => {
     });
   }, []);
 
-  const handleSendMessage = useCallback(async () => {
-    const rawInput = composerText.trim();
-    if ((!rawInput && !attachedFile) || !activeSession || !activeModel || !controllerRef.current) {
-      return;
-    }
-    if (generatingSessionId) return;
-
-    setBannerError(null);
-
-    const currentAttachedFile = attachedFile;
-    const userContent = formatUserMessageWithAttachment(rawInput, currentAttachedFile);
-
-    const targetSessionId = activeSession.id;
-    const effectiveLimit = getEffectiveContextLimit(
-      activeModel,
-      workspace.settings.contextLimitOverride,
-    );
-
-    // 1. Ensure model is loaded into worker before assembling/sending
-    if (!controllerRef.current.isLoaded()) {
-      manuallyUnloadedRef.current = false;
-      const loadRes = controllerRef.current.loadModel({
-        ...activeModel,
-        contextOverride: effectiveLimit,
-      });
-      if (!loadRes.ok) {
-        setBannerError(loadRes.error);
+  const dispatchChatTurn = useCallback(
+    async (params: {
+      sessionId: string;
+      rawInput: string;
+      attachedFile: AttachedFileAttachment | null;
+      truncateFromMessageId?: string;
+      clearComposer?: boolean;
+    }) => {
+      const currentWs = workspaceRef.current;
+      const targetSession = currentWs.sessions.find((s) => s.id === params.sessionId);
+      const currentModel =
+        currentWs.models.find((m) => m.id === currentWs.activeModelId) ?? currentWs.models[0];
+      const rawInput = params.rawInput.trim();
+      const currentAttachedFile = params.attachedFile;
+      if (
+        (!rawInput && !currentAttachedFile) ||
+        !targetSession ||
+        !currentModel ||
+        !controllerRef.current
+      ) {
         return;
       }
-    }
 
-    // 2. Fetch pinned project rules UNCONDITIONALLY (fixes keyword-gated pin bug)
-    const nonSummaryNotes = workspace.memoryNotes.filter((n) => !n.isSummary);
-    const pinnedNotes = getPinnedNotesForPrompt(nonSummaryNotes, targetSessionId);
+      setBannerError(null);
 
-    // 3. Fetch unpinned relevant memories via BM25 FTS across ALL notes
-    const retrievedScored = workspace.settings.memoryRetrievalEnabled
-      ? retrieveMemoryNotes(nonSummaryNotes, {
-          query: userContent,
-          sessionId: targetSessionId,
-          excludePinned: true,
-          requireApproved: true,
-          limit: 8,
-        })
-      : [];
+      const truncateIdx = params.truncateFromMessageId
+        ? targetSession.messages.findIndex((m) => m.id === params.truncateFromMessageId)
+        : -1;
+      const priorMessages =
+        truncateIdx >= 0 ? targetSession.messages.slice(0, truncateIdx) : targetSession.messages;
 
-    const summaryCandidates = buildSummaryCandidates(workspace.memoryNotes, targetSessionId);
-    const historyTurns = mapSessionHistoryTurns(activeSession.messages);
-    let turnWorkspaceFiles = [...workspace.workspaceFiles];
-    const selectedTools = selectToolsForPromptBudget(effectiveLimit, {
-      hasAttachments:
-        Boolean(currentAttachedFile) ||
-        activeSession.messages.some((m) => (m.attachedFiles?.length ?? 0) > 0),
-      hasGeneratedFiles: activeSession.messages.some((m) => (m.generatedFiles?.length ?? 0) > 0),
-      hasWorkspaceFiles: turnWorkspaceFiles.length > 0,
-      includeWorkspaceFileTool: hasExplicitWorkspaceFileSaveIntent(rawInput),
-      allowAiFileEdits: workspace.settings.allowAiFileEdits,
-    });
+      const userContent = formatUserMessageWithAttachment(rawInput, currentAttachedFile);
 
-    const baseAssemblyCandidates = {
-      coreInstruction: buildEffectiveCoreInstruction(
-        workspace.settings,
-        selectedTools,
-        turnWorkspaceFiles,
-      ),
-      pinnedFacts: pinnedNotes.map((n) => ({
-        id: n.id,
-        title: n.title,
-        content: n.content,
-        sourceReference: n.sourceReference,
-      })),
-      taskState: activeSession.taskGoal ? { goal: activeSession.taskGoal } : undefined,
-      retrievedMemories: retrievedScored.map((s) => ({
-        id: s.note.id,
-        title: s.note.title,
-        excerpt: s.note.content,
-        sourceMessageId: s.note.sourceMessageIds[0],
-        relevanceScore: s.finalScore,
-        isPinned: false,
-      })),
-      summaries: summaryCandidates,
-      ...(selectedTools.length > 0 ? { tools: selectedTools } : {}),
-    };
+      const targetSessionId = targetSession.id;
+      const effectiveLimit = getEffectiveContextLimit(
+        currentModel,
+        currentWs.settings.contextLimitOverride,
+      );
 
-    // 4. Deterministic budget-first context assembly with user's exact reserve % & model template
-    const assemblyResult = assembleContext(
-      {
-        ...baseAssemblyCandidates,
-        currentUserMessage: userContent,
-        conversationTurns: historyTurns,
-      },
-      {
-        modelContextLimit: effectiveLimit,
-        outputReservePct: workspace.settings.outputReservePct,
-        safetyMarginPct: workspace.settings.safetyMarginPct,
-        templateType: activeModel.chatTemplate,
-      },
-    );
-
-    // 5. NEVER fall back to unbudgeted prompt on mandatory overflow
-    if (!assemblyResult.ok) {
-      logger.error('context', `Assembly aborted (${assemblyResult.code}): ${assemblyResult.message}`);
-      setBannerError(assemblyResult.message);
-      return;
-    }
-
-    const inspection = assemblyResult.inspection;
-    const turnBudget = buildTurnContextBudget(inspection);
-    setLastTurnInspection(inspection);
-
-    const sources: string[] = [
-      ...pinnedNotes.map((n) => `Pinned rule: ${n.title} (${n.sourceReference})`),
-      ...retrievedScored
-        .filter((s) => inspection.includedMemoryIds.includes(s.note.id))
-        .map((s) => `Memory note: ${s.note.title} (${s.note.sourceReference})`),
-      ...summaryCandidates
-        .filter((s) => inspection.includedMemoryIds.includes(s.id))
-        .map((s) => `Summary: Turns ${s.sourceTurnRange}`),
-    ];
-
-    const now = Date.now();
-    const userMsgId = createUuid();
-    const assistantMsgId = createUuid();
-    const modelDisplayLabel =
-      activeModel.backendType === 'lm_studio' && workspace.settings.selectedLmModel
-        ? `${resolveModelDisplayName(workspace.settings.selectedLmModel, workspace.settings.modelDisplayAliases)} · ${activeModel.chatTemplate}`
-        : `${activeModel.name} · ${activeModel.chatTemplate}`;
-
-    const userMessage: ChatMessage = {
-      id: userMsgId,
-      role: 'user',
-      authorName: workspace.settings.userProfile?.username?.trim() || 'You',
-      createdAt: now,
-      content: rawInput,
-      ...(currentAttachedFile ? { attachedFiles: [currentAttachedFile] } : {}),
-      sources: [],
-    };
-
-    const assistantPlaceholder: ChatMessage = {
-      id: assistantMsgId,
-      role: 'assistant',
-      authorName: 'LowCon',
-      createdAt: now + 1,
-      modelInfo: modelDisplayLabel,
-      content: '',
-      sources,
-      turnBudget,
-    };
-
-    // Append messages & auto-title new sessions
-    setWorkspace((prev) => ({
-      ...prev,
-      sessions: prev.sessions.map((s) => {
-        if (s.id !== targetSessionId) return s;
-        const shouldRename =
-          s.messages.length === 0 &&
-          (s.title === 'New local session' || s.title === 'Context strategy / 8K model');
-        return {
-          ...s,
-          title: shouldRename
-            ? safeTruncateChars(rawInput || currentAttachedFile?.name || 'Attached file', 36)
-            : s.title,
-          updatedAt: now,
-          messages: [...s.messages, userMessage, assistantPlaceholder],
-        };
-      }),
-    }));
-
-    // Progressive word-by-word drip queue for visible answer text
-    activeDripCleanupRef.current?.();
-
-    setComposerText('');
-    setAttachedFile(null);
-    setGeneratingSessionId(targetSessionId);
-    setLiveTokensPerSecond(null);
-
-    logger.info(
-      'chat',
-      `Dispatching turn (session=${targetSessionId.slice(0, 8)}, packed=${inspection.totalTokens}/${inspection.budgetPartition.promptBudget}, max_tokens=${inspection.budgetPartition.outputReserve}, pinned=${pinnedNotes.length}, retrieved=${retrievedScored.length})`,
-    );
-
-    let pendingWordQueue = '';
-    let thinkingStartedAt: number | null = null;
-    let thinkingFinishedAt: number | null = null;
-    let streamCompletion: {
-      totalTokens: number;
-      stopReason: StreamStopReason;
-      tokensPerSecond: number;
-    } | null = null;
-    let dripStopped = false;
-    const collectedFiles: GeneratedFileArtifact[] = [];
-    const toolActivityLabels: string[] = [];
-    const sessionAttachedFiles: AttachedFileAttachment[] = [
-      ...activeSession.messages.flatMap((m) => m.attachedFiles ?? []),
-      ...(currentAttachedFile ? [currentAttachedFile] : []),
-    ];
-    let sessionMemoryNotes = [...workspace.memoryNotes];
-
-    const getSessionGeneratedFiles = (): GeneratedFileArtifact[] => {
-      const byFilename = new Map<string, GeneratedFileArtifact>();
-      for (const msg of activeSession.messages) {
-        for (const file of msg.generatedFiles ?? []) {
-          byFilename.set(file.filename.toLowerCase(), file);
+      // 1. Ensure model is loaded into worker before assembling/sending
+      if (!controllerRef.current.isLoaded()) {
+        manuallyUnloadedRef.current = false;
+        const loadRes = controllerRef.current.loadModel({
+          ...currentModel,
+          contextOverride: effectiveLimit,
+        });
+        if (!loadRes.ok) {
+          setBannerError(loadRes.error);
+          return;
         }
       }
-      for (const file of collectedFiles) {
-        byFilename.set(file.filename.toLowerCase(), file);
+
+      // 2. Fetch pinned project rules UNCONDITIONALLY (fixes keyword-gated pin bug)
+      const nonSummaryNotes = currentWs.memoryNotes.filter((n) => !n.isSummary);
+      const pinnedNotes = getPinnedNotesForPrompt(nonSummaryNotes, targetSessionId);
+
+      // 3. Fetch unpinned relevant memories via BM25 FTS across ALL notes
+      const retrievedScored = currentWs.settings.memoryRetrievalEnabled
+        ? retrieveMemoryNotes(nonSummaryNotes, {
+            query: userContent,
+            sessionId: targetSessionId,
+            excludePinned: true,
+            requireApproved: true,
+            limit: 8,
+          })
+        : [];
+
+      const summaryCandidates = buildSummaryCandidates(currentWs.memoryNotes, targetSessionId);
+      const historyTurns = mapSessionHistoryTurns(priorMessages);
+      let turnWorkspaceFiles = [...currentWs.workspaceFiles];
+      const selectedTools = selectToolsForPromptBudget(effectiveLimit, {
+        hasAttachments:
+          Boolean(currentAttachedFile) ||
+          priorMessages.some((m) => (m.attachedFiles?.length ?? 0) > 0),
+        hasGeneratedFiles: priorMessages.some((m) => (m.generatedFiles?.length ?? 0) > 0),
+        hasWorkspaceFiles: turnWorkspaceFiles.length > 0,
+        includeWorkspaceFileTool: hasExplicitWorkspaceFileSaveIntent(rawInput),
+        allowAiFileEdits: currentWs.settings.allowAiFileEdits,
+      });
+
+      const baseAssemblyCandidates = {
+        coreInstruction: buildEffectiveCoreInstruction(
+          currentWs.settings,
+          selectedTools,
+          turnWorkspaceFiles,
+        ),
+        pinnedFacts: pinnedNotes.map((n) => ({
+          id: n.id,
+          title: n.title,
+          content: n.content,
+          sourceReference: n.sourceReference,
+        })),
+        taskState: targetSession.taskGoal ? { goal: targetSession.taskGoal } : undefined,
+        retrievedMemories: retrievedScored.map((s) => ({
+          id: s.note.id,
+          title: s.note.title,
+          excerpt: s.note.content,
+          sourceMessageId: s.note.sourceMessageIds[0],
+          relevanceScore: s.finalScore,
+          isPinned: false,
+        })),
+        summaries: summaryCandidates,
+        ...(selectedTools.length > 0 ? { tools: selectedTools } : {}),
+      };
+
+      // 4. Deterministic budget-first context assembly with user's exact reserve % & model template
+      const assemblyResult = assembleContext(
+        {
+          ...baseAssemblyCandidates,
+          currentUserMessage: userContent,
+          conversationTurns: historyTurns,
+        },
+        {
+          modelContextLimit: effectiveLimit,
+          outputReservePct: currentWs.settings.outputReservePct,
+          safetyMarginPct: currentWs.settings.safetyMarginPct,
+          templateType: currentModel.chatTemplate,
+        },
+      );
+
+      // 5. NEVER fall back to unbudgeted prompt on mandatory overflow
+      if (!assemblyResult.ok) {
+        logger.error('context', `Assembly aborted (${assemblyResult.code}): ${assemblyResult.message}`);
+        setBannerError(assemblyResult.message);
+        return;
       }
-      return Array.from(byFilename.values());
-    };
+
+      const inspection = assemblyResult.inspection;
+      const turnBudget = buildTurnContextBudget(inspection);
+      setLastTurnInspection(inspection);
+
+      const sources: string[] = [
+        ...pinnedNotes.map((n) => `Pinned rule: ${n.title} (${n.sourceReference})`),
+        ...retrievedScored
+          .filter((s) => inspection.includedMemoryIds.includes(s.note.id))
+          .map((s) => `Memory note: ${s.note.title} (${s.note.sourceReference})`),
+        ...summaryCandidates
+          .filter((s) => inspection.includedMemoryIds.includes(s.id))
+          .map((s) => `Summary: Turns ${s.sourceTurnRange}`),
+      ];
+
+      const now = Date.now();
+      const userMsgId = createUuid();
+      const assistantMsgId = createUuid();
+      const modelDisplayLabel =
+        currentModel.backendType === 'lm_studio' && currentWs.settings.selectedLmModel
+          ? `${resolveModelDisplayName(currentWs.settings.selectedLmModel, currentWs.settings.modelDisplayAliases)} · ${currentModel.chatTemplate}`
+          : `${currentModel.name} · ${currentModel.chatTemplate}`;
+
+      const userMessage: ChatMessage = {
+        id: userMsgId,
+        role: 'user',
+        authorName: currentWs.settings.userProfile?.username?.trim() || 'You',
+        createdAt: now,
+        content: rawInput,
+        ...(currentAttachedFile ? { attachedFiles: [currentAttachedFile] } : {}),
+        sources: [],
+      };
+
+      const assistantPlaceholder: ChatMessage = {
+        id: assistantMsgId,
+        role: 'assistant',
+        authorName: 'LowCon',
+        createdAt: now + 1,
+        modelInfo: modelDisplayLabel,
+        content: '',
+        sources,
+        turnBudget,
+      };
+
+      // Append (or replace from retry point) messages & auto-title new sessions
+      setWorkspace((prev) => ({
+        ...prev,
+        sessions: prev.sessions.map((s) => {
+          if (s.id !== targetSessionId) return s;
+          const idx = params.truncateFromMessageId
+            ? s.messages.findIndex((m) => m.id === params.truncateFromMessageId)
+            : -1;
+          const baseMsgs = idx >= 0 ? s.messages.slice(0, idx) : s.messages;
+          const shouldRename =
+            baseMsgs.length === 0 &&
+            (s.title === 'New local session' || s.title === 'Context strategy / 8K model');
+          return {
+            ...s,
+            title: shouldRename
+              ? safeTruncateChars(rawInput || currentAttachedFile?.name || 'Attached file', 36)
+              : s.title,
+            updatedAt: now,
+            messages: [...baseMsgs, userMessage, assistantPlaceholder],
+          };
+        }),
+      }));
+
+      // Progressive word-by-word drip queue for visible answer text
+      activeDripCleanupRef.current?.();
+
+      if (params.clearComposer) {
+        setComposerText('');
+        setAttachedFile(null);
+      }
+      setGeneratingSessionId(targetSessionId);
+      setLiveTokensPerSecond(null);
+
+      logger.info(
+        'chat',
+        `Dispatching turn (session=${targetSessionId.slice(0, 8)}, packed=${inspection.totalTokens}/${inspection.budgetPartition.promptBudget}, max_tokens=${inspection.budgetPartition.outputReserve}, pinned=${pinnedNotes.length}, retrieved=${retrievedScored.length})`,
+      );
+
+      let pendingWordQueue = '';
+      let thinkingStartedAt: number | null = null;
+      let thinkingFinishedAt: number | null = null;
+      let streamCompletion: {
+        totalTokens: number;
+        stopReason: StreamStopReason;
+        tokensPerSecond: number;
+      } | null = null;
+      let dripStopped = false;
+      const collectedFiles: GeneratedFileArtifact[] = [];
+      const toolActivityLabels: string[] = [];
+      const sessionAttachedFiles: AttachedFileAttachment[] = [
+        ...priorMessages.flatMap((m) => m.attachedFiles ?? []),
+        ...(currentAttachedFile ? [currentAttachedFile] : []),
+      ];
+      let sessionMemoryNotes = [...currentWs.memoryNotes];
+
+      const getSessionGeneratedFiles = (): GeneratedFileArtifact[] => {
+        const byFilename = new Map<string, GeneratedFileArtifact>();
+        for (const msg of priorMessages) {
+          for (const file of msg.generatedFiles ?? []) {
+            byFilename.set(file.filename.toLowerCase(), file);
+          }
+        }
+        for (const file of collectedFiles) {
+          byFilename.set(file.filename.toLowerCase(), file);
+        }
+        return Array.from(byFilename.values());
+      };
 
     const upsertCollectedFile = (artifact: GeneratedFileArtifact) => {
       const existingIdx = collectedFiles.findIndex(
@@ -1058,12 +1085,12 @@ export const App: React.FC = () => {
             maxTokens: stepInspection.budgetPartition.outputReserve,
             temperature: 0.7,
             topP: 0.9,
-            stopSequences: stopSequencesForTemplate(activeModel.chatTemplate),
-            lmStudioEndpoint: workspace.settings.lmStudioEndpoint,
-            selectedLmModel: workspace.settings.selectedLmModel,
-            reasoningEffort: workspace.settings.promptEffortEnabled
+            stopSequences: stopSequencesForTemplate(currentModel.chatTemplate),
+            lmStudioEndpoint: workspaceRef.current.settings.lmStudioEndpoint,
+            selectedLmModel: workspaceRef.current.settings.selectedLmModel,
+            reasoningEffort: workspaceRef.current.settings.promptEffortEnabled
               ? undefined
-              : workspace.settings.effortLevel,
+              : workspaceRef.current.settings.effortLevel,
             tools: stepInspection.tools,
             toolChoice: stepInspection.tools?.length
               ? isFinalRound
@@ -1315,7 +1342,7 @@ export const App: React.FC = () => {
               createdAt: now,
             });
           }
-          for (const msg of activeSession.messages) {
+          for (const msg of priorMessages) {
             for (const gen of msg.generatedFiles ?? []) {
               mergedEditableByLower.set(gen.filename.toLowerCase(), gen);
             }
@@ -1628,7 +1655,7 @@ export const App: React.FC = () => {
           const exec = executeSaveMemoryNoteTool(
             tc.function.arguments,
             createUuid,
-            activeSession.title,
+            targetSession.title,
             targetSessionId,
           );
           if (exec.ok) {
@@ -1769,9 +1796,9 @@ export const App: React.FC = () => {
         },
         {
           modelContextLimit: effectiveLimit,
-          outputReservePct: workspace.settings.outputReservePct,
-          safetyMarginPct: workspace.settings.safetyMarginPct,
-          templateType: activeModel.chatTemplate,
+          outputReservePct: currentWs.settings.outputReservePct,
+          safetyMarginPct: currentWs.settings.safetyMarginPct,
+          templateType: currentModel.chatTemplate,
           allowEmptyUserMessage: true,
         },
       );
@@ -1809,9 +1836,9 @@ export const App: React.FC = () => {
           },
           {
             modelContextLimit: effectiveLimit,
-            outputReservePct: workspace.settings.outputReservePct,
-            safetyMarginPct: workspace.settings.safetyMarginPct,
-            templateType: activeModel.chatTemplate,
+            outputReservePct: currentWs.settings.outputReservePct,
+            safetyMarginPct: currentWs.settings.safetyMarginPct,
+            templateType: currentModel.chatTemplate,
             allowEmptyUserMessage: true,
           },
         );
@@ -1837,17 +1864,47 @@ export const App: React.FC = () => {
         turnBudget: buildTurnContextBudget(currentInspection),
       }));
     }
-  }, [
-    composerText,
-    attachedFile,
-    activeSession,
-    activeModel,
-    generatingSessionId,
-    workspace.memoryNotes,
-    workspace.workspaceFiles,
-    workspace.settings,
-    logger,
-  ]);
+    },
+    [logger],
+  );
+
+  const handleSendMessage = useCallback(async () => {
+    const rawInput = composerText.trim();
+    if ((!rawInput && !attachedFile) || !activeSession) {
+      return;
+    }
+    if (generatingSessionId) return;
+    await dispatchChatTurn({
+      sessionId: activeSession.id,
+      rawInput,
+      attachedFile,
+      clearComposer: true,
+    });
+  }, [composerText, attachedFile, activeSession, generatingSessionId, dispatchChatTurn]);
+
+  const handleRetryUserMessage = useCallback(
+    async (messageId: string) => {
+      if (!activeSession || generatingSessionId) return;
+      const targetMsg = activeSession.messages.find(
+        (m) => m.id === messageId && m.role === 'user',
+      );
+      if (!targetMsg) return;
+      const cleanPrompt =
+        targetMsg.attachedFiles && targetMsg.attachedFiles.length > 0
+          ? targetMsg.content.replace(/\n\n\[Attached local file[\s\S]*$/, '').trim()
+          : targetMsg.content.trim();
+      const targetAttachment = targetMsg.attachedFiles?.[0] ?? null;
+      if (!cleanPrompt && !targetAttachment) return;
+      await dispatchChatTurn({
+        sessionId: activeSession.id,
+        rawInput: cleanPrompt,
+        attachedFile: targetAttachment,
+        truncateFromMessageId: messageId,
+        clearComposer: false,
+      });
+    },
+    [activeSession, generatingSessionId, dispatchChatTurn],
+  );
 
   const handleStopGeneration = useCallback(() => {
     if (controllerRef.current?.getStatus().state === 'generating') {
@@ -2364,6 +2421,7 @@ export const App: React.FC = () => {
                 }}
                 workspaceFilenames={workspaceFilenames}
                 onSaveArtifactToWorkspaceFiles={handleSaveArtifactToWorkspaceFiles}
+                onRetryUserMessage={(msgId) => void handleRetryUserMessage(msgId)}
               />
 
               {previewFile &&

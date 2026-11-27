@@ -16,6 +16,7 @@ import {
   Globe,
   Image,
   Paperclip,
+  RotateCcw,
   Search,
   Square,
   Table2,
@@ -243,6 +244,7 @@ interface ChatViewProps {
   onOpenFilePreview: (file: GeneratedFileArtifact) => void;
   workspaceFilenames?: Set<string>;
   onSaveArtifactToWorkspaceFiles?: (file: GeneratedFileArtifact) => void;
+  onRetryUserMessage?: (messageId: string) => void;
 }
 
 export const ChatView: React.FC<ChatViewProps> = ({
@@ -281,6 +283,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onOpenFilePreview,
   workspaceFilenames,
   onSaveArtifactToWorkspaceFiles,
+  onRetryUserMessage,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
@@ -638,31 +641,73 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       </span>
                     </div>
 
-                    {msg.role === 'user' ? (
-                      <div className="space-y-2 border-l-[3px] border-[var(--lc-quote-bar)] py-0.5 pl-4 text-[15px] leading-relaxed text-[var(--lc-ink)]">
-                        {msg.attachedFiles && msg.attachedFiles.length > 0 && (
-                          <div className="flex flex-wrap gap-1.5">
-                            {msg.attachedFiles.map((att) => (
-                              <span
-                                key={`${msg.id}-att-${att.name}`}
-                                className="inline-flex items-center gap-1.5 rounded-[6px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)] px-2.5 py-1 text-[12px] text-[var(--lc-panel-ink)]"
-                              >
-                                <Paperclip className="h-3 w-3 shrink-0 text-[var(--lc-panel-mute)]" />
-                                <span className="font-medium">{att.name}</span>
-                                <span className="text-[var(--lc-panel-mute)]">
-                                  ({countLines(att.content)} lines)
-                                </span>
-                              </span>
-                            ))}
+                    {msg.role === 'user' ? (() => {
+                      const displayPromptText =
+                        msg.attachedFiles && msg.attachedFiles.length > 0
+                          ? msg.content.replace(/\n\n\[Attached local file[\s\S]*$/, '')
+                          : msg.content;
+                      return (
+                        <div className="space-y-1.5">
+                          <div className="space-y-2 border-l-[3px] border-[var(--lc-quote-bar)] py-0.5 pl-4 text-[15px] leading-relaxed text-[var(--lc-ink)]">
+                            {msg.attachedFiles && msg.attachedFiles.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5">
+                                {msg.attachedFiles.map((att) => (
+                                  <span
+                                    key={`${msg.id}-att-${att.name}`}
+                                    className="inline-flex items-center gap-1.5 rounded-[6px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)] px-2.5 py-1 text-[12px] text-[var(--lc-panel-ink)]"
+                                  >
+                                    <Paperclip className="h-3 w-3 shrink-0 text-[var(--lc-panel-mute)]" />
+                                    <span className="font-medium">{att.name}</span>
+                                    <span className="text-[var(--lc-panel-mute)]">
+                                      ({countLines(att.content)} lines)
+                                    </span>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            <div className="whitespace-pre-wrap">{displayPromptText}</div>
                           </div>
-                        )}
-                        <div className="whitespace-pre-wrap">
-                          {msg.attachedFiles && msg.attachedFiles.length > 0
-                            ? msg.content.replace(/\n\n\[Attached local file[\s\S]*$/, '')
-                            : msg.content}
+
+                          <div className="flex flex-wrap items-center gap-2 pl-4">
+                            <button
+                              type="button"
+                              data-testid={`copy-user-message-${msg.id}`}
+                              onClick={() => {
+                                void navigator.clipboard?.writeText(displayPromptText || msg.content);
+                                setCopiedId(msg.id);
+                                setTimeout(() => setCopiedId(null), 1400);
+                              }}
+                              className="inline-flex items-center gap-1 rounded-[5px] px-2 py-0.5 text-[12px] text-[var(--lc-mute)] transition-colors hover:bg-[var(--lc-hover)] hover:text-[var(--lc-ink)]"
+                            >
+                              {copiedId === msg.id ? (
+                                <Check className="h-3.5 w-3.5 text-[var(--lc-success)]" />
+                              ) : (
+                                <Copy className="h-3.5 w-3.5" />
+                              )}
+                              <span>{copiedId === msg.id ? 'Copied' : 'Copy'}</span>
+                            </button>
+
+                            {onRetryUserMessage && (
+                              <button
+                                type="button"
+                                data-testid={`retry-user-message-${msg.id}`}
+                                disabled={isGenerating}
+                                onClick={() => onRetryUserMessage(msg.id)}
+                                title={
+                                  isGenerating
+                                    ? 'Wait for the current response to finish before retrying'
+                                    : 'Retry this prompt'
+                                }
+                                className="inline-flex items-center gap-1 rounded-[5px] px-2 py-0.5 text-[12px] text-[var(--lc-mute)] transition-colors hover:bg-[var(--lc-hover)] hover:text-[var(--lc-ink)] disabled:cursor-not-allowed disabled:opacity-45"
+                              >
+                                <RotateCcw className="h-3.5 w-3.5" />
+                                <span>Retry</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ) : (
+                      );
+                    })() : (
                       <div className="space-y-3 pt-0.5">
                         {msg.toolActivity && msg.toolActivity.length > 0 && (
                           <div
