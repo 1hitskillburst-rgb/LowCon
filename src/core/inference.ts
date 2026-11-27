@@ -5,6 +5,7 @@ import {
   EDIT_FILE_TOOL_NAME,
   READ_ATTACHED_CHUNK_TOOL_NAME,
   SAVE_MEMORY_TOOL_NAME,
+  SAVE_WORKSPACE_FILE_TOOL_NAME,
   SEARCH_MEMORY_TOOL_NAME,
 } from './tier1Tools';
 import { CREATE_FILE_TOOL_NAME, parseToolArgumentsJson } from './tools';
@@ -607,6 +608,13 @@ export function generateDeterministicMockReply(
       return `Saved memory note **"${title}"**${isPinned ? ' (pinned to persistent context)' : ''} — ${sourceRef}.`;
     }
 
+    if (lastMsg.name === SAVE_WORKSPACE_FILE_TOOL_NAME) {
+      const filename = typeof parsed?.filename === 'string' ? parsed.filename : 'file';
+      const action = parsed?.action === 'updated' ? 'Updated' : 'Saved';
+      const lines = typeof parsed?.lines === 'number' ? parsed.lines : undefined;
+      return `${action} \`${filename}\`${lines ? ` (${lines} lines)` : ''} in the persistent **Files** tab so you can reference it in any chat without re-uploading.`;
+    }
+
     const filename = typeof parsed?.filename === 'string' ? parsed.filename : 'generated_file';
     const lines = typeof parsed?.lines === 'number' ? parsed.lines : undefined;
     const language = typeof parsed?.language === 'string' ? parsed.language : 'code';
@@ -685,11 +693,22 @@ function findGeneratedFilesInMessages(messages: StructuredChatMessage[]): string
       }
     }
     if (msg.role === 'assistant' && typeof msg.content === 'string') {
-      const attachedMatches = msg.content.matchAll(/\[Attached generated files:\s*([^\]]+)\]/g);
+      const attachedMatches = msg.content.matchAll(
+        /\[(?:Attached|Session) generated files[^:\]]*:\s*([^\]]+)\]/g,
+      );
       for (const match of attachedMatches) {
         for (const entry of match[1].split(',')) {
           const name = entry.trim().replace(/\s*\([^)]*\)\s*$/, '').trim();
           if (name) pushUnique(name);
+        }
+      }
+    }
+    if (msg.role === 'system' && typeof msg.content === 'string') {
+      const filesTabIdx = msg.content.indexOf('[Local Files Tab');
+      if (filesTabIdx !== -1) {
+        const block = msg.content.slice(filesTabIdx);
+        for (const match of block.matchAll(/^- ([^\s(]+)\s*\(/gm)) {
+          if (match[1]) pushUnique(match[1]);
         }
       }
     }
@@ -754,6 +773,43 @@ function detectMockToolCallRequest(
   const attachmentSection = attachIdx >= 0 ? lastUser.slice(attachIdx) : '';
   const lower = userInstruction.toLowerCase();
 
+  const explicitFilenameMatch = /\b([a-z0-9_./-]+\.(?:rs|ts|tsx|js|jsx|py|go|cpp|c|html|htm|css|json|sh|yaml|yml|md|markdown|csv|tsv|svg|txt))\b/i.exec(
+    userInstruction,
+  );
+  const knownFiles = findGeneratedFilesInMessages(messages);
+
+  // 0. save_workspace_file (remember/store a file or note in the persistent Files tab)
+  const wantsFilesTabSave =
+    availableNames.has(SAVE_WORKSPACE_FILE_TOOL_NAME) &&
+    (/\b(save_workspace_file)\b/i.test(userInstruction) ||
+      /\b(?:save|store|remember|keep|put)\b.*\b(?:to|in)\s+(?:the\s+)?files(?:\s+tab)?\b/i.test(
+        userInstruction,
+      ) ||
+      (/\bremember\s+(?:this|the)\s+file\b/i.test(userInstruction)) ||
+      (/\bremember\b/i.test(userInstruction) &&
+        (Boolean(attachmentSection) || Boolean(explicitFilenameMatch))));
+
+  if (wantsFilesTabSave) {
+    const attachmentNameMatch =
+      /filename="([^"]+)"/i.exec(attachmentSection) ??
+      /Attached local file:\s*([^\s\]]+)/i.exec(attachmentSection);
+    const targetName =
+      explicitFilenameMatch?.[1] ??
+      attachmentNameMatch?.[1] ??
+      knownFiles[knownFiles.length - 1] ??
+      'remembered_notes.md';
+    const quotedMatch = /[`"]([^`"\n]{4,})[`"]/.exec(userInstruction);
+    const colonIdx = userInstruction.indexOf(':');
+    const inlineContent =
+      colonIdx !== -1 && userInstruction.slice(colonIdx + 1).trim().length > 0
+        ? userInstruction.slice(colonIdx + 1).trim()
+        : quotedMatch?.[1];
+    return makeMockToolCall(SAVE_WORKSPACE_FILE_TOOL_NAME, {
+      filename: targetName,
+      ...(inlineContent ? { content: inlineContent } : {}),
+    });
+  }
+
   // 1. save_memory_note
   if (
     availableNames.has(SAVE_MEMORY_TOOL_NAME) &&
@@ -800,9 +856,6 @@ function detectMockToolCallRequest(
   }
 
   // 3. explicit read_attached_chunk command / line range
-  const explicitFilenameMatch = /\b([a-z0-9_./-]+\.(?:rs|ts|tsx|js|jsx|py|go|cpp|c|html|htm|css|json|sh|yaml|yml|md|markdown|csv|tsv|svg|txt))\b/i.exec(
-    userInstruction,
-  );
   const isIndexedAttachment =
     /\[Attached local file \(?index/i.test(attachmentSection) ||
     /Use read_attached_chunk\(/i.test(attachmentSection);
@@ -895,7 +948,6 @@ function detectMockToolCallRequest(
   }
 
   // 5. edit_file
-  const knownFiles = findGeneratedFilesInMessages(messages);
   const hasEditVerb = /\b(edit|modify|update|patch|change|replace|fix|refactor)\b/i.test(
     userInstruction,
   );

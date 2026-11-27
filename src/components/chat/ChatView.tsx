@@ -109,7 +109,7 @@ function renderToolActivityBadge(label: string, idx: number): React.ReactNode {
     icon = <BookOpen className="h-3 w-3 shrink-0 text-[var(--lc-accent)]" />;
   } else if (lower.startsWith('searched memory') || lower.startsWith('searching ')) {
     icon = <Search className="h-3 w-3 shrink-0 text-[var(--lc-accent)]" />;
-  } else if (lower.startsWith('saved note') || lower.startsWith('saving memory')) {
+  } else if (lower.startsWith('saved note') || lower.startsWith('saving memory') || lower.startsWith('saved to files') || lower.startsWith('updated files') || lower.startsWith('saving to files')) {
     icon = <BookmarkPlus className="h-3 w-3 shrink-0 text-[var(--lc-success)]" />;
     tone = 'border-[var(--lc-success)]/30 bg-[var(--lc-success)]/8 text-[var(--lc-success)]';
   }
@@ -159,6 +159,8 @@ interface ChatViewProps {
   onSaveAsNote: (content: string, messageId: string) => void;
   activePreviewFileId?: string | null;
   onOpenFilePreview: (file: GeneratedFileArtifact) => void;
+  workspaceFilenames?: Set<string>;
+  onSaveArtifactToWorkspaceFiles?: (file: GeneratedFileArtifact) => void;
 }
 
 export const ChatView: React.FC<ChatViewProps> = ({
@@ -195,6 +197,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onSaveAsNote,
   activePreviewFileId,
   onOpenFilePreview,
+  workspaceFilenames,
+  onSaveArtifactToWorkspaceFiles,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
@@ -650,64 +654,97 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                 file.language,
                               );
                               const kindMeta = ARTIFACT_KIND_META[previewKind];
+                              const inWorkspace = Boolean(
+                                workspaceFilenames?.has(file.filename.toLowerCase()),
+                              );
                               return (
-                                <button
-                                  key={file.id}
-                                  type="button"
-                                  data-testid={`file-artifact-card-${file.id}`}
-                                  onClick={() => onOpenFilePreview(file)}
-                                  className={`group flex w-full max-w-[400px] items-center justify-between gap-3 rounded-[10px] border px-3.5 py-2.5 text-left transition-colors ${
-                                    isPreviewActive
-                                      ? 'border-[var(--lc-accent)] bg-[var(--lc-accent)]/8'
-                                      : 'border-[var(--lc-surf-line)] bg-[var(--lc-surface)] hover:border-[var(--lc-accent)]/60 hover:bg-[var(--lc-surf-hover)]/60'
-                                  }`}
-                                >
-                                  <div className="flex min-w-0 items-center gap-3">
-                                    <div
-                                      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] border ${
+                                <div key={file.id} className="flex max-w-[460px] items-center gap-2">
+                                  <button
+                                    type="button"
+                                    data-testid={`file-artifact-card-${file.id}`}
+                                    onClick={() => onOpenFilePreview(file)}
+                                    className={`group flex min-w-0 flex-1 items-center justify-between gap-3 rounded-[10px] border px-3.5 py-2.5 text-left transition-colors ${
+                                      isPreviewActive
+                                        ? 'border-[var(--lc-accent)] bg-[var(--lc-accent)]/8'
+                                        : 'border-[var(--lc-surf-line)] bg-[var(--lc-surface)] hover:border-[var(--lc-accent)]/60 hover:bg-[var(--lc-surf-hover)]/60'
+                                    }`}
+                                  >
+                                    <div className="flex min-w-0 items-center gap-3">
+                                      <div
+                                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] border ${
+                                          isPreviewActive
+                                            ? 'border-[var(--lc-accent)]/40 bg-[var(--lc-accent)]/15 text-[var(--lc-accent)]'
+                                            : 'border-[var(--lc-surf-line)] bg-[var(--lc-panel)] text-[var(--lc-surf-ink2)] group-hover:text-[var(--lc-surf-ink)]'
+                                        }`}
+                                      >
+                                        {kindMeta.icon}
+                                      </div>
+                                      <div className="min-w-0">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="truncate text-[13.5px] font-semibold text-[var(--lc-surf-ink)]">
+                                            {file.title}
+                                          </span>
+                                          {kindMeta.badge && (
+                                            <span
+                                              data-testid={`file-artifact-rich-badge-${file.id}`}
+                                              className="shrink-0 rounded-[4px] border border-[var(--lc-accent)]/30 bg-[var(--lc-accent)]/10 px-1.5 py-[1px] text-[10px] font-semibold text-[var(--lc-accent)]"
+                                            >
+                                              {kindMeta.badge}
+                                            </span>
+                                          )}
+                                          {file.isEdited && (
+                                            <span
+                                              data-testid={`file-artifact-edited-badge-${file.id}`}
+                                              className="shrink-0 rounded-[4px] border border-[var(--lc-success)]/35 bg-[var(--lc-success)]/10 px-1.5 py-[1px] text-[10px] font-semibold text-[var(--lc-success)]"
+                                            >
+                                              Edited
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="truncate text-[12px] text-[var(--lc-surf-mute)]">
+                                          {kindMeta.label} · {extBadge} · {lines}{' '}
+                                          {lines === 1 ? 'line' : 'lines'}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <ChevronRight
+                                      className={`h-4 w-4 shrink-0 transition-transform ${
                                         isPreviewActive
-                                          ? 'border-[var(--lc-accent)]/40 bg-[var(--lc-accent)]/15 text-[var(--lc-accent)]'
-                                          : 'border-[var(--lc-surf-line)] bg-[var(--lc-panel)] text-[var(--lc-surf-ink2)] group-hover:text-[var(--lc-surf-ink)]'
+                                          ? 'text-[var(--lc-accent)]'
+                                          : 'text-[var(--lc-surf-mute)] group-hover:translate-x-0.5 group-hover:text-[var(--lc-surf-ink)]'
+                                      }`}
+                                    />
+                                  </button>
+                                  {onSaveArtifactToWorkspaceFiles && (
+                                    <button
+                                      type="button"
+                                      data-testid={`save-artifact-to-files-${file.id}`}
+                                      onClick={() => onSaveArtifactToWorkspaceFiles(file)}
+                                      title={
+                                        inWorkspace
+                                          ? 'Update copy in Files tab'
+                                          : 'Save to persistent Files tab'
+                                      }
+                                      className={`inline-flex shrink-0 items-center gap-1 rounded-[8px] border px-2.5 py-2 text-[11.5px] font-medium transition-colors ${
+                                        inWorkspace
+                                          ? 'border-[var(--lc-success)]/35 bg-[var(--lc-success)]/10 text-[var(--lc-success)] hover:bg-[var(--lc-success)]/15'
+                                          : 'border-[var(--lc-surf-line)] bg-[var(--lc-surface)] text-[var(--lc-surf-ink2)] hover:bg-[var(--lc-surf-hover)] hover:text-[var(--lc-surf-ink)]'
                                       }`}
                                     >
-                                      {kindMeta.icon}
-                                    </div>
-                                    <div className="min-w-0">
-                                      <div className="flex items-center gap-1.5">
-                                        <span className="truncate text-[13.5px] font-semibold text-[var(--lc-surf-ink)]">
-                                          {file.title}
-                                        </span>
-                                        {kindMeta.badge && (
-                                          <span
-                                            data-testid={`file-artifact-rich-badge-${file.id}`}
-                                            className="shrink-0 rounded-[4px] border border-[var(--lc-accent)]/30 bg-[var(--lc-accent)]/10 px-1.5 py-[1px] text-[10px] font-semibold text-[var(--lc-accent)]"
-                                          >
-                                            {kindMeta.badge}
-                                          </span>
-                                        )}
-                                        {file.isEdited && (
-                                          <span
-                                            data-testid={`file-artifact-edited-badge-${file.id}`}
-                                            className="shrink-0 rounded-[4px] border border-[var(--lc-success)]/35 bg-[var(--lc-success)]/10 px-1.5 py-[1px] text-[10px] font-semibold text-[var(--lc-success)]"
-                                          >
-                                            Edited
-                                          </span>
-                                        )}
-                                      </div>
-                                      <div className="truncate text-[12px] text-[var(--lc-surf-mute)]">
-                                        {kindMeta.label} · {extBadge} · {lines}{' '}
-                                        {lines === 1 ? 'line' : 'lines'}
-                                      </div>
-                                    </div>
-                                  </div>
-                                  <ChevronRight
-                                    className={`h-4 w-4 shrink-0 transition-transform ${
-                                      isPreviewActive
-                                        ? 'text-[var(--lc-accent)]'
-                                        : 'text-[var(--lc-surf-mute)] group-hover:translate-x-0.5 group-hover:text-[var(--lc-surf-ink)]'
-                                    }`}
-                                  />
-                                </button>
+                                      {inWorkspace ? (
+                                        <>
+                                          <Check className="h-3.5 w-3.5" />
+                                          <span>In Files</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <BookmarkPlus className="h-3.5 w-3.5" />
+                                          <span>Save</span>
+                                        </>
+                                      )}
+                                    </button>
+                                  )}
+                                </div>
                               );
                             })}
                           </div>

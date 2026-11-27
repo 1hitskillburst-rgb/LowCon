@@ -118,6 +118,21 @@ export interface AttachedFileAttachment {
   content: string;
 }
 
+export type WorkspaceFileSource = 'upload' | 'chat' | 'ai';
+
+export interface WorkspaceFile {
+  id: string;
+  filename: string;
+  title: string;
+  language: string;
+  content: string;
+  sizeBytes: number;
+  createdAt: number;
+  updatedAt: number;
+  lockedByUser: boolean;
+  source: WorkspaceFileSource;
+}
+
 export interface StructuredChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
@@ -225,6 +240,7 @@ export interface AppSettings {
   selectedLmModel: string;
   modelDisplayAliases?: Record<string, string>;
   modelIconOverrides?: Record<string, ModelOrigin>;
+  allowAiFileEdits: boolean;
   connectionStatus: string;
   storageNamespace: string;
   theme?: ThemeSettings;
@@ -256,6 +272,7 @@ export interface PersistedWorkspace {
   models: ModelProfile[];
   activeModelId: string;
   memoryNotes: MemoryNote[];
+  workspaceFiles: WorkspaceFile[];
   settings: AppSettings;
 }
 

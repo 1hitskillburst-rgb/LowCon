@@ -13,13 +13,16 @@ import type {
   GeneratedFileArtifact,
   MemoryNote,
   ToolDefinition,
+  WorkspaceFile,
 } from './types';
+import { upsertWorkspaceFile } from './workspaceFiles';
 
 export const CALCULATE_TOOL_NAME = 'calculate';
 export const EDIT_FILE_TOOL_NAME = 'edit_file';
 export const READ_ATTACHED_CHUNK_TOOL_NAME = 'read_attached_chunk';
 export const SEARCH_MEMORY_TOOL_NAME = 'search_memory';
 export const SAVE_MEMORY_TOOL_NAME = 'save_memory_note';
+export const SAVE_WORKSPACE_FILE_TOOL_NAME = 'save_workspace_file';
 
 export const MAX_ATTACHED_CHUNK_LINES = 120;
 export const ATTACHED_FILE_INDEX_LINE_THRESHOLD = 80;
@@ -127,6 +130,25 @@ export type SaveMemoryNoteToolResult =
       toolResultJson: string;
     };
 
+export interface SaveWorkspaceFileOptions {
+  allowAiFileEdits?: boolean;
+  nowMs?: number;
+}
+
+export type SaveWorkspaceFileToolResult =
+  | {
+      ok: true;
+      file: WorkspaceFile;
+      files: WorkspaceFile[];
+      action: 'created' | 'updated';
+      toolResultJson: string;
+    }
+  | {
+      ok: false;
+      error: string;
+      toolResultJson: string;
+    };
+
 export const CALCULATE_TOOL_DEFINITION: ToolDefinition = {
   type: 'function',
   function: {
@@ -156,7 +178,7 @@ export const EDIT_FILE_TOOL_DEFINITION: ToolDefinition = {
   function: {
     name: EDIT_FILE_TOOL_NAME,
     description:
-      'Patch an existing generated session file in place via edits[] or top-level (start_line, end_line, replacement) or (old_text, new_text). Prefer this over create_file when modifying an existing file.',
+      'Patch an existing session or persistent Files-tab file in place via edits[] or top-level (start_line, end_line, replacement) or (old_text, new_text). Prefer this over create_file when modifying an existing file.',
     parameters: {
       type: 'object',
       properties: {
@@ -193,7 +215,7 @@ export const READ_ATTACHED_CHUNK_TOOL_DEFINITION: ToolDefinition = {
   type: 'function',
   function: {
     name: READ_ATTACHED_CHUNK_TOOL_NAME,
-    description: `Read 1-indexed lines (max ${MAX_ATTACHED_CHUNK_LINES}) from an attached or previously generated session file (use to inspect a file before calling edit_file).`,
+    description: `Read 1-indexed lines (max ${MAX_ATTACHED_CHUNK_LINES}) from an attached, persistent Files-tab, or generated session file (inspect a file before calling edit_file).`,
     parameters: {
       type: 'object',
       properties: {
@@ -242,6 +264,26 @@ export const SAVE_MEMORY_TOOL_DEFINITION: ToolDefinition = {
   },
 };
 
+export const SAVE_WORKSPACE_FILE_TOOL_DEFINITION: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: SAVE_WORKSPACE_FILE_TOOL_NAME,
+    description:
+      'Store a file in the persistent Files tab so any future chat can reference or edit it without re-uploading. Provide content, or omit content to save an existing session attachment/generated file by filename.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filename: { type: 'string' },
+        content: { type: 'string' },
+        title: { type: 'string' },
+        language: { type: 'string' },
+      },
+      required: ['filename'],
+      additionalProperties: false,
+    },
+  },
+};
+
 export const TIER1_TOOL_DEFINITIONS: ToolDefinition[] = [
   CALCULATE_TOOL_DEFINITION,
   EDIT_FILE_TOOL_DEFINITION,
@@ -255,10 +297,15 @@ export const ALL_FILE_AND_TIER1_TOOLS: ToolDefinition[] = [
   ...TIER1_TOOL_DEFINITIONS,
 ];
 
+export const ALL_WORKSPACE_TOOLS: ToolDefinition[] = [
+  ...ALL_FILE_AND_TIER1_TOOLS,
+  SAVE_WORKSPACE_FILE_TOOL_DEFINITION,
+];
+
 export const TIER1_TOOL_POLICY_INSTRUCTION = `[Tier 1 Tools]
 - \`${CALCULATE_TOOL_NAME}\`: Exact math, json_validate, regex_test, or date_diff.
-- \`${EDIT_FILE_TOOL_NAME}\`: Patch existing generated session files (inspect lines with \`${READ_ATTACHED_CHUNK_TOOL_NAME}\` first if needed); never echo the full file.
-- \`${READ_ATTACHED_CHUNK_TOOL_NAME}\`: Read attached or generated session files in <=${MAX_ATTACHED_CHUNK_LINES}-line chunks.
+- \`${EDIT_FILE_TOOL_NAME}\`: Patch existing session or Files-tab files (inspect lines with \`${READ_ATTACHED_CHUNK_TOOL_NAME}\` first if needed); never echo the full file.
+- \`${READ_ATTACHED_CHUNK_TOOL_NAME}\`: Read attached, Files-tab, or generated session files in <=${MAX_ATTACHED_CHUNK_LINES}-line chunks.
 - \`${SEARCH_MEMORY_TOOL_NAME}\` / \`${SAVE_MEMORY_TOOL_NAME}\`: Recall prior facts or save durable rules/decisions.`;
 
 export const FULL_TOOL_CALL_POLICY_INSTRUCTION = buildToolPolicyInstruction(
@@ -267,10 +314,11 @@ export const FULL_TOOL_CALL_POLICY_INSTRUCTION = buildToolPolicyInstruction(
 
 const TIER1_POLICY_BULLETS: Record<string, string> = {
   [CALCULATE_TOOL_NAME]: `- \`${CALCULATE_TOOL_NAME}\`: Exact math, json_validate, regex_test, or date_diff.`,
-  [EDIT_FILE_TOOL_NAME]: `- \`${EDIT_FILE_TOOL_NAME}\`: Patch existing generated session files (inspect with \`${READ_ATTACHED_CHUNK_TOOL_NAME}\` first if needed); never echo the full file.`,
-  [READ_ATTACHED_CHUNK_TOOL_NAME]: `- \`${READ_ATTACHED_CHUNK_TOOL_NAME}\`: Read attached or generated session files in <=${MAX_ATTACHED_CHUNK_LINES}-line chunks.`,
+  [EDIT_FILE_TOOL_NAME]: `- \`${EDIT_FILE_TOOL_NAME}\`: Patch existing session or Files-tab files (inspect with \`${READ_ATTACHED_CHUNK_TOOL_NAME}\` first if needed); never echo the full file.`,
+  [READ_ATTACHED_CHUNK_TOOL_NAME]: `- \`${READ_ATTACHED_CHUNK_TOOL_NAME}\`: Read attached, Files-tab, or generated session files in <=${MAX_ATTACHED_CHUNK_LINES}-line chunks.`,
   [SEARCH_MEMORY_TOOL_NAME]: `- \`${SEARCH_MEMORY_TOOL_NAME}\`: Search saved local memory notes.`,
   [SAVE_MEMORY_TOOL_NAME]: `- \`${SAVE_MEMORY_TOOL_NAME}\`: Save durable facts, preferences, or rules.`,
+  [SAVE_WORKSPACE_FILE_TOOL_NAME]: `- \`${SAVE_WORKSPACE_FILE_TOOL_NAME}\`: Remember/store a file in the persistent Files tab across chats (omit content to copy an existing session file).`,
 };
 
 export function buildToolPolicyForTools(tools: ToolDefinition[]): string {
@@ -291,37 +339,54 @@ export function buildToolPolicyForTools(tools: ToolDefinition[]): string {
 
 export function selectToolsForPromptBudget(
   modelContextLimit: number,
-  options: { hasAttachments: boolean; hasGeneratedFiles: boolean } = {
+  options: {
+    hasAttachments: boolean;
+    hasGeneratedFiles: boolean;
+    hasWorkspaceFiles?: boolean;
+    includeWorkspaceFileTool?: boolean;
+    allowAiFileEdits?: boolean;
+  } = {
     hasAttachments: false,
     hasGeneratedFiles: false,
   },
 ): ToolDefinition[] {
+  const allowEdits = options.allowAiFileEdits !== false;
+  const filterEditable = (list: ToolDefinition[]) =>
+    allowEdits ? list : list.filter((t) => t.function.name !== EDIT_FILE_TOOL_NAME);
+
   if (modelContextLimit >= 4096) {
-    return ALL_FILE_AND_TIER1_TOOLS;
+    const base = options.includeWorkspaceFileTool ? ALL_WORKSPACE_TOOLS : ALL_FILE_AND_TIER1_TOOLS;
+    return filterEditable(base);
   }
   if (modelContextLimit < 1536) {
     return [];
   }
   // On ultra-low ~2K context windows, keep a lean contextual tool subset so
   // pinned notes + indexed attachments + active tools always fit inside promptBudget.
-  if (options.hasAttachments && options.hasGeneratedFiles) {
-    return [READ_ATTACHED_CHUNK_TOOL_DEFINITION, EDIT_FILE_TOOL_DEFINITION];
+  const hasReadable = options.hasAttachments || Boolean(options.hasWorkspaceFiles);
+  const hasEditable = options.hasGeneratedFiles || Boolean(options.hasWorkspaceFiles);
+  if (hasReadable && hasEditable) {
+    return filterEditable([READ_ATTACHED_CHUNK_TOOL_DEFINITION, EDIT_FILE_TOOL_DEFINITION]);
   }
-  if (options.hasAttachments) {
-    return [
+  if (hasReadable) {
+    return filterEditable([
       READ_ATTACHED_CHUNK_TOOL_DEFINITION,
       CALCULATE_TOOL_DEFINITION,
       CREATE_FILE_TOOL_DEFINITION,
-    ];
+    ]);
   }
-  if (options.hasGeneratedFiles) {
-    return [EDIT_FILE_TOOL_DEFINITION, CALCULATE_TOOL_DEFINITION];
+  if (hasEditable) {
+    return filterEditable([EDIT_FILE_TOOL_DEFINITION, CALCULATE_TOOL_DEFINITION]);
   }
-  return [
+  const defaults2k: ToolDefinition[] = [
     CREATE_FILE_TOOL_DEFINITION,
     CALCULATE_TOOL_DEFINITION,
     SEARCH_MEMORY_TOOL_DEFINITION,
   ];
+  if (options.includeWorkspaceFileTool) {
+    defaults2k.push(SAVE_WORKSPACE_FILE_TOOL_DEFINITION);
+  }
+  return filterEditable(defaults2k);
 }
 
 export function getToolPendingActivityLabel(toolName: string): string {
@@ -333,11 +398,13 @@ export function getToolPendingActivityLabel(toolName: string): string {
     case CALCULATE_TOOL_NAME:
       return 'Calculating...';
     case READ_ATTACHED_CHUNK_TOOL_NAME:
-      return 'Reading attached file...';
+      return 'Reading file...';
     case SEARCH_MEMORY_TOOL_NAME:
       return 'Searching local memory...';
     case SAVE_MEMORY_TOOL_NAME:
       return 'Saving memory note...';
+    case SAVE_WORKSPACE_FILE_TOOL_NAME:
+      return 'Saving to Files tab...';
     default:
       return `Running ${toolName}...`;
   }
@@ -1925,6 +1992,93 @@ export function executeSaveMemoryNoteTool(
       sourceReference: note.sourceReference,
       ...(boundedContent !== rawContent ? { truncated: true } : {}),
       message: `Saved memory note '${note.title}'${note.isPinned ? ' (pinned)' : ''}.`,
+    }),
+  };
+}
+
+function makeSaveWorkspaceFileError(error: string): SaveWorkspaceFileToolResult {
+  return {
+    ok: false,
+    error,
+    toolResultJson: JSON.stringify({ status: 'error', error }),
+  };
+}
+
+export function executeSaveWorkspaceFileTool(
+  rawArguments: string,
+  existingFiles: WorkspaceFile[],
+  sessionSourceFiles: AttachedFileAttachment[],
+  createId: () => string,
+  options: SaveWorkspaceFileOptions = {},
+): SaveWorkspaceFileToolResult {
+  const args = parseToolArgumentsJson(rawArguments);
+  if (!args) {
+    return makeSaveWorkspaceFileError(
+      'Invalid JSON arguments for save_workspace_file. Provide an object with filename and optional content.',
+    );
+  }
+
+  const rawFilename = typeof args.filename === 'string' ? args.filename.trim() : '';
+  if (!rawFilename) {
+    return makeSaveWorkspaceFileError('save_workspace_file requires a non-empty string "filename".');
+  }
+
+  let resolvedContent = typeof args.content === 'string' ? args.content : '';
+  if (!resolvedContent.trim()) {
+    const match = resolveFileByName(
+      sessionSourceFiles,
+      rawFilename,
+      (f) => f.name,
+      'No content provided and no matching attached or generated file exists in this session.',
+      true,
+    );
+    if (!match.ok) {
+      return makeSaveWorkspaceFileError(
+        `save_workspace_file requires "content" or a matching session file for '${rawFilename}'.`,
+      );
+    }
+    resolvedContent = match.item.content;
+  }
+
+  if (!resolvedContent.trim()) {
+    return makeSaveWorkspaceFileError('save_workspace_file content cannot be empty.');
+  }
+
+  const res = upsertWorkspaceFile(
+    existingFiles,
+    {
+      filename: rawFilename,
+      content: resolvedContent,
+      title: typeof args.title === 'string' ? args.title : undefined,
+      language: typeof args.language === 'string' ? args.language : undefined,
+      source: 'ai',
+    },
+    createId,
+    {
+      allowAiEdit: options.allowAiFileEdits,
+      nowMs: options.nowMs,
+    },
+  );
+
+  if (!res.ok) {
+    return makeSaveWorkspaceFileError(res.error);
+  }
+
+  const lines = countLines(res.file.content);
+  return {
+    ok: true,
+    file: res.file,
+    files: res.files,
+    action: res.action,
+    toolResultJson: JSON.stringify({
+      status: 'ok',
+      action: res.action,
+      id: res.file.id,
+      filename: res.file.filename,
+      language: res.file.language,
+      lines,
+      sizeBytes: res.file.sizeBytes,
+      message: `${res.action === 'created' ? 'Saved' : 'Updated'} '${res.file.filename}' (${lines} lines) in the persistent Files tab. Future chats can inspect it via read_attached_chunk.`,
     }),
   };
 }

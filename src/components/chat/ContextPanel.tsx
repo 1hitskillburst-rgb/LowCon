@@ -5,6 +5,7 @@ import type { ContextSegmentKey, MemoryNote, TurnContextBudget } from '../../cor
 import { ContextSegmentRow, VerticalContextStack } from './ContextBudgetViz';
 
 interface ContextPanelProps {
+  embedded?: boolean;
   budget: TurnContextBudget;
   previewWarning?: string | null;
   taskGoal?: string;
@@ -19,6 +20,7 @@ interface ContextPanelProps {
 }
 
 export const ContextPanel: React.FC<ContextPanelProps> = ({
+  embedded = false,
   budget,
   previewWarning,
   taskGoal,
@@ -52,11 +54,8 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
     (n) => !n.isDisabled && (includedSet.has(n.id) || (n.isPinned && !n.isSummary)),
   );
 
-  return (
-    <aside
-      aria-label="Context window and active memory"
-      className="flex h-full w-[344px] shrink-0 flex-col overflow-y-auto border-l border-[var(--lc-line)] bg-[var(--lc-panel)] px-[22px] pt-[22px] pb-7 text-[var(--lc-side-ink)]"
-    >
+  const content = (
+    <>
       {/* Header */}
       <div className="flex items-center justify-between">
         <h2 className="text-[15px] font-bold text-[var(--lc-side-ink)]">Context window</h2>
@@ -256,6 +255,23 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
           />
         </button>
       </div>
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-4 pb-7 text-[var(--lc-side-ink)]">
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <aside
+      aria-label="Context window and active memory"
+      className="flex h-full w-[344px] shrink-0 flex-col overflow-y-auto border-l border-[var(--lc-line)] bg-[var(--lc-panel)] px-[22px] pt-[22px] pb-7 text-[var(--lc-side-ink)]"
+    >
+      {content}
     </aside>
   );
 };

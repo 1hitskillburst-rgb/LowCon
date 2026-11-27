@@ -1,5 +1,19 @@
 import React, { useMemo, useState } from 'react';
-import { Check, Code2, Copy, Download, Eye, FileText, Globe, Image, Table2, X } from 'lucide-react';
+import {
+  BookmarkPlus,
+  Check,
+  Code2,
+  Copy,
+  Download,
+  Eye,
+  FileText,
+  Globe,
+  Image,
+  Lock,
+  LockOpen,
+  Table2,
+  X,
+} from 'lucide-react';
 import { detectArtifactPreviewKind, type ArtifactPreviewKind } from '../../core/artifactPreview';
 import { countLines, getFileExtensionBadge } from '../../core/tools';
 import type { GeneratedFileArtifact } from '../../core/types';
@@ -9,6 +23,10 @@ import { RichArtifactPreview } from './RichArtifactPreview';
 interface FilePreviewPanelProps {
   file: GeneratedFileArtifact;
   onClose: () => void;
+  isInWorkspaceFiles?: boolean;
+  isLockedInWorkspace?: boolean;
+  onToggleWorkspaceLock?: () => void;
+  onSaveToWorkspaceFiles?: () => void;
 }
 
 function renderKindIcon(kind: ArtifactPreviewKind): React.ReactNode {
@@ -26,7 +44,14 @@ function renderKindIcon(kind: ArtifactPreviewKind): React.ReactNode {
   }
 }
 
-export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({ file, onClose }) => {
+export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
+  file,
+  onClose,
+  isInWorkspaceFiles = false,
+  isLockedInWorkspace = false,
+  onToggleWorkspaceLock,
+  onSaveToWorkspaceFiles,
+}) => {
   const [copied, setCopied] = useState(false);
   const [viewModeOverride, setViewModeOverride] = useState<{
     fileId: string;
@@ -104,6 +129,62 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({ file, onClos
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
+          {onToggleWorkspaceLock ? (
+            <button
+              type="button"
+              onClick={onToggleWorkspaceLock}
+              data-testid="file-preview-lock-toggle"
+              className={`inline-flex items-center gap-1 rounded-[6px] border px-2 py-1 text-[11.5px] font-medium transition-colors ${
+                isLockedInWorkspace
+                  ? 'border-[var(--lc-warn)]/45 bg-[var(--lc-warn)]/12 text-[var(--lc-warn)]'
+                  : 'border-[var(--lc-code-border)] bg-[var(--lc-code-bg)] text-[var(--lc-code-mute)] hover:text-[var(--lc-code-text)]'
+              }`}
+              title={
+                isLockedInWorkspace
+                  ? 'Locked against LLM edits (click to unlock)'
+                  : 'LLMs can edit this file (click to lock)'
+              }
+            >
+              {isLockedInWorkspace ? (
+                <>
+                  <Lock className="h-3 w-3" />
+                  <span>Locked</span>
+                </>
+              ) : (
+                <>
+                  <LockOpen className="h-3 w-3" />
+                  <span>Editable</span>
+                </>
+              )}
+            </button>
+          ) : (
+            onSaveToWorkspaceFiles && (
+              <button
+                type="button"
+                onClick={onSaveToWorkspaceFiles}
+                data-testid="file-preview-save-workspace"
+                className={`inline-flex items-center gap-1 rounded-[6px] border px-2 py-1 text-[11.5px] font-medium transition-colors ${
+                  isInWorkspaceFiles
+                    ? 'border-[var(--lc-success)]/40 bg-[var(--lc-success)]/12 text-[var(--lc-success)]'
+                    : 'border-[var(--lc-code-border)] bg-[var(--lc-code-bg)] text-[var(--lc-code-text)] hover:bg-[var(--lc-hover)]'
+                }`}
+                title="Store in the persistent Files tab across chats"
+              >
+                {isInWorkspaceFiles ? (
+                  <>
+                    <Check className="h-3 w-3" />
+                    <span>In Files</span>
+                  </>
+                ) : (
+                  <>
+                    <BookmarkPlus className="h-3 w-3" />
+                    <span>Save to Files</span>
+                  </>
+                )}
+              </button>
+            )
+          )}
+
           {isRichFormat && (
             <div
               role="group"

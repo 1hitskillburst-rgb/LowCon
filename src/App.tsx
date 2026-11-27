@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 import { ChatView } from './components/chat/ChatView';
-import { ContextPanel } from './components/chat/ContextPanel';
 import { FilePreviewPanel } from './components/chat/FilePreviewPanel';
+import { RightSidebarPanel, type RightSidebarTab } from './components/chat/RightSidebarPanel';
 import { SidebarNav } from './components/layout/SidebarNav';
 import { PromptInspectorModal } from './components/modals/PromptInspectorModal';
 import { SourcesModal } from './components/modals/SourcesModal';
@@ -42,7 +42,7 @@ import {
 } from './core/storage';
 import { applyThemeToDocument } from './core/theme';
 import {
-  ALL_FILE_AND_TIER1_TOOLS,
+  ALL_WORKSPACE_TOOLS,
   buildToolPolicyForTools,
   CALCULATE_TOOL_NAME,
   EDIT_FILE_TOOL_NAME,
@@ -50,14 +50,22 @@ import {
   executeEditFileTool,
   executeReadAttachedChunkTool,
   executeSaveMemoryNoteTool,
+  executeSaveWorkspaceFileTool,
   executeSearchMemoryTool,
   formatAttachedFileForPrompt,
   getToolPendingActivityLabel,
   READ_ATTACHED_CHUNK_TOOL_NAME,
   SAVE_MEMORY_TOOL_NAME,
+  SAVE_WORKSPACE_FILE_TOOL_NAME,
   SEARCH_MEMORY_TOOL_NAME,
   selectToolsForPromptBudget,
 } from './core/tier1Tools';
+import {
+  computeUtf8Bytes,
+  formatWorkspaceFilesCatalogForPrompt,
+  upsertWorkspaceFile,
+  workspaceFileToArtifact,
+} from './core/workspaceFiles';
 import {
   countLines,
   CREATE_FILE_TOOL_NAME,
@@ -83,6 +91,7 @@ import {
   type ToolCallRecord,
   type ToolDefinition,
   type WorkerStatus,
+  type WorkspaceFile,
 } from './core/types';
 
 const MAX_TOOL_ROUNDS = 8;
@@ -93,17 +102,23 @@ const CORE_SYSTEM_INSTRUCTION =
 function buildEffectiveCoreInstruction(
   settings: AppSettings,
   activeTools: ToolDefinition[],
+  workspaceFiles: WorkspaceFile[] = [],
 ): string {
+  const parts: string[] = [CORE_SYSTEM_INSTRUCTION];
   const toolPolicy = buildToolPolicyForTools(activeTools);
-  const base = toolPolicy ? `${CORE_SYSTEM_INSTRUCTION}\n\n${toolPolicy}` : CORE_SYSTEM_INSTRUCTION;
-  if (!settings.promptEffortEnabled) {
-    return base;
+  if (toolPolicy) parts.push(toolPolicy);
+  const filesCatalog = formatWorkspaceFilesCatalogForPrompt(
+    workspaceFiles,
+    settings.allowAiFileEdits,
+  );
+  if (filesCatalog) parts.push(filesCatalog);
+  if (settings.promptEffortEnabled) {
+    const effortPrompt = settings.promptEffortPrompts?.[settings.effortLevel]?.trim();
+    if (effortPrompt) {
+      parts.push(`[Reasoning Effort: ${settings.effortLevel.toUpperCase()}]\n${effortPrompt}`);
+    }
   }
-  const effortPrompt = settings.promptEffortPrompts?.[settings.effortLevel]?.trim();
-  if (!effortPrompt) {
-    return base;
-  }
-  return `${base}\n\n[Reasoning Effort: ${settings.effortLevel.toUpperCase()}]\n${effortPrompt}`;
+  return parts.join('\n\n');
 }
 
 function formatUserMessageWithAttachment(
@@ -174,6 +189,7 @@ function buildLivePreviewInspection(
   session: Session | undefined,
   activeModel: ModelProfile | undefined,
   memoryNotes: MemoryNote[],
+  workspaceFiles: WorkspaceFile[],
   settings: AppSettings,
   composerText: string,
   attachedFile: { name: string; content: string } | null,
@@ -212,10 +228,13 @@ function buildLivePreviewInspection(
   const selectedTools = selectToolsForPromptBudget(effectiveLimit, {
     hasAttachments,
     hasGeneratedFiles,
+    hasWorkspaceFiles: workspaceFiles.length > 0,
+    includeWorkspaceFileTool: true,
+    allowAiFileEdits: settings.allowAiFileEdits,
   });
 
   const candidates: AssemblyCandidates = {
-    coreInstruction: buildEffectiveCoreInstruction(settings, selectedTools),
+    coreInstruction: buildEffectiveCoreInstruction(settings, selectedTools, workspaceFiles),
     currentUserMessage: previewUserMsg,
     pinnedFacts: pinnedNotes.map((n) => ({
       id: n.id,
@@ -295,6 +314,7 @@ export const App: React.FC = () => {
   });
 
   const [currentTab, setCurrentTab] = useState<NavigationTab>('chat');
+  const [rightSidebarTab, setRightSidebarTab] = useState<RightSidebarTab>('context');
   const [composerText, setComposerText] = useState('');
   const [attachedFile, setAttachedFile] = useState<{ name: string; content: string } | null>(null);
   const [hoveredSegment, setHoveredSegment] = useState<ContextSegmentKey | null>(null);
@@ -303,6 +323,7 @@ export const App: React.FC = () => {
   const [previewFile, setPreviewFile] = useState<{
     file: GeneratedFileArtifact;
     sessionId: string;
+    workspaceFileId?: string;
   } | null>(null);
   const [lastTurnInspection, setLastTurnInspection] = useState<PromptInspection | null>(null);
   const [workerStatus, setWorkerStatus] = useState<WorkerStatus>({ state: 'unloaded' });
@@ -440,6 +461,7 @@ export const App: React.FC = () => {
       activeSession,
       activeModel,
       workspace.memoryNotes,
+      workspace.workspaceFiles,
       workspace.settings,
       composerText,
       attachedFile,
@@ -452,6 +474,7 @@ export const App: React.FC = () => {
     generatingSessionId,
     activeModel,
     workspace.memoryNotes,
+    workspace.workspaceFiles,
     workspace.settings,
   ]);
 
@@ -663,15 +686,23 @@ export const App: React.FC = () => {
 
     const summaryCandidates = buildSummaryCandidates(workspace.memoryNotes, targetSessionId);
     const historyTurns = mapSessionHistoryTurns(activeSession.messages);
+    let turnWorkspaceFiles = [...workspace.workspaceFiles];
     const selectedTools = selectToolsForPromptBudget(effectiveLimit, {
       hasAttachments:
         Boolean(currentAttachedFile) ||
         activeSession.messages.some((m) => (m.attachedFiles?.length ?? 0) > 0),
       hasGeneratedFiles: activeSession.messages.some((m) => (m.generatedFiles?.length ?? 0) > 0),
+      hasWorkspaceFiles: turnWorkspaceFiles.length > 0,
+      includeWorkspaceFileTool: true,
+      allowAiFileEdits: workspace.settings.allowAiFileEdits,
     });
 
     const baseAssemblyCandidates = {
-      coreInstruction: buildEffectiveCoreInstruction(workspace.settings, selectedTools),
+      coreInstruction: buildEffectiveCoreInstruction(
+        workspace.settings,
+        selectedTools,
+        turnWorkspaceFiles,
+      ),
       pinnedFacts: pinnedNotes.map((n) => ({
         id: n.id,
         title: n.title,
@@ -1150,26 +1181,136 @@ export const App: React.FC = () => {
             content: exec.toolResultJson,
           });
         } else if (tc.function.name === EDIT_FILE_TOOL_NAME) {
-          const exec = executeEditFileTool(tc.function.arguments, getSessionGeneratedFiles());
+          const parsedEditArgs = parseToolArgumentsJson(tc.function.arguments);
+          const requestedEditName =
+            typeof parsedEditArgs?.filename === 'string' ? parsedEditArgs.filename.trim() : '';
+          const liveWorkspaceFiles = workspaceRef.current.workspaceFiles;
+          const allowEditsOverall = workspaceRef.current.settings.allowAiFileEdits;
+          const liveLockedMatch = requestedEditName
+            ? liveWorkspaceFiles.find(
+                (wf) => wf.filename.toLowerCase() === requestedEditName.toLowerCase(),
+              )
+            : undefined;
+
+          // Sync turnWorkspaceFiles with any user lock toggles or uploads performed concurrently
+          const mergedEditableByLower = new Map<string, GeneratedFileArtifact>();
+          for (const wf of turnWorkspaceFiles) {
+            mergedEditableByLower.set(wf.filename.toLowerCase(), workspaceFileToArtifact(wf));
+          }
+          for (const gen of getSessionGeneratedFiles()) {
+            mergedEditableByLower.set(gen.filename.toLowerCase(), gen);
+          }
+
+          let exec: ReturnType<typeof executeEditFileTool>;
+          if (!allowEditsOverall) {
+            const error = 'AI file edits are disabled overall in Settings.';
+            exec = {
+              ok: false,
+              error,
+              toolResultJson: JSON.stringify({ status: 'error', error }),
+            };
+          } else if (liveLockedMatch?.lockedByUser) {
+            const error = `File '${liveLockedMatch.filename}' is locked against LLM edits in the Files tab.`;
+            exec = {
+              ok: false,
+              error,
+              toolResultJson: JSON.stringify({ status: 'error', error }),
+            };
+          } else {
+            const candidateExec = executeEditFileTool(
+              tc.function.arguments,
+              Array.from(mergedEditableByLower.values()),
+            );
+            if (candidateExec.ok) {
+              const editedFilenameLower = candidateExec.artifact.filename.toLowerCase();
+              const targetWorkspaceFile = liveWorkspaceFiles.find(
+                (wf) => wf.filename.toLowerCase() === editedFilenameLower,
+              );
+              if (targetWorkspaceFile?.lockedByUser) {
+                const error = `File '${targetWorkspaceFile.filename}' is locked against LLM edits in the Files tab.`;
+                exec = {
+                  ok: false,
+                  error,
+                  toolResultJson: JSON.stringify({ status: 'error', error }),
+                };
+              } else {
+                exec = candidateExec;
+              }
+            } else {
+              exec = candidateExec;
+            }
+          }
+
           if (exec.ok) {
             const sourceArtifactId = exec.artifact.id;
+            const matchingWorkspaceFile = turnWorkspaceFiles.find(
+              (wf) => wf.filename.toLowerCase() === exec.artifact.filename.toLowerCase(),
+            );
+            const nowMs = Date.now();
+            if (matchingWorkspaceFile) {
+              const updatedWf: WorkspaceFile = {
+                ...matchingWorkspaceFile,
+                content: exec.artifact.content,
+                sizeBytes: computeUtf8Bytes(exec.artifact.content),
+                updatedAt: nowMs,
+              };
+              turnWorkspaceFiles = turnWorkspaceFiles.map((wf) =>
+                wf.id === matchingWorkspaceFile.id ? updatedWf : wf,
+              );
+              setWorkspace((prev) => ({
+                ...prev,
+                workspaceFiles: prev.workspaceFiles.map((wf) =>
+                  wf.id === matchingWorkspaceFile.id
+                    ? {
+                        ...wf,
+                        content: exec.artifact.content,
+                        sizeBytes: computeUtf8Bytes(exec.artifact.content),
+                        updatedAt: nowMs,
+                      }
+                    : wf,
+                ),
+              }));
+              baseAssemblyCandidates.coreInstruction = buildEffectiveCoreInstruction(
+                workspaceRef.current.settings,
+                selectedTools,
+                turnWorkspaceFiles,
+              );
+            }
+
             const inTurnMatch = collectedFiles.find(
               (f) => f.filename.toLowerCase() === exec.artifact.filename.toLowerCase(),
             );
             const updatedArtifact: GeneratedFileArtifact = {
               ...exec.artifact,
               id: inTurnMatch ? inTurnMatch.id : `file_${createUuid().slice(0, 8)}`,
-              updatedAt: Date.now(),
+              updatedAt: nowMs,
               isEdited: true,
             };
             upsertCollectedFile(updatedArtifact);
-            setPreviewFile((curr) =>
-              curr &&
-              curr.sessionId === targetSessionId &&
-              (curr.file.id === sourceArtifactId || curr.file.id === updatedArtifact.id)
-                ? { ...curr, file: updatedArtifact }
-                : curr,
-            );
+            setPreviewFile((curr) => {
+              if (!curr) return curr;
+              if (
+                matchingWorkspaceFile &&
+                curr.workspaceFileId === matchingWorkspaceFile.id
+              ) {
+                return {
+                  ...curr,
+                  file: workspaceFileToArtifact({
+                    ...matchingWorkspaceFile,
+                    content: exec.artifact.content,
+                    sizeBytes: computeUtf8Bytes(exec.artifact.content),
+                    updatedAt: nowMs,
+                  }),
+                };
+              }
+              if (
+                curr.sessionId === targetSessionId &&
+                (curr.file.id === sourceArtifactId || curr.file.id === updatedArtifact.id)
+              ) {
+                return { ...curr, file: updatedArtifact };
+              }
+              return curr;
+            });
             toolActivityLabels.push(
               `Updated ${updatedArtifact.filename} (${exec.linesChanged} ${exec.linesChanged === 1 ? 'line' : 'lines'})`,
             );
@@ -1177,16 +1318,12 @@ export const App: React.FC = () => {
               'chat',
               `Tool edit_file updated '${updatedArtifact.filename}' (${exec.linesChanged} line(s) changed)`,
             );
-            const parsedArgs = parseToolArgumentsJson(tc.function.arguments);
             compactCallsForBudget.push({
               ...tc,
               function: {
                 name: tc.function.name,
                 arguments: JSON.stringify({
-                  filename:
-                    typeof parsedArgs?.filename === 'string'
-                      ? parsedArgs.filename
-                      : updatedArtifact.filename,
+                  filename: requestedEditName || updatedArtifact.filename,
                   summary: '[edit payload omitted to fit context budget]',
                 }),
               },
@@ -1222,6 +1359,12 @@ export const App: React.FC = () => {
           });
         } else if (tc.function.name === READ_ATTACHED_CHUNK_TOOL_NAME) {
           const readableByLower = new Map<string, AttachedFileAttachment>();
+          for (const wf of turnWorkspaceFiles) {
+            readableByLower.set(wf.filename.toLowerCase(), {
+              name: wf.filename,
+              content: wf.content,
+            });
+          }
           for (const att of sessionAttachedFiles) {
             readableByLower.set(att.name.toLowerCase(), att);
           }
@@ -1308,8 +1451,76 @@ export const App: React.FC = () => {
             name: tc.function.name,
             content: exec.toolResultJson,
           });
+        } else if (tc.function.name === SAVE_WORKSPACE_FILE_TOOL_NAME) {
+          const sessionSources: AttachedFileAttachment[] = [
+            ...sessionAttachedFiles,
+            ...getSessionGeneratedFiles().map((gen) => ({
+              name: gen.filename,
+              content: gen.content,
+            })),
+          ];
+          const liveWorkspaceFiles = workspaceRef.current.workspaceFiles;
+          const exec = executeSaveWorkspaceFileTool(
+            tc.function.arguments,
+            liveWorkspaceFiles,
+            sessionSources,
+            createUuid,
+            { allowAiFileEdits: workspaceRef.current.settings.allowAiFileEdits },
+          );
+          if (exec.ok) {
+            turnWorkspaceFiles = exec.files;
+            setWorkspace((prev) => ({
+              ...prev,
+              workspaceFiles: exec.files,
+            }));
+            setPreviewFile((curr) =>
+              curr && curr.workspaceFileId === exec.file.id
+                ? { ...curr, file: workspaceFileToArtifact(exec.file) }
+                : curr,
+            );
+            baseAssemblyCandidates.coreInstruction = buildEffectiveCoreInstruction(
+              workspaceRef.current.settings,
+              selectedTools,
+              turnWorkspaceFiles,
+            );
+            toolActivityLabels.push(
+              `${exec.action === 'updated' ? 'Updated Files' : 'Saved to Files'}: ${exec.file.filename}`,
+            );
+            logger.info(
+              'files',
+              `Tool save_workspace_file ${exec.action} '${exec.file.filename}' (${exec.file.sizeBytes} bytes)`,
+            );
+          } else {
+            toolActivityLabels.push(`Failed save_workspace_file: ${exec.error}`);
+            logger.warn('files', `Tool save_workspace_file error: ${exec.error}`);
+          }
+          const parsedSaveArgs = parseToolArgumentsJson(tc.function.arguments);
+          compactCallsForBudget.push(
+            exec.ok
+              ? {
+                  ...tc,
+                  function: {
+                    name: tc.function.name,
+                    arguments: JSON.stringify({
+                      filename:
+                        typeof parsedSaveArgs?.filename === 'string'
+                          ? parsedSaveArgs.filename
+                          : exec.file.filename,
+                      content: '[saved to Files tab]',
+                    }),
+                  },
+                }
+              : tc,
+          );
+          inTurnToolTurns.push({
+            id: `tool_res_${tc.id}`,
+            role: 'tool',
+            toolCallId: tc.id,
+            name: tc.function.name,
+            content: exec.toolResultJson,
+          });
         } else {
-          const availableList = ALL_FILE_AND_TIER1_TOOLS.map((t) => t.function.name).join(', ');
+          const availableList = ALL_WORKSPACE_TOOLS.map((t) => t.function.name).join(', ');
           const errJson = JSON.stringify({
             status: 'error',
             error: `Unsupported tool '${tc.function.name}'. Available tools: ${availableList}.`,
@@ -1396,6 +1607,7 @@ export const App: React.FC = () => {
     activeModel,
     generatingSessionId,
     workspace.memoryNotes,
+    workspace.workspaceFiles,
     workspace.settings,
     logger,
   ]);
@@ -1537,6 +1749,106 @@ export const App: React.FC = () => {
         memoryNotes: prev.memoryNotes.filter((n) => n.id !== noteId),
       }));
       logger.info('memory', `Deleted memory note ${noteId}`);
+    },
+    [logger],
+  );
+
+  const workspaceFilenames = useMemo(
+    () => new Set(workspace.workspaceFiles.map((f) => f.filename.toLowerCase())),
+    [workspace.workspaceFiles],
+  );
+
+  const handleUploadWorkspaceFiles = useCallback(
+    (items: Array<{ filename: string; content: string }>) => {
+      setBannerError(null);
+      setLastTurnInspection(null);
+      let nextFiles = workspaceRef.current.workspaceFiles;
+      const errors: string[] = [];
+      let addedCount = 0;
+
+      for (const item of items) {
+        const res = upsertWorkspaceFile(
+          nextFiles,
+          {
+            filename: item.filename,
+            content: item.content,
+            source: 'upload',
+          },
+          createUuid,
+        );
+        if (res.ok) {
+          nextFiles = res.files;
+          addedCount += 1;
+        } else {
+          errors.push(res.error);
+        }
+      }
+
+      if (addedCount > 0) {
+        setWorkspace((prev) => ({
+          ...prev,
+          workspaceFiles: nextFiles,
+        }));
+        logger.info('files', `Uploaded ${addedCount} file(s) to persistent Files tab`);
+      }
+      if (errors.length > 0) {
+        setBannerError(errors.join(' '));
+      }
+    },
+    [logger],
+  );
+
+  const handleSaveArtifactToWorkspaceFiles = useCallback(
+    (artifact: GeneratedFileArtifact) => {
+      setBannerError(null);
+      setLastTurnInspection(null);
+      const res = upsertWorkspaceFile(
+        workspaceRef.current.workspaceFiles,
+        {
+          filename: artifact.filename,
+          content: artifact.content,
+          title: artifact.title,
+          language: artifact.language,
+          source: 'chat',
+        },
+        createUuid,
+      );
+      if (!res.ok) {
+        setBannerError(res.error);
+        return;
+      }
+      setWorkspace((prev) => ({
+        ...prev,
+        workspaceFiles: res.files,
+      }));
+      logger.info('files', `Saved '${res.file.filename}' from chat to persistent Files tab`);
+    },
+    [logger],
+  );
+
+  const handleToggleWorkspaceFileLock = useCallback(
+    (fileId: string, locked: boolean) => {
+      setLastTurnInspection(null);
+      setWorkspace((prev) => ({
+        ...prev,
+        workspaceFiles: prev.workspaceFiles.map((f) =>
+          f.id === fileId ? { ...f, lockedByUser: locked } : f,
+        ),
+      }));
+      logger.info('files', `Set LLM edit lock=${locked} on file ${fileId}`);
+    },
+    [logger],
+  );
+
+  const handleDeleteWorkspaceFile = useCallback(
+    (fileId: string) => {
+      setLastTurnInspection(null);
+      setPreviewFile((curr) => (curr?.workspaceFileId === fileId ? null : curr));
+      setWorkspace((prev) => ({
+        ...prev,
+        workspaceFiles: prev.workspaceFiles.filter((f) => f.id !== fileId),
+      }));
+      logger.info('files', `Deleted file ${fileId} from persistent Files tab`);
     },
     [logger],
   );
@@ -1764,15 +2076,49 @@ export const App: React.FC = () => {
                       : { file, sessionId: activeSession.id },
                   );
                 }}
+                workspaceFilenames={workspaceFilenames}
+                onSaveArtifactToWorkspaceFiles={handleSaveArtifactToWorkspaceFiles}
               />
 
-              {previewFile && previewFile.sessionId === activeSession.id ? (
-                <FilePreviewPanel
-                  file={previewFile.file}
-                  onClose={() => setPreviewFile(null)}
-                />
+              {previewFile &&
+              (previewFile.sessionId === activeSession.id || previewFile.workspaceFileId) ? (
+                (() => {
+                  const matchedWorkspaceFile = previewFile.workspaceFileId
+                    ? workspace.workspaceFiles.find((wf) => wf.id === previewFile.workspaceFileId)
+                    : undefined;
+                  const displayedPreviewFile = matchedWorkspaceFile
+                    ? workspaceFileToArtifact(matchedWorkspaceFile)
+                    : previewFile.file;
+                  return (
+                    <FilePreviewPanel
+                      file={displayedPreviewFile}
+                      onClose={() => setPreviewFile(null)}
+                      isInWorkspaceFiles={
+                        Boolean(matchedWorkspaceFile) ||
+                        workspaceFilenames.has(displayedPreviewFile.filename.toLowerCase())
+                      }
+                      isLockedInWorkspace={matchedWorkspaceFile?.lockedByUser ?? false}
+                      onToggleWorkspaceLock={
+                        matchedWorkspaceFile
+                          ? () =>
+                              handleToggleWorkspaceFileLock(
+                                matchedWorkspaceFile.id,
+                                !matchedWorkspaceFile.lockedByUser,
+                              )
+                          : undefined
+                      }
+                      onSaveToWorkspaceFiles={
+                        !matchedWorkspaceFile
+                          ? () => handleSaveArtifactToWorkspaceFiles(displayedPreviewFile)
+                          : undefined
+                      }
+                    />
+                  );
+                })()
               ) : (
-                <ContextPanel
+                <RightSidebarPanel
+                  activeTab={rightSidebarTab}
+                  onSelectTab={setRightSidebarTab}
                   budget={activeTurnBudget}
                   previewWarning={previewWarning}
                   taskGoal={activeSession.taskGoal}
@@ -1790,6 +2136,19 @@ export const App: React.FC = () => {
                   hoveredSegment={hoveredSegment}
                   onHoverSegment={setHoveredSegment}
                   onOpenPromptInspector={() => setShowPromptInspector(true)}
+                  workspaceFiles={workspace.workspaceFiles}
+                  allowAiFileEdits={workspace.settings.allowAiFileEdits}
+                  onUploadWorkspaceFiles={handleUploadWorkspaceFiles}
+                  onToggleWorkspaceFileLock={handleToggleWorkspaceFileLock}
+                  onDeleteWorkspaceFile={handleDeleteWorkspaceFile}
+                  onPreviewWorkspaceFile={(wf) =>
+                    setPreviewFile({
+                      file: workspaceFileToArtifact(wf),
+                      sessionId: activeSession.id,
+                      workspaceFileId: wf.id,
+                    })
+                  }
+                  onOpenFileSettings={() => setCurrentTab('settings')}
                 />
               )}
             </>

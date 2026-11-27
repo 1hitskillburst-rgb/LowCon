@@ -43,6 +43,7 @@ export function createDefaultSettings(): AppSettings {
     selectedLmModel: '',
     modelDisplayAliases: {},
     modelIconOverrides: {},
+    allowAiFileEdits: true,
     connectionStatus: 'Not tested yet',
     storageNamespace: 'localStorage://lowcon.workspace.v1 (Encrypted on Vault Lock)',
     theme: createDefaultTheme(),
@@ -149,6 +150,7 @@ export function createDefaultWorkspace(): PersistedWorkspace {
     models,
     activeModelId: models[0].id,
     memoryNotes: createDefaultMemoryNotes(initialSessionId),
+    workspaceFiles: [],
     settings: createDefaultSettings(),
   };
 }
@@ -199,6 +201,7 @@ export function loadUnsealedWorkspace(logger: DiagnosticLogger): {
         models,
         activeModelId,
         memoryNotes: Array.isArray(parsed.memoryNotes) ? parsed.memoryNotes : defaults.memoryNotes,
+        workspaceFiles: Array.isArray(parsed.workspaceFiles) ? parsed.workspaceFiles : [],
         settings: {
           ...defaults.settings,
           ...(parsed.settings ?? {}),
@@ -286,6 +289,9 @@ export async function unsealWorkspaceVault(
       models: Array.isArray(rawWorkspace.models)
         ? upgradeBuiltinModelLimits(rawWorkspace.models)
         : createDefaultModels(),
+      workspaceFiles: Array.isArray(rawWorkspace.workspaceFiles)
+        ? rawWorkspace.workspaceFiles
+        : [],
       settings: {
         ...defaults,
         ...(rawWorkspace.settings ?? {}),

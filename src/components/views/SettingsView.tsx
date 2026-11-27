@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, Lock, Palette, RefreshCw, ShieldCheck, Sparkles, Terminal, Trash2 } from 'lucide-react';
+import { ChevronDown, FolderLock, Lock, Palette, RefreshCw, ShieldCheck, Sparkles, Terminal, Trash2 } from 'lucide-react';
 import { calculateBudgetPartition } from '../../core/context';
 import {
   detectModelOrigin,
@@ -841,6 +841,49 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               )}
             </div>
+          </section>
+
+          {/* 3b. Workspace Files & AI Edit Permissions */}
+          <section className="rounded-[8px] border border-[var(--lc-surf-line)] bg-[var(--lc-surface)] p-5 text-[var(--lc-surf-ink)]">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <FolderLock className="h-4 w-4 text-[var(--lc-surf-ink)]" />
+                <h2 className="text-[15px] font-bold text-[var(--lc-surf-ink)]">
+                  Files Tab &amp; LLM Edit Permissions
+                </h2>
+              </div>
+
+              <div className="flex items-center gap-2.5">
+                <span className="text-[12px] font-medium text-[var(--lc-surf-ink2)]">
+                  Allow LLM edits overall
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={settings.allowAiFileEdits}
+                  aria-label="Toggle LLM file edits overall"
+                  data-testid="ai-file-edits-toggle"
+                  onClick={() =>
+                    onUpdateSettings({ allowAiFileEdits: !settings.allowAiFileEdits })
+                  }
+                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                    settings.allowAiFileEdits ? 'bg-[var(--lc-accent)]' : 'bg-[var(--lc-seg-tpl)]'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                      settings.allowAiFileEdits ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            <p className="mt-1 text-[12.5px] text-[var(--lc-surf-mute)]">
+              Controls whether models can modify or overwrite existing files (both in the persistent
+              Files tab and generated session files). When disabled, models can still inspect files
+              read-only. Individual files can also be locked inside the Files tab.
+            </p>
           </section>
 
           {/* 4. Encrypted Local Storage Vault */}
