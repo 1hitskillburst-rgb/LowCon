@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { Router, type Request, type Response } from 'express';
@@ -611,40 +613,85 @@ export function createLocalLlmProxyRouter(): Router {
       const base = normalizeLocalEndpoint(endpoint);
       recordTrackedLocalEndpoint(base, model);
       const url = `${base}/chat/completions`;
-
-      const upstream = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          messages,
-          temperature,
-          top_p: topP,
-          max_tokens: maxTokens,
-          stream,
-          stop,
-          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
-          ...(tools && tools.length > 0 ? { tools } : {}),
-          ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
-        }),
-        signal: controller.signal,
-        redirect: 'error',
+      const parsedTarget = new URL(url);
+      const transport = parsedTarget.protocol === 'https:' ? https : http;
+      const requestBody = JSON.stringify({
+        model,
+        messages,
+        temperature,
+        top_p: topP,
+        max_tokens: maxTokens,
+        stream,
+        stop,
+        ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+        ...(tools && tools.length > 0 ? { tools } : {}),
+        ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
       });
 
-      if (!upstream.ok || !upstream.body) {
-        const text = await upstream.text().catch(() => '');
+      const upstreamRes = await new Promise<http.IncomingMessage>((resolve, reject) => {
+        const onAbort = () => {
+          upstreamReq.destroy(new Error('Request aborted'));
+        };
+        if (controller.signal.aborted) {
+          reject(new Error('Request aborted'));
+          return;
+        }
+        const upstreamReq = transport.request(
+          parsedTarget,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Content-Length': Buffer.byteLength(requestBody, 'utf8'),
+            },
+            timeout: 0,
+          },
+          (incoming) => {
+            controller.signal.removeEventListener('abort', onAbort);
+            const status = incoming.statusCode ?? 0;
+            if (status >= 300 && status < 400) {
+              incoming.resume();
+              reject(new Error(`Redirect from local server (${status}) rejected.`));
+              return;
+            }
+            resolve(incoming);
+          },
+        );
+        upstreamReq.setTimeout(0);
+        upstreamReq.on('error', (err) => {
+          controller.signal.removeEventListener('abort', onAbort);
+          reject(err);
+        });
+        controller.signal.addEventListener('abort', onAbort, { once: true });
+        upstreamReq.write(requestBody);
+        upstreamReq.end();
+      });
+
+      const upstreamStatus = upstreamRes.statusCode ?? 502;
+      if (upstreamStatus < 200 || upstreamStatus >= 300) {
+        const text = await new Promise<string>((resolve) => {
+          const chunks: Buffer[] = [];
+          upstreamRes.on('data', (c: Buffer) => chunks.push(c));
+          upstreamRes.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+          upstreamRes.on('error', () => resolve(''));
+        });
         const snippet = sanitizeUpstreamErrorSnippet(text);
         if (!res.headersSent && !res.destroyed) {
-          res.status(upstream.status || 502).json({
-            error: `Local server ${url} returned HTTP ${upstream.status}${snippet ? `: ${snippet}` : ''}`,
+          res.status(upstreamStatus || 502).json({
+            error: `Local server ${url} returned HTTP ${upstreamStatus}${snippet ? `: ${snippet}` : ''}`,
           });
         }
         return;
       }
 
-      const upstreamContentType = (upstream.headers.get('content-type') ?? '').toLowerCase();
+      const upstreamContentType = String(upstreamRes.headers['content-type'] ?? '').toLowerCase();
       if (!stream || upstreamContentType.includes('application/json')) {
-        const text = await upstream.text();
+        const text = await new Promise<string>((resolve, reject) => {
+          const chunks: Buffer[] = [];
+          upstreamRes.on('data', (c: Buffer) => chunks.push(c));
+          upstreamRes.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+          upstreamRes.on('error', reject);
+        });
         let jsonPayload: unknown;
         try {
           jsonPayload = JSON.parse(text);
@@ -667,22 +714,33 @@ export function createLocalLlmProxyRouter(): Router {
       res.setHeader('X-Accel-Buffering', 'no');
       res.flushHeaders();
 
-      const reader = upstream.body.getReader();
-      try {
-        while (true) {
+      await new Promise<void>((resolve) => {
+        const cleanupUpstream = () => {
+          if (!upstreamRes.destroyed) {
+            upstreamRes.destroy();
+          }
+          resolve();
+        };
+        const onAbortStream = () => cleanupUpstream();
+        controller.signal.addEventListener('abort', onAbortStream, { once: true });
+        upstreamRes.on('data', (chunk: Buffer) => {
           if (res.writableEnded || res.destroyed) {
-            await reader.cancel().catch(() => {});
-            break;
+            cleanupUpstream();
+            return;
           }
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value && value.byteLength > 0) {
-            res.write(Buffer.from(value));
+          if (chunk.byteLength > 0) {
+            res.write(chunk);
           }
-        }
-      } finally {
-        reader.releaseLock();
-      }
+        });
+        upstreamRes.on('end', () => {
+          controller.signal.removeEventListener('abort', onAbortStream);
+          resolve();
+        });
+        upstreamRes.on('error', () => {
+          controller.signal.removeEventListener('abort', onAbortStream);
+          resolve();
+        });
+      });
       if (!res.writableEnded) {
         res.end();
       }

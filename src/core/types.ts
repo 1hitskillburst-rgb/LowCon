@@ -258,6 +258,9 @@ export interface AppSettings {
   effortLevel: EffortLevel;
   promptEffortEnabled: boolean;
   promptEffortPrompts: PromptEffortPrompts;
+  expandReplyToFreeContext?: boolean;
+  autoContinueOnMaxTokens?: boolean;
+  thinkingGuardEnabled?: boolean;
   userProfile?: UserProfileSettings;
 }
 

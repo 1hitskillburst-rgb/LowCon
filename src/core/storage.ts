@@ -117,6 +117,9 @@ export function createDefaultSettings(): AppSettings {
     effortLevel: 'medium',
     promptEffortEnabled: false,
     promptEffortPrompts: { ...DEFAULT_PROMPT_EFFORT_PROMPTS },
+    expandReplyToFreeContext: true,
+    autoContinueOnMaxTokens: true,
+    thinkingGuardEnabled: false,
     userProfile: {
       username: '',
       customSystemPrompt: '',

@@ -22,6 +22,7 @@ import {
   Square,
   Table2,
   X,
+  Play,
 } from 'lucide-react';
 import { detectArtifactPreviewKind, type ArtifactPreviewKind } from '../../core/artifactPreview';
 import { getPackedTokens } from '../../core/context';
@@ -246,6 +247,7 @@ interface ChatViewProps {
   workspaceFilenames?: Set<string>;
   onSaveArtifactToWorkspaceFiles?: (file: GeneratedFileArtifact) => void;
   onRetryUserMessage?: (messageId: string) => void;
+  onContinueMessage?: (messageId: string) => void;
   queuedRequest?: {
     rawInput: string;
     attachedFile: { name: string; content: string } | null;
@@ -292,6 +294,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   workspaceFilenames,
   onSaveArtifactToWorkspaceFiles,
   onRetryUserMessage,
+  onContinueMessage,
   queuedRequest = null,
   hasQueuedRequestAnywhere = false,
   onCancelQueuedRequest,
@@ -767,11 +770,25 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         ) : (
                           <div
                             data-testid="empty-response-notice"
-                            className="rounded-[6px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)] px-3.5 py-2.5 text-[13px] text-[var(--lc-panel-ink2)]"
+                            className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border border-[var(--lc-panel-line)] bg-[var(--lc-panel)] px-3.5 py-2.5 text-[13px] text-[var(--lc-panel-ink2)]"
                           >
-                            {msg.stopReason === 'max_tokens' && hasThinking
-                              ? `Output reply reserve (${outputReserveTokens ?? 'current'} tokens) was reached during thinking before visible answer text started. Increase Output Reply Reserve in Settings or inspect the Thought process above.`
-                              : 'Model finished without returning visible answer text.'}
+                            <span>
+                              {msg.stopReason === 'max_tokens' && hasThinking
+                                ? `Output reply limit (${outputReserveTokens ?? 'current'} tokens) was reached during thinking before visible answer text started.`
+                                : 'Model finished without returning visible answer text.'}
+                            </span>
+                            {msg.stopReason === 'max_tokens' && !isMsgStreaming && onContinueMessage && (
+                              <button
+                                type="button"
+                                data-testid={`continue-message-${msg.id}`}
+                                onClick={() => onContinueMessage(msg.id)}
+                                disabled={isGenerating}
+                                className="inline-flex items-center gap-1 rounded-[5px] border border-[var(--lc-accent)]/40 bg-[var(--lc-accent)]/12 px-2.5 py-1 text-[12px] font-medium text-[var(--lc-accent)] hover:bg-[var(--lc-accent)]/20 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <Play className="h-3 w-3" />
+                                <span>Continue</span>
+                              </button>
+                            )}
                           </div>
                         )}
 
@@ -908,6 +925,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
                               )}
                               <span>{copiedId === msg.id ? 'Copied' : 'Copy'}</span>
                             </button>
+
+                            {msg.stopReason === 'max_tokens' && !isMsgStreaming && onContinueMessage && (
+                              <button
+                                type="button"
+                                data-testid={`continue-message-${msg.id}`}
+                                onClick={() => onContinueMessage(msg.id)}
+                                disabled={isGenerating}
+                                className="inline-flex items-center gap-1 rounded-[5px] border border-[var(--lc-accent)]/35 bg-[var(--lc-accent)]/10 px-2 py-1 text-[12px] font-medium text-[var(--lc-accent)] hover:bg-[var(--lc-accent)]/18 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <Play className="h-3 w-3" />
+                                <span>Continue</span>
+                              </button>
+                            )}
 
                             {msg.sources.length > 0 && (
                               <button

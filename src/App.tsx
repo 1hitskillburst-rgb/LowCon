@@ -19,6 +19,15 @@ import {
   type ConversationTurnCandidate,
 } from './core/context';
 import {
+  buildContinuationInstruction,
+  buildThinkingHandoffInstruction,
+  computeTurnMaxTokens,
+  dedupeContinuationOverlap,
+  distillOlderToolTurns,
+  MAX_AUTO_CONTINUATION_HOPS,
+  THINKING_GUARD_RATIO,
+} from './core/continuation';
+import {
   fetchLocalLmStudioModels,
   InferenceController,
   unloadLocalLmModels,
@@ -712,6 +721,7 @@ export const App: React.FC = () => {
       rawInput: string;
       attachedFile: AttachedFileAttachment | null;
       truncateFromMessageId?: string;
+      continueAssistantMessageId?: string;
       clearComposer?: boolean;
     }) => {
       const currentWs = workspaceRef.current;
@@ -721,7 +731,7 @@ export const App: React.FC = () => {
       const rawInput = params.rawInput.trim();
       const currentAttachedFile = params.attachedFile;
       if (
-        (!rawInput && !currentAttachedFile) ||
+        (!rawInput && !currentAttachedFile && !params.continueAssistantMessageId) ||
         !targetSession ||
         !currentModel ||
         !controllerRef.current
@@ -732,13 +742,33 @@ export const App: React.FC = () => {
       setBannerError(null);
       pausedQueueOnStopRef.current = false;
 
+      const continueIdx = params.continueAssistantMessageId
+        ? targetSession.messages.findIndex(
+            (m) => m.id === params.continueAssistantMessageId && m.role === 'assistant',
+          )
+        : -1;
+      if (params.continueAssistantMessageId && continueIdx < 0) {
+        return;
+      }
+      const continueTargetMsg = continueIdx >= 0 ? targetSession.messages[continueIdx] : null;
+
       const truncateIdx = params.truncateFromMessageId
         ? targetSession.messages.findIndex((m) => m.id === params.truncateFromMessageId)
         : -1;
       const priorMessages =
-        truncateIdx >= 0 ? targetSession.messages.slice(0, truncateIdx) : targetSession.messages;
+        continueIdx >= 0
+          ? targetSession.messages.slice(0, continueIdx)
+          : truncateIdx >= 0
+            ? targetSession.messages.slice(0, truncateIdx)
+            : targetSession.messages;
 
       const userContent = formatUserMessageWithAttachment(rawInput, currentAttachedFile);
+      const existingVisibleText = continueTargetMsg?.content ?? '';
+      const existingThinkingText = continueTargetMsg?.thinkingContent ?? '';
+      const isThinkingHandoffResume =
+        Boolean(continueTargetMsg) &&
+        existingVisibleText.trim().length === 0 &&
+        existingThinkingText.trim().length > 0;
 
       const targetSessionId = targetSession.id;
       const effectiveLimit = getEffectiveContextLimit(
@@ -776,6 +806,28 @@ export const App: React.FC = () => {
 
       const summaryCandidates = buildSummaryCandidates(currentWs.memoryNotes, targetSessionId);
       const historyTurns = mapSessionHistoryTurns(priorMessages);
+      const continuationSeedTurns: ConversationTurnCandidate[] = continueTargetMsg
+        ? existingVisibleText.trim().length > 0
+          ? [
+              {
+                id: `cont_prev_${continueTargetMsg.id}`,
+                role: 'assistant',
+                content: existingVisibleText,
+              },
+              {
+                id: `cont_inst_${continueTargetMsg.id}`,
+                role: 'user',
+                content: buildContinuationInstruction(existingVisibleText),
+              },
+            ]
+          : [
+              {
+                id: `cont_handoff_${continueTargetMsg.id}`,
+                role: 'user',
+                content: buildThinkingHandoffInstruction(existingThinkingText),
+              },
+            ]
+        : [];
       let turnWorkspaceFiles = [...currentWs.workspaceFiles];
       const selectedTools = selectToolsForPromptBudget(effectiveLimit, {
         hasAttachments:
@@ -783,7 +835,11 @@ export const App: React.FC = () => {
           priorMessages.some((m) => (m.attachedFiles?.length ?? 0) > 0),
         hasGeneratedFiles: priorMessages.some((m) => (m.generatedFiles?.length ?? 0) > 0),
         hasWorkspaceFiles: turnWorkspaceFiles.length > 0,
-        includeWorkspaceFileTool: hasExplicitWorkspaceFileSaveIntent(rawInput),
+        includeWorkspaceFileTool: hasExplicitWorkspaceFileSaveIntent(
+          continueTargetMsg
+            ? priorMessages[priorMessages.length - 1]?.content ?? rawInput
+            : rawInput,
+        ),
         allowAiFileEdits: currentWs.settings.allowAiFileEdits,
       });
 
@@ -813,19 +869,34 @@ export const App: React.FC = () => {
       };
 
       // 4. Deterministic budget-first context assembly with user's exact reserve % & model template
-      const assemblyResult = assembleContext(
-        {
-          ...baseAssemblyCandidates,
-          currentUserMessage: userContent,
-          conversationTurns: historyTurns,
-        },
-        {
-          modelContextLimit: effectiveLimit,
-          outputReservePct: currentWs.settings.outputReservePct,
-          safetyMarginPct: currentWs.settings.safetyMarginPct,
-          templateType: currentModel.chatTemplate,
-        },
-      );
+      const assemblyResult = continueTargetMsg
+        ? assembleContext(
+            {
+              ...baseAssemblyCandidates,
+              currentUserMessage: '',
+              conversationTurns: [...historyTurns, ...continuationSeedTurns],
+            },
+            {
+              modelContextLimit: effectiveLimit,
+              outputReservePct: currentWs.settings.outputReservePct,
+              safetyMarginPct: currentWs.settings.safetyMarginPct,
+              templateType: currentModel.chatTemplate,
+              allowEmptyUserMessage: true,
+            },
+          )
+        : assembleContext(
+            {
+              ...baseAssemblyCandidates,
+              currentUserMessage: userContent,
+              conversationTurns: historyTurns,
+            },
+            {
+              modelContextLimit: effectiveLimit,
+              outputReservePct: currentWs.settings.outputReservePct,
+              safetyMarginPct: currentWs.settings.safetyMarginPct,
+              templateType: currentModel.chatTemplate,
+            },
+          );
 
       // 5. NEVER fall back to unbudgeted prompt on mandatory overflow
       if (!assemblyResult.ok) {
@@ -850,55 +921,77 @@ export const App: React.FC = () => {
 
       const now = Date.now();
       const userMsgId = createUuid();
-      const assistantMsgId = createUuid();
+      const assistantMsgId = continueTargetMsg?.id ?? createUuid();
       const modelDisplayLabel =
         currentModel.backendType === 'lm_studio' && currentWs.settings.selectedLmModel
           ? `${resolveModelDisplayName(currentWs.settings.selectedLmModel, currentWs.settings.modelDisplayAliases)} · ${currentModel.chatTemplate}`
           : `${currentModel.name} · ${currentModel.chatTemplate}`;
 
-      const userMessage: ChatMessage = {
-        id: userMsgId,
-        role: 'user',
-        authorName: currentWs.settings.userProfile?.username?.trim() || 'You',
-        createdAt: now,
-        content: rawInput,
-        ...(currentAttachedFile ? { attachedFiles: [currentAttachedFile] } : {}),
-        sources: [],
-      };
+      if (continueTargetMsg) {
+        setWorkspace((prev) => ({
+          ...prev,
+          sessions: prev.sessions.map((s) => {
+            if (s.id !== targetSessionId) return s;
+            return {
+              ...s,
+              updatedAt: now,
+              messages: s.messages.map((m) =>
+                m.id === assistantMsgId
+                  ? {
+                      ...m,
+                      stopReason: undefined,
+                      turnBudget,
+                    }
+                  : m,
+              ),
+            };
+          }),
+        }));
+      } else {
+        const userMessage: ChatMessage = {
+          id: userMsgId,
+          role: 'user',
+          authorName: currentWs.settings.userProfile?.username?.trim() || 'You',
+          createdAt: now,
+          content: rawInput,
+          ...(currentAttachedFile ? { attachedFiles: [currentAttachedFile] } : {}),
+          sources: [],
+        };
 
-      const assistantPlaceholder: ChatMessage = {
-        id: assistantMsgId,
-        role: 'assistant',
-        authorName: 'LowCon',
-        createdAt: now + 1,
-        modelInfo: modelDisplayLabel,
-        content: '',
-        sources,
-        turnBudget,
-      };
+        const assistantPlaceholder: ChatMessage = {
+          id: assistantMsgId,
+          role: 'assistant',
+          authorName: 'LowCon',
+          createdAt: now + 1,
+          modelInfo: modelDisplayLabel,
+          content: '',
+          sources,
+          turnBudget,
+        };
 
-      // Append (or replace from retry point) messages & auto-title new sessions
-      setWorkspace((prev) => ({
-        ...prev,
-        sessions: prev.sessions.map((s) => {
-          if (s.id !== targetSessionId) return s;
-          const idx = params.truncateFromMessageId
-            ? s.messages.findIndex((m) => m.id === params.truncateFromMessageId)
-            : -1;
-          const baseMsgs = idx >= 0 ? s.messages.slice(0, idx) : s.messages;
-          const shouldRename =
-            baseMsgs.length === 0 &&
-            (s.title === 'New local session' || s.title === 'Context strategy / 8K model');
-          return {
-            ...s,
-            title: shouldRename
-              ? safeTruncateChars(rawInput || currentAttachedFile?.name || 'Attached file', 36)
-              : s.title,
-            updatedAt: now,
-            messages: [...baseMsgs, userMessage, assistantPlaceholder],
-          };
-        }),
-      }));
+        // Append (or replace from retry point) messages & auto-title new sessions
+        setWorkspace((prev) => ({
+          ...prev,
+          sessions: prev.sessions.map((s) => {
+            if (s.id !== targetSessionId) return s;
+            const idx = params.truncateFromMessageId
+              ? s.messages.findIndex((m) => m.id === params.truncateFromMessageId)
+              : -1;
+            const baseMsgs = idx >= 0 ? s.messages.slice(0, idx) : s.messages;
+            const shouldRename =
+              baseMsgs.length === 0 &&
+              (s.title === 'New local session' || s.title === 'Context strategy / 8K model');
+            return {
+              ...s,
+              title: shouldRename
+                ? safeTruncateChars(rawInput || currentAttachedFile?.name || 'Attached file', 36)
+                : s.title,
+              updatedAt: now,
+              messages: [...baseMsgs, userMessage, assistantPlaceholder],
+            };
+          }),
+        }));
+      }
 
       // Progressive word-by-word drip queue for visible answer text
       activeDripCleanupRef.current?.();
@@ -910,9 +1003,13 @@ export const App: React.FC = () => {
       setGeneratingSessionId(targetSessionId);
       setLiveTokensPerSecond(null);
 
+      const initialMaxTokens = computeTurnMaxTokens(
+        inspection,
+        currentWs.settings.expandReplyToFreeContext !== false,
+      );
       logger.info(
         'chat',
-        `Dispatching turn (session=${targetSessionId.slice(0, 8)}, packed=${inspection.totalTokens}/${inspection.budgetPartition.promptBudget}, max_tokens=${inspection.budgetPartition.outputReserve}, pinned=${pinnedNotes.length}, retrieved=${retrievedScored.length})`,
+        `Dispatching turn (session=${targetSessionId.slice(0, 8)}, packed=${inspection.totalTokens}/${inspection.budgetPartition.promptBudget}, max_tokens=${initialMaxTokens}, reserve=${inspection.budgetPartition.outputReserve}, pinned=${pinnedNotes.length}, retrieved=${retrievedScored.length})`,
       );
 
       let pendingWordQueue = '';
@@ -924,8 +1021,10 @@ export const App: React.FC = () => {
         tokensPerSecond: number;
       } | null = null;
       let dripStopped = false;
-      const collectedFiles: GeneratedFileArtifact[] = [];
-      const toolActivityLabels: string[] = [];
+      const collectedFiles: GeneratedFileArtifact[] = [
+        ...(continueTargetMsg?.generatedFiles ?? []),
+      ];
+      const toolActivityLabels: string[] = [...(continueTargetMsg?.toolActivity ?? [])];
       const sessionAttachedFiles: AttachedFileAttachment[] = [
         ...priorMessages.flatMap((m) => m.attachedFiles ?? []),
         ...(currentAttachedFile ? [currentAttachedFile] : []),
@@ -1067,16 +1166,82 @@ export const App: React.FC = () => {
           tokensPerSecond: number;
           toolCalls?: ToolCallRecord[];
           rawText: string;
+          dedupedText: string;
         }
+      | { status: 'thinking_guard'; rawThinking: string }
       | { status: 'cancelled' }
       | { status: 'error'; message: string };
+
+    const assembleWithCompaction = (
+      turnCandidates: ConversationTurnCandidate[],
+      compactedCandidateTurns?: ConversationTurnCandidate[],
+    ) => {
+      const baseOptions = {
+        modelContextLimit: effectiveLimit,
+        outputReservePct: currentWs.settings.outputReservePct,
+        safetyMarginPct: currentWs.settings.safetyMarginPct,
+        templateType: currentModel.chatTemplate,
+        allowEmptyUserMessage: true,
+      };
+      let next = assembleContext(
+        {
+          ...baseAssemblyCandidates,
+          currentUserMessage: '',
+          conversationTurns: [...historyTurns, ...turnCandidates],
+        },
+        baseOptions,
+      );
+      if (!next.ok && next.code === 'MANDATORY_EXCEEDS_BUDGET' && compactedCandidateTurns) {
+        next = assembleContext(
+          {
+            ...baseAssemblyCandidates,
+            currentUserMessage: '',
+            conversationTurns: [...historyTurns, ...compactedCandidateTurns],
+          },
+          baseOptions,
+        );
+      }
+      if (!next.ok && next.code === 'MANDATORY_EXCEEDS_BUDGET') {
+        const distilled = distillOlderToolTurns(compactedCandidateTurns ?? turnCandidates, 2);
+        next = assembleContext(
+          {
+            ...baseAssemblyCandidates,
+            currentUserMessage: '',
+            conversationTurns: [...historyTurns, ...distilled],
+          },
+          baseOptions,
+        );
+      }
+      return next;
+    };
 
     const runStep = (
       stepInspection: PromptInspection,
       isFinalRound: boolean,
+      stepOptions?: {
+        reasoningEffortOverride?: 'low' | 'medium' | 'high';
+        allowThinkingGuard?: boolean;
+        stripOverlapFromExisting?: string;
+      },
     ): Promise<StepOutcome> =>
       new Promise((resolve) => {
         let stepRawText = '';
+        let stepDedupedText = '';
+        let stepThinkingText = '';
+        let guardAborted = false;
+        let overlapBuffer = '';
+        let overlapResolved = !stepOptions?.stripOverlapFromExisting;
+        const stepMaxTokens = computeTurnMaxTokens(
+          stepInspection,
+          workspaceRef.current.settings.expandReplyToFreeContext !== false,
+        );
+
+        const pushVisibleChunk = (text: string) => {
+          if (!text) return;
+          stepDedupedText += text;
+          codeFilter.push(text);
+        };
+
         const codeFilter = new DuplicateFileCodeFilter(
           () => collectedFiles,
           (filteredText) => {
@@ -1090,15 +1255,17 @@ export const App: React.FC = () => {
           {
             exactRenderedPrompt: stepInspection.exactRenderedPrompt,
             structuredMessages: stepInspection.structuredMessages,
-            maxTokens: stepInspection.budgetPartition.outputReserve,
+            maxTokens: stepMaxTokens,
             temperature: 0.7,
             topP: 0.9,
             stopSequences: stopSequencesForTemplate(currentModel.chatTemplate),
             lmStudioEndpoint: workspaceRef.current.settings.lmStudioEndpoint,
             selectedLmModel: workspaceRef.current.settings.selectedLmModel,
-            reasoningEffort: workspaceRef.current.settings.promptEffortEnabled
-              ? undefined
-              : workspaceRef.current.settings.effortLevel,
+            reasoningEffort:
+              stepOptions?.reasoningEffortOverride ??
+              (workspaceRef.current.settings.promptEffortEnabled
+                ? undefined
+                : workspaceRef.current.settings.effortLevel),
             tools: stepInspection.tools,
             toolChoice: stepInspection.tools?.length
               ? isFinalRound
@@ -1108,14 +1275,29 @@ export const App: React.FC = () => {
           },
           {
             onThinkingToken: (token) => {
-              if (dripStopped) return;
+              if (dripStopped || guardAborted) return;
               if (thinkingStartedAt === null) {
                 thinkingStartedAt = performance.now();
               }
+              stepThinkingText += token;
+              currentTurnThinkingText += token;
               updateAssistantMessage((m) => ({
                 ...m,
                 thinkingContent: (m.thinkingContent ?? '') + token,
               }));
+
+              if (
+                stepOptions?.allowThinkingGuard &&
+                workspaceRef.current.settings.thinkingGuardEnabled === true &&
+                stepMaxTokens >= 256 &&
+                !stepRawText.trim()
+              ) {
+                const estThinkingTokens = Math.ceil(stepThinkingText.length / 3.5);
+                if (estThinkingTokens >= Math.floor(stepMaxTokens * THINKING_GUARD_RATIO)) {
+                  guardAborted = true;
+                  controllerRef.current?.cancelGeneration();
+                }
+              }
             },
             onToolCallDetected: (toolName) => {
               if (dripStopped) return;
@@ -1126,12 +1308,25 @@ export const App: React.FC = () => {
               }));
             },
             onToken: (token) => {
-              if (dripStopped) return;
+              if (dripStopped || guardAborted) return;
               if (thinkingStartedAt !== null && thinkingFinishedAt === null && token.trim()) {
                 thinkingFinishedAt = performance.now();
               }
               stepRawText += token;
-              codeFilter.push(token);
+              if (!overlapResolved && stepOptions?.stripOverlapFromExisting) {
+                overlapBuffer += token;
+                if (overlapBuffer.length >= 120 || overlapBuffer.includes('\n')) {
+                  overlapResolved = true;
+                  const deduped = dedupeContinuationOverlap(
+                    stepOptions.stripOverlapFromExisting,
+                    overlapBuffer,
+                  );
+                  overlapBuffer = '';
+                  pushVisibleChunk(deduped);
+                }
+              } else {
+                pushVisibleChunk(token);
+              }
             },
             onProgress: (progress) => {
               if (dripStopped) return;
@@ -1144,6 +1339,15 @@ export const App: React.FC = () => {
               }
             },
             onComplete: (totalTokens, stopReason, stats) => {
+              if (!overlapResolved && overlapBuffer.length > 0 && stepOptions?.stripOverlapFromExisting) {
+                overlapResolved = true;
+                const deduped = dedupeContinuationOverlap(
+                  stepOptions.stripOverlapFromExisting,
+                  overlapBuffer,
+                );
+                overlapBuffer = '';
+                pushVisibleChunk(deduped);
+              }
               codeFilter.flush();
               resolve({
                 status: 'complete',
@@ -1152,10 +1356,26 @@ export const App: React.FC = () => {
                 tokensPerSecond: stats?.tokensPerSecond ?? 0,
                 toolCalls: stats?.toolCalls,
                 rawText: stepRawText,
+                dedupedText: stepDedupedText,
               });
             },
-            onCancelled: () => resolve({ status: 'cancelled' }),
+            onCancelled: () => {
+              if (guardAborted) {
+                resolve({ status: 'thinking_guard', rawThinking: stepThinkingText });
+                return;
+              }
+              resolve({ status: 'cancelled' });
+            },
             onError: (message) => {
+              if (!overlapResolved && overlapBuffer.length > 0 && stepOptions?.stripOverlapFromExisting) {
+                overlapResolved = true;
+                const deduped = dedupeContinuationOverlap(
+                  stepOptions.stripOverlapFromExisting,
+                  overlapBuffer,
+                );
+                overlapBuffer = '';
+                pushVisibleChunk(deduped);
+              }
               codeFilter.flush();
               resolve({ status: 'error', message });
             },
@@ -1168,20 +1388,35 @@ export const App: React.FC = () => {
       await pendingUnloadRef.current;
     }
 
-    // 6. Execute bounded multi-turn tool loop (session-isolated even if user switches tabs/sessions)
-    const inTurnToolTurns: ConversationTurnCandidate[] = [
-      { id: userMsgId, role: 'user', content: userContent },
-    ];
+    // 6. Execute bounded multi-turn tool + anti-stop continuation loop (session-isolated)
+    const inTurnToolTurns: ConversationTurnCandidate[] = continueTargetMsg
+      ? [...continuationSeedTurns]
+      : [{ id: userMsgId, role: 'user', content: userContent }];
     let currentInspection = inspection;
-    let cumulativeTokens = 0;
-    let latestTps = 0;
+    let cumulativeTokens = continueTargetMsg?.tokenCount ?? 0;
+    let latestTps = continueTargetMsg?.tokensPerSecond ?? 0;
     const failedCallCounts = new Map<string, number>();
     let forceFinalTextRound = false;
+    let accumulatedVisibleText = existingVisibleText;
+    let currentTurnThinkingText = existingThinkingText;
+    let autoContinuationHops = 0;
+    let currentStepReasoningOverride: 'low' | 'medium' | 'high' | undefined =
+      isThinkingHandoffResume ? 'low' : undefined;
+    let currentStepOverlapPrefix: string | undefined =
+      continueTargetMsg && existingVisibleText.trim().length > 0
+        ? existingVisibleText
+        : undefined;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const outcome = await runStep(
         currentInspection,
         forceFinalTextRound || round === MAX_TOOL_ROUNDS - 1,
+        {
+          reasoningEffortOverride: currentStepReasoningOverride,
+          allowThinkingGuard:
+            !currentStepReasoningOverride && autoContinuationHops < MAX_AUTO_CONTINUATION_HOPS,
+          stripOverlapFromExisting: currentStepOverlapPrefix,
+        },
       );
 
       if (outcome.status === 'cancelled') {
@@ -1211,9 +1446,47 @@ export const App: React.FC = () => {
         return;
       }
 
+      if (outcome.status === 'thinking_guard') {
+        logger.warn(
+          'chat',
+          `Live thinking guard interrupted long reasoning (round=${round + 1}); handing off to concise answer.`,
+        );
+        autoContinuationHops += 1;
+        inTurnToolTurns.push({
+          id: `handoff_guard_${round}_${createUuid().slice(0, 6)}`,
+          role: 'user',
+          content: buildThinkingHandoffInstruction(currentTurnThinkingText || outcome.rawThinking),
+        });
+        currentStepReasoningOverride = 'low';
+        currentStepOverlapPrefix = undefined;
+        const guardAssembly = assembleWithCompaction(inTurnToolTurns);
+        if (!guardAssembly.ok) {
+          stopDrip();
+          setLiveTokensPerSecond(null);
+          setBannerError(guardAssembly.message);
+          updateAssistantMessage((m) => ({
+            ...m,
+            content: guardAssembly.message,
+            isError: true,
+          }));
+          setGeneratingSessionId((curr) => (curr === targetSessionId ? null : curr));
+          return;
+        }
+        currentInspection = guardAssembly.inspection;
+        setLastTurnInspection(currentInspection);
+        updateAssistantMessage((m) => ({
+          ...m,
+          turnBudget: buildTurnContextBudget(currentInspection),
+        }));
+        continue;
+      }
+
       cumulativeTokens += outcome.totalTokens;
       if (outcome.tokensPerSecond > 0) {
         latestTps = outcome.tokensPerSecond;
+      }
+      if (outcome.dedupedText) {
+        accumulatedVisibleText += outcome.dedupedText;
       }
 
       const stepTokensUsed = currentInspection.totalTokens + outcome.totalTokens;
@@ -1231,6 +1504,63 @@ export const App: React.FC = () => {
         round < MAX_TOOL_ROUNDS - 1;
 
       if (!hasToolCalls) {
+        const autoContinueEnabled =
+          workspaceRef.current.settings.autoContinueOnMaxTokens !== false;
+        const canAutoContinue =
+          autoContinueEnabled &&
+          outcome.stopReason === 'max_tokens' &&
+          autoContinuationHops < MAX_AUTO_CONTINUATION_HOPS &&
+          round < MAX_TOOL_ROUNDS - 1 &&
+          (accumulatedVisibleText.trim().length > 0 || currentTurnThinkingText.trim().length > 0);
+
+        if (canAutoContinue) {
+          autoContinuationHops += 1;
+          logger.info(
+            'chat',
+            `Hit max_tokens (hop ${autoContinuationHops}/${MAX_AUTO_CONTINUATION_HOPS}); running seamless ${
+              accumulatedVisibleText.trim().length > 0 ? 'continuation' : 'thinking-to-answer handoff'
+            }`,
+          );
+          if (accumulatedVisibleText.trim().length > 0) {
+            inTurnToolTurns.push(
+              {
+                id: `cont_partial_${round}_${createUuid().slice(0, 6)}`,
+                role: 'assistant',
+                content: outcome.dedupedText.trim() || accumulatedVisibleText,
+              },
+              {
+                id: `cont_inst_${round}_${createUuid().slice(0, 6)}`,
+                role: 'user',
+                content: buildContinuationInstruction(accumulatedVisibleText),
+              },
+            );
+            currentStepOverlapPrefix = accumulatedVisibleText;
+            currentStepReasoningOverride = undefined;
+          } else {
+            inTurnToolTurns.push({
+              id: `handoff_inst_${round}_${createUuid().slice(0, 6)}`,
+              role: 'user',
+              content: buildThinkingHandoffInstruction(currentTurnThinkingText),
+            });
+            currentStepOverlapPrefix = undefined;
+            currentStepReasoningOverride = 'low';
+          }
+          const contAssembly = assembleWithCompaction(inTurnToolTurns);
+          if (contAssembly.ok) {
+            currentInspection = contAssembly.inspection;
+            setLastTurnInspection(currentInspection);
+            updateAssistantMessage((m) => ({
+              ...m,
+              turnBudget: buildTurnContextBudget(currentInspection),
+            }));
+            continue;
+          }
+          logger.warn(
+            'chat',
+            `Auto-continue context assembly failed (${contAssembly.code}); finalizing current output.`,
+          );
+        }
+
         logger.info(
           'chat',
           `Generation complete (session=${targetSessionId.slice(0, 8)}, tokens=${cumulativeTokens}, stop=${outcome.stopReason}, tps=${latestTps})`,
@@ -1252,6 +1582,10 @@ export const App: React.FC = () => {
         }
         return;
       }
+
+      // Tool round succeeded — reset continuation step hints for subsequent response
+      currentStepOverlapPrefix = undefined;
+      currentStepReasoningOverride = undefined;
 
       // Discard any partial tool-preamble whitespace if nothing meaningful streamed, or let it finish naturally
       const roundToolCalls = outcome.toolCalls!;
@@ -1795,62 +2129,31 @@ export const App: React.FC = () => {
         toolActivity: toolActivityLabels.length > 0 ? [...toolActivityLabels] : m.toolActivity,
       }));
 
-      // Re-assemble context for the next round (with compact fallback if full tool payload overflows tiny windows)
-      let nextAssembly = assembleContext(
-        {
-          ...baseAssemblyCandidates,
-          currentUserMessage: '',
-          conversationTurns: [...historyTurns, ...inTurnToolTurns],
-        },
-        {
-          modelContextLimit: effectiveLimit,
-          outputReservePct: currentWs.settings.outputReservePct,
-          safetyMarginPct: currentWs.settings.safetyMarginPct,
-          templateType: currentModel.chatTemplate,
-          allowEmptyUserMessage: true,
-        },
+      const lastToolTurnStartIdx = inTurnToolTurns.findIndex(
+        (t) => t.role === 'assistant' && t.toolCalls === normalizedRoundToolCalls,
       );
-
-      if (!nextAssembly.ok && nextAssembly.code === 'MANDATORY_EXCEEDS_BUDGET') {
-        const lastToolTurnStartIdx = inTurnToolTurns.findIndex(
-          (t) => t.role === 'assistant' && t.toolCalls === normalizedRoundToolCalls,
-        );
-        const compactedTurns = inTurnToolTurns.map((t, idx) => {
-          if (t.role === 'assistant' && t.toolCalls === normalizedRoundToolCalls) {
-            return { ...t, toolCalls: compactCallsForBudget };
-          }
-          // Compact earlier large chunk-read outputs from prior rounds while keeping the latest round intact
-          if (
-            idx < lastToolTurnStartIdx &&
-            t.role === 'tool' &&
-            t.name === READ_ATTACHED_CHUNK_TOOL_NAME &&
-            t.content.length > 400
-          ) {
-            return {
-              ...t,
-              content: JSON.stringify({
-                status: 'ok',
-                note: '[earlier chunk content omitted to fit context budget]',
-              }),
-            };
-          }
-          return t;
-        });
-        nextAssembly = assembleContext(
-          {
-            ...baseAssemblyCandidates,
-            currentUserMessage: '',
-            conversationTurns: [...historyTurns, ...compactedTurns],
-          },
-          {
-            modelContextLimit: effectiveLimit,
-            outputReservePct: currentWs.settings.outputReservePct,
-            safetyMarginPct: currentWs.settings.safetyMarginPct,
-            templateType: currentModel.chatTemplate,
-            allowEmptyUserMessage: true,
-          },
-        );
-      }
+      const compactedTurns = inTurnToolTurns.map((t, idx) => {
+        if (t.role === 'assistant' && t.toolCalls === normalizedRoundToolCalls) {
+          return { ...t, toolCalls: compactCallsForBudget };
+        }
+        // Compact earlier large chunk-read outputs from prior rounds while keeping the latest round intact
+        if (
+          idx < lastToolTurnStartIdx &&
+          t.role === 'tool' &&
+          t.name === READ_ATTACHED_CHUNK_TOOL_NAME &&
+          t.content.length > 400
+        ) {
+          return {
+            ...t,
+            content: JSON.stringify({
+              status: 'ok',
+              note: '[earlier chunk content omitted to fit context budget]',
+            }),
+          };
+        }
+        return t;
+      });
+      const nextAssembly = assembleWithCompaction(inTurnToolTurns, compactedTurns);
 
       if (!nextAssembly.ok) {
         stopDrip();
@@ -1951,6 +2254,20 @@ export const App: React.FC = () => {
         rawInput: cleanPrompt,
         attachedFile: targetAttachment,
         truncateFromMessageId: messageId,
+        clearComposer: false,
+      });
+    },
+    [activeSession, generatingSessionId, dispatchChatTurn],
+  );
+
+  const handleContinueMessage = useCallback(
+    async (messageId: string) => {
+      if (!activeSession || generatingSessionId) return;
+      await dispatchChatTurn({
+        sessionId: activeSession.id,
+        rawInput: '',
+        attachedFile: null,
+        continueAssistantMessageId: messageId,
         clearComposer: false,
       });
     },
@@ -2474,6 +2791,7 @@ export const App: React.FC = () => {
                 workspaceFilenames={workspaceFilenames}
                 onSaveArtifactToWorkspaceFiles={handleSaveArtifactToWorkspaceFiles}
                 onRetryUserMessage={(msgId) => void handleRetryUserMessage(msgId)}
+                onContinueMessage={(msgId) => void handleContinueMessage(msgId)}
                 queuedRequest={
                   queuedRequest && queuedRequest.sessionId === activeSession.id
                     ? queuedRequest

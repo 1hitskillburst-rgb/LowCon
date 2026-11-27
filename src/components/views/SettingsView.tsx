@@ -855,7 +855,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </div>
                   </div>
                   <div>
-                    <div className="text-[var(--lc-panel-mute)]">Output Reserve (max_tokens)</div>
+                    <div className="text-[var(--lc-panel-mute)]">Output Reserve Floor</div>
                     <div className="font-bold text-[var(--lc-panel-ink)] tabular-nums">
                       {formatNumber(previewPartition.partition.outputReserve)} tok
                     </div>
@@ -868,6 +868,114 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 </div>
               )}
+
+              <div className="space-y-3 border-t border-[var(--lc-surf-line)] pt-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-[13.5px] font-medium text-[var(--lc-surf-ink)]">
+                      Use free prompt capacity for longer replies
+                    </div>
+                    <p className="mt-0.5 text-[12px] leading-relaxed text-[var(--lc-surf-mute)]">
+                      Expands per-turn `max_tokens` to `outputReserve + unused prompt budget` so
+                      models do not hit an artificial output ceiling on spacious prompts.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={settings.expandReplyToFreeContext !== false}
+                    data-testid="toggle-expand-reply-budget"
+                    onClick={() =>
+                      onUpdateSettings({
+                        expandReplyToFreeContext: !(settings.expandReplyToFreeContext !== false),
+                      })
+                    }
+                    className={`relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                      settings.expandReplyToFreeContext !== false
+                        ? 'bg-[var(--lc-accent)]'
+                        : 'bg-[var(--lc-surf-line)]'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                        settings.expandReplyToFreeContext !== false
+                          ? 'translate-x-4.5'
+                          : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-[13.5px] font-medium text-[var(--lc-surf-ink)]">
+                      Auto-continue when hitting output limit
+                    </div>
+                    <p className="mt-0.5 text-[12px] leading-relaxed text-[var(--lc-surf-mute)]">
+                      Seamlessly stitches up to 2 continuation passes onto the same reply when a
+                      model stops at `max_tokens`, or hands off from long thinking into the answer.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={settings.autoContinueOnMaxTokens !== false}
+                    data-testid="toggle-auto-continue"
+                    onClick={() =>
+                      onUpdateSettings({
+                        autoContinueOnMaxTokens: !(settings.autoContinueOnMaxTokens !== false),
+                      })
+                    }
+                    className={`relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                      settings.autoContinueOnMaxTokens !== false
+                        ? 'bg-[var(--lc-accent)]'
+                        : 'bg-[var(--lc-surf-line)]'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                        settings.autoContinueOnMaxTokens !== false
+                          ? 'translate-x-4.5'
+                          : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-[13.5px] font-medium text-[var(--lc-surf-ink)]">
+                      Live Thinking Guard (cut runaway thinking early)
+                    </div>
+                    <p className="mt-0.5 text-[12px] leading-relaxed text-[var(--lc-surf-mute)]">
+                      If a model burns 70% of its turn token budget in `&lt;think&gt;` with zero
+                      visible answer yet, interrupts thinking and triggers a concise answer handoff.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={settings.thinkingGuardEnabled === true}
+                    data-testid="toggle-thinking-guard"
+                    onClick={() =>
+                      onUpdateSettings({
+                        thinkingGuardEnabled: !(settings.thinkingGuardEnabled === true),
+                      })
+                    }
+                    className={`relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                      settings.thinkingGuardEnabled === true
+                        ? 'bg-[var(--lc-accent)]'
+                        : 'bg-[var(--lc-surf-line)]'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                        settings.thinkingGuardEnabled === true ? 'translate-x-4.5' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
             </div>
           </section>
 
