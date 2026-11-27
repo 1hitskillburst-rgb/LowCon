@@ -318,6 +318,7 @@ export const App: React.FC = () => {
   } | null>(null);
   const manuallyUnloadedRef = useRef(false);
   const activeDripCleanupRef = useRef<(() => void) | null>(null);
+  const pendingUnloadRef = useRef<Promise<unknown> | null>(null);
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
 
@@ -459,11 +460,45 @@ export const App: React.FC = () => {
     [activeInspection],
   );
 
+  const triggerLmStudioUnloadAll = useCallback(
+    (settings: AppSettings) => {
+      const candidateModels = [
+        settings.selectedLmModel,
+        ...settings.connectedLmModels,
+      ].filter((m) => typeof m === 'string' && m.trim().length > 0);
+      if (settings.activeBackendType !== 'lm_studio' && candidateModels.length === 0) {
+        return null;
+      }
+      const unloadPromise = unloadLocalLmModels(settings.lmStudioEndpoint, candidateModels, {
+        logger,
+      }).finally(() => {
+        if (pendingUnloadRef.current === unloadPromise) {
+          pendingUnloadRef.current = null;
+        }
+      });
+      pendingUnloadRef.current = unloadPromise;
+      return unloadPromise;
+    },
+    [logger],
+  );
+
   const handleSelectActiveModel = useCallback(
     (modelId: string) => {
       manuallyUnloadedRef.current = false;
       setBannerError(null);
       setLastTurnInspection(null);
+      const currentWorkspace = workspaceRef.current;
+      const prevModel =
+        currentWorkspace.models.find((m) => m.id === currentWorkspace.activeModelId) ??
+        currentWorkspace.models[0];
+      const nextModel = currentWorkspace.models.find((m) => m.id === modelId);
+      if (
+        prevModel?.backendType === 'lm_studio' &&
+        nextModel &&
+        nextModel.id !== prevModel.id
+      ) {
+        triggerLmStudioUnloadAll(currentWorkspace.settings);
+      }
       if (controllerRef.current?.isLoaded() && controllerRef.current.getLoadedModel()?.id !== modelId) {
         controllerRef.current.unloadModel();
       }
@@ -480,7 +515,7 @@ export const App: React.FC = () => {
         };
       });
     },
-    [],
+    [triggerLmStudioUnloadAll],
   );
 
   const handleLoadModel = useCallback(
@@ -508,32 +543,32 @@ export const App: React.FC = () => {
     manuallyUnloadedRef.current = true;
     controllerRef.current?.unloadModel();
     setGeneratingSessionId(null);
-    const settings = workspaceRef.current.settings;
-    const candidateModels = [
-      settings.selectedLmModel,
-      ...settings.connectedLmModels,
-    ].filter((m) => typeof m === 'string' && m.trim().length > 0);
-    if (settings.activeBackendType === 'lm_studio' || candidateModels.length > 0) {
-      void unloadLocalLmModels(settings.lmStudioEndpoint, candidateModels, { logger });
-    }
-  }, [logger]);
+    triggerLmStudioUnloadAll(workspaceRef.current.settings);
+  }, [triggerLmStudioUnloadAll]);
 
-  const handleSwitchBackend = useCallback((backend: BackendType) => {
-    manuallyUnloadedRef.current = false;
-    setBannerError(null);
-    setLastTurnInspection(null);
-    setWorkspace((prev) => {
-      const matchingModel = prev.models.find((m) => m.backendType === backend);
-      return {
-        ...prev,
-        activeModelId: matchingModel ? matchingModel.id : prev.activeModelId,
-        settings: {
-          ...prev.settings,
-          activeBackendType: backend,
-        },
-      };
-    });
-  }, []);
+  const handleSwitchBackend = useCallback(
+    (backend: BackendType) => {
+      manuallyUnloadedRef.current = false;
+      setBannerError(null);
+      setLastTurnInspection(null);
+      const settings = workspaceRef.current.settings;
+      if (settings.activeBackendType === 'lm_studio' && backend !== 'lm_studio') {
+        triggerLmStudioUnloadAll(settings);
+      }
+      setWorkspace((prev) => {
+        const matchingModel = prev.models.find((m) => m.backendType === backend);
+        return {
+          ...prev,
+          activeModelId: matchingModel ? matchingModel.id : prev.activeModelId,
+          settings: {
+            ...prev.settings,
+            activeBackendType: backend,
+          },
+        };
+      });
+    },
+    [triggerLmStudioUnloadAll],
+  );
 
   const handleNewSession = useCallback(() => {
     const now = Date.now();
@@ -991,6 +1026,11 @@ export const App: React.FC = () => {
           },
         );
       });
+
+    // Wait for any in-flight LM Studio model unload to complete before loading/running the next model
+    if (pendingUnloadRef.current) {
+      await pendingUnloadRef.current;
+    }
 
     // 6. Execute bounded multi-turn tool loop (session-isolated even if user switches tabs/sessions)
     const inTurnToolTurns: ConversationTurnCandidate[] = [
@@ -1539,6 +1579,10 @@ export const App: React.FC = () => {
       manuallyUnloadedRef.current = false;
       setBannerError(null);
       setLastTurnInspection(null);
+      const prevSettings = workspaceRef.current.settings;
+      if (prevSettings.selectedLmModel && prevSettings.selectedLmModel !== modelName) {
+        triggerLmStudioUnloadAll(prevSettings);
+      }
       if (controllerRef.current?.isLoaded()) {
         controllerRef.current.unloadModel();
       }
@@ -1567,7 +1611,7 @@ export const App: React.FC = () => {
       });
       logger.info('settings', `Selected LM Studio server model '${modelName}' (previous model unloaded)`);
     },
-    [logger],
+    [logger, triggerLmStudioUnloadAll],
   );
 
   const handleLockVault = useCallback(

@@ -1,5 +1,6 @@
 const http = require('node:http');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 
@@ -59,14 +60,38 @@ async function fetchLoadedInstanceIds(origin, timeoutMs = 1500) {
 }
 
 function runLmsUnloadAll(timeoutMs = 2500) {
+  const candidates = ['lms'];
+  const homeBin = path.join(
+    os.homedir(),
+    '.lmstudio',
+    'bin',
+    process.platform === 'win32' ? 'lms.exe' : 'lms',
+  );
+  if (fs.existsSync(homeBin)) {
+    candidates.push(homeBin);
+  }
+
   return new Promise((resolve) => {
-    try {
-      execFile('lms', ['unload', '--all'], { timeout: timeoutMs, windowsHide: true }, (err) => {
-        resolve(!err);
-      });
-    } catch {
-      resolve(false);
-    }
+    let idx = 0;
+    const tryNext = () => {
+      if (idx >= candidates.length) {
+        resolve(false);
+        return;
+      }
+      const bin = candidates[idx++];
+      try {
+        execFile(bin, ['unload', '--all'], { timeout: timeoutMs, windowsHide: true }, (err) => {
+          if (!err) {
+            resolve(true);
+            return;
+          }
+          tryNext();
+        });
+      } catch {
+        tryNext();
+      }
+    };
+    tryNext();
   });
 }
 
@@ -126,7 +151,7 @@ async function unloadAllLocalModels(rawEndpoint, fallbackModels = []) {
   }
 
   let cliFallbackUsed = false;
-  if ((!restSupported || restFailed) && unloaded.length === 0) {
+  if (!restSupported || restFailed) {
     cliFallbackUsed = await runLmsUnloadAll();
   }
 
