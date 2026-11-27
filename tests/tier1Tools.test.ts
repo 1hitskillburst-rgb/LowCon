@@ -1057,4 +1057,64 @@ test('edit_file strips accidental read_attached_chunk line prefixes, tolerates i
     assert.ok(miss.error.includes('Closest lines in file'));
     assert.ok(miss.error.includes('function reset()'));
   }
+
+  // 7. Handles schema-filler start_line: 0 / end_line: 0 alongside content or patch inside edits[]
+  const contentInEdits = executeEditFileTool(
+    JSON.stringify({
+      filename: 'game.js',
+      edits: [{ start_line: 0, end_line: 0, old_text: '', content: 'const full = true;' }],
+    }),
+    [file],
+  );
+  assert.equal(contentInEdits.ok, true, contentInEdits.ok ? '' : contentInEdits.error);
+  if (contentInEdits.ok) {
+    assert.equal(contentInEdits.artifact.content, 'const full = true;');
+  }
+
+  // 8. Empty old_text with new_text and 0-placeholder line fields gives actionable old_text error (not start_line error)
+  const emptyOldText = executeEditFileTool(
+    JSON.stringify({
+      filename: 'game.js',
+      edits: [{ start_line: 0, end_line: 0, old_text: '', new_text: 'const x = 1;' }],
+    }),
+    [file],
+  );
+  assert.equal(emptyOldText.ok, false);
+  if (!emptyOldText.ok) {
+    assert.ok(emptyOldText.error.includes('"old_text" cannot be empty'));
+  }
+
+  // 9. Replacement-only edit: full-file replacement succeeds, partial snippet explains missing start_line/old_text safely
+  const fullFileReplacementOnly = executeEditFileTool(
+    JSON.stringify({
+      filename: 'game.js',
+      edits: [
+        {
+          replacement:
+            'function init() {\n    const speed = 1;\n    return speed;\n}\n\nfunction reset() {\n    const speed = 5;\n    return speed;\n}\n',
+        },
+      ],
+    }),
+    [file],
+  );
+  assert.equal(
+    fullFileReplacementOnly.ok,
+    true,
+    fullFileReplacementOnly.ok ? '' : fullFileReplacementOnly.error,
+  );
+  if (fullFileReplacementOnly.ok) {
+    assert.ok(fullFileReplacementOnly.artifact.content.includes('const speed = 5;'));
+  }
+
+  const partialReplacementOnly = executeEditFileTool(
+    JSON.stringify({
+      filename: 'game.js',
+      edits: [{ replacement: 'const speed = 99;' }],
+    }),
+    [file],
+  );
+  assert.equal(partialReplacementOnly.ok, false);
+  if (!partialReplacementOnly.ok) {
+    assert.ok(partialReplacementOnly.error.includes('passed "replacement" without "start_line" or "old_text"'));
+  }
 });

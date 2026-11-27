@@ -3,6 +3,7 @@ import { isLocalEndpoint, normalizeApiEndpoint, type DiagnosticLogger } from './
 import {
   CALCULATE_TOOL_NAME,
   EDIT_FILE_TOOL_NAME,
+  hasExplicitWorkspaceFileSaveIntent,
   READ_ATTACHED_CHUNK_TOOL_NAME,
   SAVE_MEMORY_TOOL_NAME,
   SAVE_WORKSPACE_FILE_TOOL_NAME,
@@ -908,14 +909,10 @@ function detectMockToolCallRequest(
   );
   const knownFiles = findGeneratedFilesInMessages(messages);
 
-  // 0. save_workspace_file (remember/store a file or note in the persistent Files tab)
+  // 0. save_workspace_file (remember/store a file in the persistent Files tab ONLY when explicitly requested)
   const wantsFilesTabSave =
     availableNames.has(SAVE_WORKSPACE_FILE_TOOL_NAME) &&
-    (/\b(save_workspace_file)\b/i.test(userInstruction) ||
-      /\b(?:save|store|remember|keep|put)\b.*\b(?:to|in)\s+(?:the\s+)?files(?:\s+tab)?\b/i.test(
-        userInstruction,
-      ) ||
-      (/\bremember\s+(?:this|the)\s+file\b/i.test(userInstruction)) ||
+    (hasExplicitWorkspaceFileSaveIntent(userInstruction) ||
       (/\bremember\b/i.test(userInstruction) &&
         (Boolean(attachmentSection) || Boolean(explicitFilenameMatch))));
 

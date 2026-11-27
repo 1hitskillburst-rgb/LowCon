@@ -21,6 +21,7 @@ import {
   executeEditFileTool,
   executeReadAttachedChunkTool,
   executeSaveWorkspaceFileTool,
+  hasExplicitWorkspaceFileSaveIntent,
   SAVE_WORKSPACE_FILE_TOOL_NAME,
   selectToolsForPromptBudget,
 } from '../src/core/tier1Tools';
@@ -443,4 +444,15 @@ test('RightSidebarPanel Files tab and SettingsView global edit toggle render cle
   assert.ok(settingsHtml.includes('data-testid="ai-file-edits-toggle"'));
   assert.ok(settingsHtml.includes('aria-checked="false"'));
   assert.ok(settingsHtml.includes('Allow LLM edits overall'));
+});
+
+test('hasExplicitWorkspaceFileSaveIntent only triggers when user asks to save to Files tab', () => {
+  assert.equal(hasExplicitWorkspaceFileSaveIntent('make me a calculator in html'), false);
+  assert.equal(hasExplicitWorkspaceFileSaveIntent('edit calculator.html to add trig functions'), false);
+  assert.equal(hasExplicitWorkspaceFileSaveIntent('create and save script.py'), false);
+
+  assert.equal(hasExplicitWorkspaceFileSaveIntent('save calculator.html to the files tab'), true);
+  assert.equal(hasExplicitWorkspaceFileSaveIntent('Remember this file in the Files tab: todo.md'), true);
+  assert.equal(hasExplicitWorkspaceFileSaveIntent('keep notes.md in my files across chats'), true);
+  assert.equal(hasExplicitWorkspaceFileSaveIntent('remember this file'), true);
 });

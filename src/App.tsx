@@ -62,6 +62,7 @@ import {
   extractEditTargetFilename,
   formatAttachedFileForPrompt,
   getToolPendingActivityLabel,
+  hasExplicitWorkspaceFileSaveIntent,
   READ_ATTACHED_CHUNK_TOOL_NAME,
   SAVE_MEMORY_TOOL_NAME,
   SAVE_WORKSPACE_FILE_TOOL_NAME,
@@ -250,7 +251,7 @@ function buildLivePreviewInspection(
     hasAttachments,
     hasGeneratedFiles,
     hasWorkspaceFiles: workspaceFiles.length > 0,
-    includeWorkspaceFileTool: true,
+    includeWorkspaceFileTool: hasExplicitWorkspaceFileSaveIntent(rawDraft),
     allowAiFileEdits: settings.allowAiFileEdits,
   });
 
@@ -753,7 +754,7 @@ export const App: React.FC = () => {
         activeSession.messages.some((m) => (m.attachedFiles?.length ?? 0) > 0),
       hasGeneratedFiles: activeSession.messages.some((m) => (m.generatedFiles?.length ?? 0) > 0),
       hasWorkspaceFiles: turnWorkspaceFiles.length > 0,
-      includeWorkspaceFileTool: true,
+      includeWorkspaceFileTool: hasExplicitWorkspaceFileSaveIntent(rawInput),
       allowAiFileEdits: workspace.settings.allowAiFileEdits,
     });
 
@@ -1139,9 +1140,14 @@ export const App: React.FC = () => {
     let currentInspection = inspection;
     let cumulativeTokens = 0;
     let latestTps = 0;
+    const failedCallCounts = new Map<string, number>();
+    let forceFinalTextRound = false;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const outcome = await runStep(currentInspection, round === MAX_TOOL_ROUNDS - 1);
+      const outcome = await runStep(
+        currentInspection,
+        forceFinalTextRound || round === MAX_TOOL_ROUNDS - 1,
+      );
 
       if (outcome.status === 'cancelled') {
         stopDrip();
@@ -1485,6 +1491,12 @@ export const App: React.FC = () => {
               },
             });
           } else {
+            const sig = `${tc.function.name}:${normalizeToolArgumentsJsonString(tc.function.arguments)}`;
+            const repeatCount = (failedCallCounts.get(sig) ?? 0) + 1;
+            failedCallCounts.set(sig, repeatCount);
+            if (repeatCount >= 2) {
+              forceFinalTextRound = true;
+            }
             toolActivityLabels.push(`Failed edit_file: ${exec.error}`);
             logger.warn('chat', `Tool edit_file error: ${exec.error}`);
             compactCallsForBudget.push({
@@ -1494,6 +1506,21 @@ export const App: React.FC = () => {
                 arguments: normalizeToolArgumentsJsonString(tc.function.arguments),
               },
             });
+            const errorPayload =
+              repeatCount >= 2
+                ? JSON.stringify({
+                    status: 'error',
+                    error: `${exec.error} STOP repeating the exact same arguments—use read_attached_chunk first, fix your JSON parameters, or reply to the user directly.`,
+                  })
+                : exec.toolResultJson;
+            inTurnToolTurns.push({
+              id: `tool_res_${tc.id}`,
+              role: 'tool',
+              toolCallId: tc.id,
+              name: tc.function.name,
+              content: errorPayload,
+            });
+            continue;
           }
           inTurnToolTurns.push({
             id: `tool_res_${tc.id}`,
@@ -1628,6 +1655,21 @@ export const App: React.FC = () => {
             content: exec.toolResultJson,
           });
         } else if (tc.function.name === SAVE_WORKSPACE_FILE_TOOL_NAME) {
+          if (!hasExplicitWorkspaceFileSaveIntent(rawInput)) {
+            const blockedMsg =
+              'save_workspace_file is only allowed when the user explicitly asks to save a file to the persistent Files tab. Use create_file or edit_file instead.';
+            toolActivityLabels.push(`Skipped Files tab save: not requested by user`);
+            logger.warn('files', `Blocked unrequested save_workspace_file call`);
+            compactCallsForBudget.push(tc);
+            inTurnToolTurns.push({
+              id: `tool_res_${tc.id}`,
+              role: 'tool',
+              toolCallId: tc.id,
+              name: tc.function.name,
+              content: JSON.stringify({ status: 'error', error: blockedMsg }),
+            });
+            continue;
+          }
           const sessionSources: AttachedFileAttachment[] = [
             ...sessionAttachedFiles,
             ...getSessionGeneratedFiles().map((gen) => ({

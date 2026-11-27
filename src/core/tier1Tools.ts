@@ -178,31 +178,31 @@ export const EDIT_FILE_TOOL_DEFINITION: ToolDefinition = {
   function: {
     name: EDIT_FILE_TOOL_NAME,
     description:
-      'Patch an existing file (attached, Files-tab, or generated). Preferred: {filename, old_text, new_text} (never include "12: " line-number prefixes from read_attached_chunk). Also supports {filename, start_line, end_line, replacement}, multiple edits in edits[], or full-file {filename, content}.',
+      'Patch an existing file (attached, Files-tab, or generated). Preferred: {filename, old_text, new_text} (never include "12: " line prefixes). Also supports 1-indexed {filename, start_line, end_line, replacement}, edits[], or {filename, content}.',
     parameters: {
       type: 'object',
       properties: {
         filename: { type: 'string' },
+        old_text: { type: 'string' },
+        new_text: { type: 'string' },
+        replace_all: { type: 'boolean' },
         edits: {
           type: 'array',
           items: {
             type: 'object',
             properties: {
-              start_line: { type: 'integer', minimum: 1 },
-              end_line: { type: 'integer', minimum: 1 },
-              replacement: { type: 'string' },
               old_text: { type: 'string' },
               new_text: { type: 'string' },
               replace_all: { type: 'boolean' },
+              start_line: { type: 'integer', minimum: 1 },
+              end_line: { type: 'integer', minimum: 1 },
+              replacement: { type: 'string' },
             },
           },
         },
         start_line: { type: 'integer', minimum: 1 },
         end_line: { type: 'integer', minimum: 1 },
         replacement: { type: 'string' },
-        old_text: { type: 'string' },
-        new_text: { type: 'string' },
-        replace_all: { type: 'boolean' },
       },
       required: ['filename'],
     },
@@ -267,7 +267,7 @@ export const SAVE_WORKSPACE_FILE_TOOL_DEFINITION: ToolDefinition = {
   function: {
     name: SAVE_WORKSPACE_FILE_TOOL_NAME,
     description:
-      'Store a file in the persistent Files tab so any future chat can reference or edit it without re-uploading. Provide content, or omit content to save an existing session attachment/generated file by filename.',
+      'Store a file in the persistent Files tab ONLY when the user explicitly asks to save, store, or remember it in the Files tab across chats. Do NOT call automatically after create_file or edit_file, and never use as a substitute for edit_file.',
     parameters: {
       type: 'object',
       properties: {
@@ -316,8 +316,25 @@ const TIER1_POLICY_BULLETS: Record<string, string> = {
   [READ_ATTACHED_CHUNK_TOOL_NAME]: `- \`${READ_ATTACHED_CHUNK_TOOL_NAME}\`: Read attached, Files-tab, or generated session files in <=${MAX_ATTACHED_CHUNK_LINES}-line chunks.`,
   [SEARCH_MEMORY_TOOL_NAME]: `- \`${SEARCH_MEMORY_TOOL_NAME}\`: Search saved local memory notes.`,
   [SAVE_MEMORY_TOOL_NAME]: `- \`${SAVE_MEMORY_TOOL_NAME}\`: Save durable facts, preferences, or rules.`,
-  [SAVE_WORKSPACE_FILE_TOOL_NAME]: `- \`${SAVE_WORKSPACE_FILE_TOOL_NAME}\`: Remember/store a file in the persistent Files tab across chats (omit content to copy an existing session file).`,
+  [SAVE_WORKSPACE_FILE_TOOL_NAME]: `- \`${SAVE_WORKSPACE_FILE_TOOL_NAME}\`: ONLY use when the user explicitly asks to save/remember a file in the persistent Files tab—never call automatically.`,
 };
+
+/**
+ * Returns true only when the user explicitly asks to persist/save/remember a file
+ * in the cross-session Files tab (never for ordinary create_file / edit_file requests).
+ */
+export function hasExplicitWorkspaceFileSaveIntent(userText: string): boolean {
+  const trimmed = userText.trim();
+  if (!trimmed) return false;
+  return (
+    /\b(save_workspace_file|files\s+tab|persistent\s+files?)\b/i.test(trimmed) ||
+    /\bremember\s+(?:this|the|that|my)?\s*file\b/i.test(trimmed) ||
+    /\b(?:save|store|keep|put|add|copy|move)\b[\s\S]{0,60}\b(?:to|in|into|under)\s+(?:the\s+|my\s+)?files\b/i.test(
+      trimmed,
+    ) ||
+    /\b(?:save|store|keep)\b[\s\S]{0,60}\bacross\s+(?:all\s+)?chats?\b/i.test(trimmed)
+  );
+}
 
 export function buildToolPolicyForTools(tools: ToolDefinition[]): string {
   if (tools.length === 0) return '';
@@ -1428,11 +1445,18 @@ interface UnifiedPatchEditOp {
   patch: string;
 }
 
+interface ReplacementOnlyEditOp {
+  kind: 'replacement_only';
+  replacement: string;
+  indexLabel: string;
+}
+
 type ParsedEditOp =
   | LineRangeEditOp
   | ExactTextEditOp
   | FullContentEditOp
-  | UnifiedPatchEditOp;
+  | UnifiedPatchEditOp
+  | ReplacementOnlyEditOp;
 
 function parsePositiveIntLike(val: unknown): number | null {
   if (typeof val === 'number' && Number.isInteger(val) && val >= 1) {
@@ -1616,26 +1640,59 @@ function parseSingleEditOp(raw: unknown, indexLabel: string): ParsedEditOp | str
     };
   }
 
-  // 2. Line-range mode (start_line provided and old_text is absent/empty)
+  // 2. Unified diff / patch string fallback (check before placeholder start_line=0 checks)
+  const patchHit = pickFirstNonEmptyStringField(rec, ['patch', 'diff', 'unified_diff']);
+  if (patchHit && parsedStartLine === null) {
+    return { kind: 'unified_patch', patch: patchHit.value };
+  }
+
+  // 3. Full-file content replacement fallback (e.g. { filename, content: "..." } or inside edits[0])
+  const fullContentHit = pickFirstStringField(rec, ['content', 'new_content', 'full_content']);
+  if (fullContentHit && fullContentHit.value.length > 0 && parsedStartLine === null) {
+    return { kind: 'full_content', content: fullContentHit.value };
+  }
+
+  // 4. Line-range mode (start_line provided and old_text is absent/empty).
+  // Ignore zero/empty placeholder values on start_line/end_line unless replacement is non-empty.
+  const hasRealEndLine = parsedEndLine !== null;
+  const hasStrictReplacement =
+    replacementHit !== null && replacementHit.key === 'replacement' && replacementHit.value.length > 0;
+  const hasNonZeroInvalidStart =
+    startLineField !== null && startLineField.value !== 0 && startLineField.value !== '0' && startLineField.value !== '';
+  const hasNonZeroInvalidEnd =
+    endLineField !== null && endLineField.value !== 0 && endLineField.value !== '0' && endLineField.value !== '';
+
   if (
     parsedStartLine !== null ||
-    startLineField !== null ||
-    endLineField !== null ||
-    (replacementHit !== null && replacementHit.key === 'replacement' && replacementHit.value.length > 0)
+    hasRealEndLine ||
+    hasStrictReplacement ||
+    hasNonZeroInvalidStart ||
+    hasNonZeroInvalidEnd
   ) {
     if (
       newTextHit !== null &&
       newTextHit.value.length > 0 &&
-      !(replacementHit !== null && replacementHit.value.length > 0) &&
+      !hasStrictReplacement &&
       parsedStartLine === null
     ) {
-      return `${indexLabel} provided "new_text" without a non-empty "old_text". Example: {"filename": "...", "old_text": "...", "new_text": "..."}.`;
+      return `${indexLabel} provided "new_text" without a non-empty "old_text". Pass {"filename": "...", "old_text": "<exact existing lines>", "new_text": "<updated lines>"}.`;
     }
     if (parsedStartLine === null) {
-      return `${indexLabel} requires a positive integer "start_line" (or non-empty "old_text" + "new_text").`;
+      if (hasStrictReplacement && !hasRealEndLine && !hasNonZeroInvalidStart && !hasNonZeroInvalidEnd && replacementHit) {
+        if (/^@@\s*-\d+/m.test(replacementHit.value)) {
+          return { kind: 'unified_patch', patch: replacementHit.value };
+        }
+        return {
+          kind: 'replacement_only',
+          replacement: replacementHit.value,
+          indexLabel,
+        };
+      }
+      const receivedKeys = Object.keys(rec).join(', ') || 'none';
+      return `${indexLabel} requires a positive integer "start_line" (>= 1) OR non-empty "old_text" + "new_text" (received keys: ${receivedKeys}).`;
     }
     let endLine = parsedStartLine;
-    if (endLineField !== null) {
+    if (endLineField !== null && endLineField.value !== '' && endLineField.value !== 0 && endLineField.value !== '0') {
       if (parsedEndLine === null || parsedEndLine < parsedStartLine) {
         return `${indexLabel} "end_line" must be an integer >= start_line (${parsedStartLine}).`;
       }
@@ -1658,26 +1715,15 @@ function parseSingleEditOp(raw: unknown, indexLabel: string): ParsedEditOp | str
     };
   }
 
-  // 3. Unified diff / patch string fallback (e.g. { filename, patch: "@@ ... @@\n-old\n+new" })
-  const patchHit = pickFirstNonEmptyStringField(rec, ['patch', 'diff', 'unified_diff']);
-  if (patchHit) {
-    return { kind: 'unified_patch', patch: patchHit.value };
-  }
-
-  // 4. Full-file content replacement fallback (e.g. { filename, content: "..." })
-  const fullContentHit = pickFirstStringField(rec, ['content', 'new_content', 'full_content']);
-  if (fullContentHit && indexLabel === 'edit_file') {
-    return { kind: 'full_content', content: fullContentHit.value };
-  }
-
   if (
     pickFirstDefinedField(rec, OLD_TEXT_ALIAS_KEYS) !== null ||
     pickFirstDefinedField(rec, NEW_TEXT_ALIAS_KEYS) !== null
   ) {
-    return `${indexLabel} requires a non-empty string "old_text" and string "new_text". Example: {"old_text": "old", "new_text": "new"}.`;
+    return `${indexLabel} "old_text" cannot be empty. Copy exact existing lines into "old_text" with "new_text", or pass "content" for full-file replacement.`;
   }
 
-  return `${indexLabel} must specify {"old_text": "...", "new_text": "..."} OR {"start_line": 1, "end_line": 1, "replacement": "..."}.`;
+  const receivedKeys = Object.keys(rec).join(', ') || 'none';
+  return `${indexLabel} must specify {"old_text": "...", "new_text": "..."} OR {"start_line": 1, "end_line": 1, "replacement": "..."} (received keys: ${receivedKeys}).`;
 }
 
 function splitReplacementLines(replacement: string): string[] {
@@ -2258,6 +2304,20 @@ function applyUnifiedDiffPatch(
   };
 }
 
+function isLikelyFullFileReplacement(existingContent: string, candidateReplacement: string): boolean {
+  const existingLines = splitFileLines(existingContent).lines;
+  const candidateLines = splitFileLines(candidateReplacement).lines;
+  if (existingLines.length === 0) {
+    return candidateLines.length > 0;
+  }
+  if (candidateLines.length >= 8 && candidateLines.length >= Math.floor(existingLines.length * 0.55)) {
+    return true;
+  }
+  const firstExisting = existingLines.find((l) => l.trim().length > 0)?.trim() ?? '';
+  const firstCandidate = candidateLines.find((l) => l.trim().length > 0)?.trim() ?? '';
+  return candidateLines.length >= 4 && firstExisting.length > 0 && firstExisting === firstCandidate;
+}
+
 export function executeEditFileTool(
   rawArguments: string,
   existingFiles: GeneratedFileArtifact[],
@@ -2323,6 +2383,9 @@ export function executeEditFileTool(
   const textOps = parsedOps.filter((op): op is ExactTextEditOp => op.kind === 'exact_text');
   const fullOps = parsedOps.filter((op): op is FullContentEditOp => op.kind === 'full_content');
   const patchOps = parsedOps.filter((op): op is UnifiedPatchEditOp => op.kind === 'unified_patch');
+  const replacementOnlyOps = parsedOps.filter(
+    (op): op is ReplacementOnlyEditOp => op.kind === 'replacement_only',
+  );
 
   if (lineOps.length > 0 && textOps.length > 0) {
     return makeEditFileError(
@@ -2335,6 +2398,24 @@ export function executeEditFileTool(
     target.content.includes('\r\n') && !target.content.replace(/\r\n/g, '').includes('\n')
       ? '\r\n'
       : '\n';
+
+  // Replacement-only fallback (when model passes { replacement: "..." } without start_line/old_text):
+  // apply if it looks like a full-file replacement, otherwise reject cleanly without truncating the file.
+  if (replacementOnlyOps.length > 0) {
+    if (parsedOps.length > 1) {
+      return makeEditFileError(
+        `${replacementOnlyOps[0].indexLabel} passed "replacement" without "start_line" or "old_text". Add "start_line" and "end_line" (>= 1), OR use {"old_text": "<exact lines>", "new_text": "<new lines>"}.`,
+      );
+    }
+    const onlyOp = replacementOnlyOps[0];
+    if (!isLikelyFullFileReplacement(updatedContent, onlyOp.replacement)) {
+      return makeEditFileError(
+        `${onlyOp.indexLabel} passed "replacement" without "start_line" or "old_text" (cannot tell which lines to replace). Add "start_line" and "end_line" (>= 1), OR use {"old_text": "<exact existing lines>", "new_text": "<new lines>"}.`,
+      );
+    }
+    updatedContent =
+      targetEol === '\r\n' ? onlyOp.replacement.replace(/\r?\n/g, '\r\n') : onlyOp.replacement;
+  }
 
   // Full-file replacement fallback
   if (fullOps.length > 0) {

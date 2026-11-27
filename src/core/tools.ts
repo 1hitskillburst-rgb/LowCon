@@ -404,7 +404,7 @@ export function executeCreateFileTool(
       language: artifact.language,
       lines,
       bytes,
-      message: `File '${artifact.filename}' (${lines} lines) is saved and attached as a preview card for the user. Do NOT write or repeat the file's code in your reply—no code blocks of the file contents. Reply in concise prose explaining what was built and how to run it.`,
+      message: `File '${artifact.filename}' (${lines} lines) has been created and attached as a preview card for the user. Do NOT write or repeat the file's code in your reply—no code blocks of the file contents. Reply in concise prose explaining what was built and how to run it.`,
     }),
   };
 }
