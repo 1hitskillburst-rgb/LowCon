@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  isNearScrollbarEdge,
+  SCROLL_PROXIMITY_PX,
+} from '../src/core/scrollbarProximity.ts';
+import {
   computeThemeCssVariables,
   createDefaultTheme,
   getTpsColorVar,
@@ -147,5 +151,29 @@ test('codeMode decouples from dark bg and all semantic token pairs maintain >= 4
         `${name}: --lc-callout-${callout} on --lc-bg`,
       );
     }
+    assert.ok(v['--lc-scroll-thumb']);
+    assert.ok(v['--lc-scroll-thumb-hover']);
   }
+});
+
+test('isNearScrollbarEdge reveals scrollbars only when pointer is close to scrollable edges', () => {
+  const rect = { left: 100, right: 500, top: 50, bottom: 450 };
+
+  // Far from vertical/horizontal scrollbar edges -> hidden
+  assert.equal(isNearScrollbarEdge(rect, 250, 200, true, false), false);
+  assert.equal(
+    isNearScrollbarEdge(rect, 500 - SCROLL_PROXIMITY_PX - 5, 200, true, false),
+    false,
+  );
+
+  // Close to right vertical scrollbar -> revealed
+  assert.equal(
+    isNearScrollbarEdge(rect, 500 - SCROLL_PROXIMITY_PX + 2, 200, true, false),
+    true,
+  );
+  assert.equal(isNearScrollbarEdge(rect, 498, 200, true, false), true);
+
+  // Close to bottom horizontal scrollbar when horizontal scrolling exists -> revealed
+  assert.equal(isNearScrollbarEdge(rect, 250, 440, false, true), true);
+  assert.equal(isNearScrollbarEdge(rect, 250, 440, true, false), false);
 });

@@ -3,7 +3,10 @@ import ReactDOM from 'react-dom/client';
 import 'katex/dist/katex.min.css';
 import App from './App';
 import { ErrorBoundary } from './components/layout/ErrorBoundary';
+import { initScrollbarProximity } from './core/scrollbarProximity';
 import './index.css';
+
+initScrollbarProximity();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

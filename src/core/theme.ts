@@ -227,6 +227,8 @@ export function computeThemeCssVariables(rawTheme?: Partial<ThemeSettings>): {
     '--lc-contrib-2': surfDark ? '#1F5A96' : '#7AB8FF',
     '--lc-contrib-3': surfDark ? '#267CD6' : '#2B85F5',
     '--lc-contrib-4': surfDark ? '#339BFF' : '#0B63E5',
+    '--lc-scroll-thumb': bgDark ? 'rgba(226, 232, 240, 0.26)' : 'rgba(22, 27, 38, 0.22)',
+    '--lc-scroll-thumb-hover': bgDark ? 'rgba(226, 232, 240, 0.46)' : 'rgba(22, 27, 38, 0.4)',
   };
 
   return { mode, codeMode, vars };
